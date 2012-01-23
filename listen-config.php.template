@@ -1,0 +1,41 @@
+<?php
+$home        = "/home/us3";
+$home_remote = "/home/us3";                             // for local submission
+$work        = "$home/work";
+$work_remote = "$home_remote/work";
+$pipe        = "$home/etc/us3-pipe";
+$logfile     = "$home/etc/udp.log";
+$submit_dir  = '/srv/www/htdocs/uslims3/uslims3_data'; // LIMS submit files dir
+$listen_port = 12233;
+$dbhost      = "localhost";
+$self        = basename( $_SERVER['PHP_SELF'] );
+
+// Global DB credentials
+$guser       = "";
+$gpasswd     = "";
+$gDB         = "";
+
+// $serviceURL  = "http://gw33.quarry.iu.teragrid.org:8080/ogce-rest/job";
+$serviceURL  = "http://gf5.ucs.indiana.edu:8080/ogce-rest/job";
+
+// US3 DB credentials
+$user        = "";
+$passwd      = "";
+
+$org_name    = "UltraScan3 Admin";
+//$admin_email = "us3-admin@biochem.uthscsa.edu";
+$admin_email = "dzollars@gmail.com";
+
+// This is really a library routine
+
+date_default_timezone_set( 'America/Chicago' );
+
+function write_log( $message )
+{
+   global $logfile;
+
+   $log = fopen( $logfile, "a" );
+   fwrite( $log, date( "Y-m-d H:i:s " ) . $message . "\n" );
+   fclose( $log );
+}
+?>
