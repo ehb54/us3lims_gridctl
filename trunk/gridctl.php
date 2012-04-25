@@ -18,7 +18,7 @@ $gLink = mysql_connect( $dbhost, $guser, $gpasswd );
 
 if ( ! mysql_select_db( $gDB, $gLink ) )
 {
-   write_log( "$self: Could not connect to DB $gDB" );
+   write_log( "$self: Could not select DB $gDB - " . mysql_error() );
    mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
    exit();
 }
@@ -411,6 +411,7 @@ function update_job_status( $job_status, $gfacID )
       break;
 
     case 'COMPLETED'   :
+    case 'DONE'   :
       $query   = "UPDATE analysis SET status='COMPLETE' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is COMPLETE";
       break;
@@ -437,8 +438,12 @@ function update_job_status( $job_status, $gfacID )
       break;
 
     default            :
+      // We shouldn't ever get here
       $query   = "";
       $message = "Job status was not recognized - $job_status";
+      write_log( "$self - update_job_status: " .
+                 "Job status was not recognized - $job_status\n" .
+                 "gfacID = $gfacID\n" );
       break;
 
   }
@@ -534,6 +539,25 @@ function get_gfac_status( $gfacID )
 
    // Parse the result
    $gfac_status = parse_response( $xml );
+
+   // This may not seem like the best place to do this, but here we have
+   // the xml straight from GFAC
+   $status_types = array('SUBMITTED',
+                         'SUBMITED',
+                         'INITIALIZED',
+                         'PENDING',
+                         'ACTIVE',
+                         'COMPLETED',
+                         'DONE',
+                         'DATA',
+                         'CANCELED',
+                         'CANCELLED',
+                         'FAILED',
+                         'UNKNOWN');
+   if ( ! in_array( $gfac_status, $status_types ) )
+      mail_to_admin( 'debug', "gfacID: /$gfacID/\n" .
+                              "XML:    /$xml/\n"    . 
+                              "Status: /$gfac_status/\n" );
 
    return $gfac_status;
 }
@@ -730,6 +754,7 @@ function mail_to_admin( $type, $msg )
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
+   $headers .= "Bcc: Dan Zollars<dzollars@gmail.com>"    . "\n";     // make sure
 
    // Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
