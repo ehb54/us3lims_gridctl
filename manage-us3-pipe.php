@@ -42,6 +42,7 @@ function process( $msg )
    global $dbhost;
    global $user;
    global $passwd;
+   global $self;
 
    $list                   = explode( ": ", $msg );
    list( $db, $requestID ) = explode( "-",  array_shift( $list ) );
@@ -55,7 +56,7 @@ function process( $msg )
 
    if ( ! $resource )
    {
-      write_log( "$self process(): Could not connect to DB" );
+      write_log( "$self process(): Could not connect to MySQL - " . mysql_error() );
       write_log( "$self process(): original msg - $msg" );
       return;
    }
