@@ -13,6 +13,7 @@ $queuestatus     = '';
 $jobtype         = '';
 $db              = '';
 $editXMLFilename = '';
+$status          = '';
 
 function gfac_cleanup( $us3_db, $requestID, $gfac_link )
 {
@@ -30,6 +31,7 @@ function gfac_cleanup( $us3_db, $requestID, $gfac_link )
    global $jobtype;
    global $editXMLFilename;
    global $submittime;
+   global $status;
 
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
@@ -534,9 +536,9 @@ global $me;
 write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
    // Get GFAC status and message
-   // For right now, since we don't get clear and concise message
-   // $gfac_message = get_gfac_message( $gfacID );
-   // if ( $gfac_message === false ) $gfac_message = "";
+   // function get_gfac_message() also sets global $status
+   $gfac_message = get_gfac_message( $gfacID );
+   if ( $gfac_message === false ) $gfac_message = "";
       
    // Create a status to put in the subject line
    switch ( $status )
@@ -596,10 +598,10 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    Cluster         : $cluster
    Job Type        : $jobtype
    GFAC Status     : $status
+   GFAC Message    : $gfac_message
    ";
 
-   // This would change to ( $status != 'COMPLETE' ) or something like that.
-   if ( $type != "success" ) $message .= "Error Message  :  $msg\n";
+   if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
 
    // Handle the error case where an error occurs before fetching the
    // user's email address
@@ -667,6 +669,7 @@ function get_gfac_message( $gfacID )
 
 function parse_message( $xml )
 {
+   global $status;
    $status       = "";
    $gfac_message = "";
 
