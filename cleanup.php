@@ -32,6 +32,7 @@ function gfac_cleanup( $us3_db, $requestID, $gfac_link )
    global $editXMLFilename;
    global $submittime;
    global $status;
+   global $stdout;
 
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
@@ -531,6 +532,7 @@ function mail_to_user( $type, $msg )
    global $requestID;
    global $gfacID;
    global $editXMLFilename;
+   global $stdout;
 
 global $me;
 write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
@@ -599,6 +601,7 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    Job Type        : $jobtype
    GFAC Status     : $status
    GFAC Message    : $gfac_message
+   Stdout          : $stdout
    ";
 
    if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
