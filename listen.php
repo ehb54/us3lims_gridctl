@@ -1,6 +1,6 @@
 <?php
 
-include "/home/us3/bin/listen-config.php";
+include "/export/home/us3/bin/listen-config.php";
 
 $socket = socket_create(  AF_INET,  SOCK_DGRAM,  SOL_UDP );
 
@@ -16,7 +16,7 @@ $handle = fopen( $pipe, "r+" );
 
 $php = "/usr/bin/php";
 
-$cmd = "nohup $php $home/bin/manage-us3-pipe.php >>$home/etc/manage.log 2>&1 </dev/null &";
+$cmd = "/usr/bin/nohup $php $home/bin/manage-us3-pipe.php >>$home/etc/manage.log 2>&1 </dev/null &";
 
 exec( $cmd );
 

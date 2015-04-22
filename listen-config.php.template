@@ -1,30 +1,30 @@
 <?php
-$home        = "/home/us3";
-$home_remote = "/home/us3";                             // for local submission
+$home        = exec( "ls -d ~us3" );
+$home_remote = "$home";                                // for local submission
 $work        = "$home/work";
 $work_remote = "$home_remote/work";
 $pipe        = "$home/etc/us3-pipe";
 $logfile     = "$home/etc/udp.log";
 $submit_dir  = '/srv/www/htdocs/uslims3/uslims3_data'; // LIMS submit files dir
 $listen_port = 12233;
+//$dbhost      = "uslims3.uthscsa.edu";
 $dbhost      = "localhost";
 $self        = basename( $_SERVER['PHP_SELF'] );
 
 // Global DB credentials
-$guser       = "";
-$gpasswd     = "";
-$gDB         = "";
+$guser       = "gfac";
+$gpasswd     = "backend";
+$gDB         = "gfac";
 
-// $serviceURL  = "http://gw33.quarry.iu.teragrid.org:8080/ogce-rest/job";
-$serviceURL  = "http://gf5.ucs.indiana.edu:8080/ogce-rest/job";
+$serviceURL  = "http://gridfarm005.ucs.indiana.edu:8080/ogce-rest/job";
+$serviceURL2 = "http://gridfarm005.ucs.indiana.edu:9090/ogce-rest/job";
 
 // US3 DB credentials
-$user        = "";
-$passwd      = "";
+$user        = "us3php";
+$passwd      = "us3";
 
 $org_name    = "UltraScan3 Admin";
-//$admin_email = "us3-admin@biochem.uthscsa.edu";
-$admin_email = "dzollars@gmail.com";
+$admin_email = "us3-admin@biochem.uthscsa.edu";
 
 // This is really a library routine
 
