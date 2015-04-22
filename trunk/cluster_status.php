@@ -1,13 +1,16 @@
 <?php
 
-include "/home/us3/bin/listen-config.php";
+$us3bin = exec( "ls -d ~us3/bin" );
+include "$us3bin/listen-config.php";
 
 $xml  = get_data();
 
-if ( $xml == "" ) exit();  // No status available
+if ( $xml != "" )
+   parse( $xml );
 
 $data = array();
-parse( $xml );
+
+local_status();
 
 foreach ( $data as $item )
 {
@@ -31,7 +34,7 @@ function get_data()
    }
    catch ( HttpException $e )
    {
-      write_log( "$self: Cluster Status not available" );
+//      write_log( "$self: Cluster Status not available" );
       return "";
    }
 
@@ -154,6 +157,62 @@ function update( $cluster, $queued, $status, $running )
    }
 }
 
+// Get local cluster status
+
+function local_status()
+{
+   global $self;
+   global $data;
+
+//   $clusters = array( "alamo", "jacinto", "bcf" );
+   $clusters = array( "alamo", "jacinto" );
+//   $clusters = array( "alamo" );
+   foreach ( $clusters as $clname )
+   {
+      $a      = Array();
+      if ( $clname == "alamo" )
+      {
+         $qstat  = `ssh $clname '/usr/bin/qstat -B 2>&1|tail -1'`;
+
+         $sparts = preg_split( '/\s+/', $qstat );
+         $que    = $sparts[ 3 ];
+         $run    = $sparts[ 4 ];
+         $sta    = $sparts[ 10 ];
+      }
+      else  
+      {
+         $qstat  = `ssh $clname '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
+
+         $sparts = preg_split( '/\s+/', $qstat );
+         $que    = $sparts[ 3 ];
+         $run    = $sparts[ 4 ];
+         $sta    = $sparts[ 9 ];
+      }
+
+//echo "$self: cln que run sta   $clname $que $run $sta \n";
+
+      if ( $sta == "Active" )
+      {
+         $sta    = "up";
+      }
+      else
+      {
+         $sta    = "down";
+         $que    = "0";
+         $run    = "0";
+      }
+
+      $a[ 'cluster' ] = $clname;
+      $a[ 'queued'  ] = $que;
+      $a[ 'running' ] = $run;
+      $a[ 'status'  ] = $sta;
+
+      $data[] = $a;
+      $a[ 'cluster' ] = $clname . "-local";
+      $data[] = $a;
+   }
+}
+
 class XML_Array 
 {
     var $_data   = Array();
@@ -190,7 +249,7 @@ class XML_Array
     {
         if ( $name == "resourceHealth" ) 
         {
-           $name .= $this->_index;
+##           $name .= $this->_index;
            $this->_index++;
         }
 

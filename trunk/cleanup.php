@@ -6,7 +6,7 @@
  *
  */
 
-include_once "/home/us3/bin/listen-config.php";
+include_once "/export/home/us3/bin/listen-config.php";
 $me              = 'cleanup.php';
 $email_address   = '';
 $queuestatus     = '';
@@ -15,7 +15,7 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function gfac_cleanup( $us3_db, $requestID, $gfac_link )
+function gfac_cleanup( $us3_db, $reqID, $gfac_link )
 {
    global $dbhost;
    global $user;
@@ -33,7 +33,9 @@ function gfac_cleanup( $us3_db, $requestID, $gfac_link )
    global $submittime;
    global $status;
    global $stdout;
+   global $requestID;
 
+   $requestID = $reqID;
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
 
@@ -467,7 +469,7 @@ function gfac_cleanup( $us3_db, $requestID, $gfac_link )
       $modelGUID = $modelGUIDs[ $noiseID ];
       $query = "UPDATE noise SET "                                                 .
                "editedDataID="                                                     .
-               "(SELECT editedDataID FROM editedData WHERE editGUID='$editGUID')," .
+               "(SELECT editedDataID FROM model WHERE modelGUID='$modelGUID'),"    .
                "modelID="                                                          .
                "(SELECT modelID FROM model WHERE modelGUID='$modelGUID')"          .
                "WHERE noiseID=$noiseID";
@@ -528,6 +530,7 @@ function mail_to_user( $type, $msg )
    global $jobtype;
    global $org_name;
    global $admin_email;
+   global $db;
    global $dbhost;
    global $requestID;
    global $gfacID;
@@ -592,6 +595,7 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
    Submission Time : $submittime
    Analysis ID     : $gfacID
+   Request ID      : $requestID  ( $db )
    RunID           : $runID
    EditID          : $editID
    Data Type       : $dataType
