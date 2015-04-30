@@ -449,7 +449,48 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
          $modelGUIDs[ $id ] = $modelGUID;
          
       }
-      else  // It's a model file
+
+      else if ( preg_match( "/\.mrecs/", $fn ) > 0 )  // It's an mrecs file
+      {
+         $xml         = file_get_contents( $fn );
+         $mrecs_data  = parse_xml( $xml, "modelrecords" );
+         $desc        = $mrecs_data[ 'description' ];
+         $editGUID    = $mrecs_data[ 'editGUID' ];
+write_log( "$me:   mrecs file editGUID=$editGUID" );
+         if ( strlen( $editGUID ) < 36 )
+            $editGUID    = "12345678-0123-5678-0123-567890123456";
+         $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
+         $modelGUID   = $mrecs_data[ 'modelGUID' ];
+
+         $query = "INSERT INTO pcsa_modelrecs SET "  .
+                  "editedDataID="                .
+                  "(SELECT editedDataID FROM editedData WHERE editGUID='$editGUID')," .
+                  "modelID=0, "             .
+                  "mrecsGUID='$mrecGUID'," .
+                  "description='$desc',"    .
+                  "xml='" . mysql_real_escape_string( $xml, $us3_link ) . "'";
+
+         // Add later after all files are processed: editDataID, modelID
+
+         $result = mysql_query( $query, $us3_link );
+
+         if ( ! $result )
+         {
+            write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+            return( -1 );
+         }
+
+         $id         = mysql_insert_id( $us3_link );
+         $file_type  = "mrecs";
+         $mrecsIDs[] = $id;
+
+         // Keep track of modelGUIDs for later, when we replace them
+         $rmodlGUIDs[ $id ] = $modelGUID;
+//write_log( "$me:   mrecs file inserted into DB : id=$id" );
+      }
+
+      else                                           // It's a model file
       {
          $xml         = file_get_contents( $fn );
          $model_data  = parse_xml( $xml, "model" );
