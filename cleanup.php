@@ -6,7 +6,8 @@
  *
  */
 
-include_once "/export/home/us3/bin/listen-config.php";
+$us3bin = exec( "ls -d ~us3/bin" );
+include_once "$us3bin/listen-config.php";
 $me              = 'cleanup.php';
 $email_address   = '';
 $queuestatus     = '';
