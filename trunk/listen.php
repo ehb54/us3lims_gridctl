@@ -1,6 +1,7 @@
 <?php
 
-include "/export/home/us3/bin/listen-config.php";
+$us3bin = exec( "ls -d ~us3/bin" );
+include "$us3bin/listen-config.php";
 
 $socket = socket_create(  AF_INET,  SOCK_DGRAM,  SOL_UDP );
 
