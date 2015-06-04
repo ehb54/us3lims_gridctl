@@ -1,10 +1,5 @@
 <?php
 
-$us3bin = exec( "ls -d ~us3/bin" );
-include_once "$us3bin/listen-config.php";
-include "$us3bin/cleanup_aira.php";
-include "$us3bin/cleanup_gfac.php";
-
 // Global variables
 $gfac_message = "";
 $updateTime = 0;
@@ -73,7 +68,6 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    if ( is_aira_job( $gfacID ) )
    {
       $status_in  = $status;
-//write_log( "$loghdr status_in=$status_in" );
       $status     = aira_status( $gfacID, $status_in );
 if($status != $status_in )
 write_log( "$loghdr Set to $status from $status_in" );
@@ -154,10 +148,10 @@ write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
 
       case "FINISHED":
       case "DONE":
-         if ( is_aira_job( $gfacID ) )
-         {
-            complete();
-         }
+//         if ( is_aira_job( $gfacID ) )
+//         {
+//            complete();
+//         }
       case "PROCESSING":
       default:
          break;
@@ -436,6 +430,7 @@ function cleanup()
    global $gfacID;
    global $us3_db;
    global $loghdr;
+   global $class_dir;
 
    // Double check that the gfacID exists
    $query  = "SELECT count(*) FROM analysis WHERE gfacID='$gfacID'";
@@ -459,10 +454,16 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
 //write_log( "$loghdr requestID = $requestID  gfacID = $gfacID" );
    if ( $requestID == 0 ) return;
 
-   if ( preg_match( "/US3-AIRA/i", $gfacID ) )
+   if ( preg_match( "/US3-A/i", $gfacID ) )
    {
+      $me_devel  = preg_match( "/class_devel/", $class_dir );
+      $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
+      if ( ( !$me_devel  &&  !$job_devel )  ||
+           (  $me_devel  &&   $job_devel ) )
+      {  // If job from appropriate Airavata server, process it
 //write_log( "$loghdr CALLING aira_cleanup()" );
-      aira_cleanup( $us3_db, $requestID, $gLink );
+         aira_cleanup( $us3_db, $requestID, $gLink );
+      }
 //write_log( "$loghdr RTN FR aira_cleanup()" );
    }
    else
@@ -624,7 +625,7 @@ function is_aira_job( $gfacID )
 {
    global $cluster;
 
-   if ( preg_match( "/US3-AIRA/i", $gfacID )  &&
+   if ( preg_match( "/US3-A/i", $gfacID )  &&
         ! preg_match( "/juropa/i", $cluster ) )
    {
       // Then it's an Airavata/Thrift job
@@ -996,15 +997,23 @@ function aira_status( $gfacID, $status_in )
 {
    global $self;
    global $loghdr;
+   global $class_dir;
 //echo "a_st: st_in$status_in : $gfacID\n";
    //$status_gw = standard_status( $status_in );
    $status_gw = $status_in;
 //echo "a_st:  st_db=$status_gw\n";
    $status    = $status_gw;
+   $me_devel  = preg_match( "/class_devel/", $class_dir );
+   $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
+   $devmatch  = ( ( !$me_devel  &&  !$job_devel )  ||
+                  (  $me_devel  &&   $job_devel ) );
 
-   if ( preg_match( "/US3-AIRA/i", $gfacID ) )
-   {
+//write_log( "$loghdr  gfacID=$gfacID  devmatch=$devmatch" );
+//write_log( "$loghdr   me_d=$me_devel  jo_d=$job_devel  cd=$class_dir" );
+   if ( preg_match( "/US3-A/i", $gfacID )  &&  $devmatch )
+   {  // Airavata job and development/production type is right
       $status_ex = getExperimentStatus( $gfacID );
+//write_log( "$loghdr status_ex $status_ex" );
 
       if ( $status_ex == 'COMPLETED' )
       {  // Experiment is COMPLETED: check for 'FINISHED' or 'DONE'
@@ -1046,7 +1055,8 @@ function aira_status( $gfacID, $status_in )
          $status    = standard_status( $status_ex );
       }
 
-write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
+//write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
+//write_log( "  me_d=$me_devel jo_d=$job_devel dm=$devmatch cd=$class_dir" );
       if ( $status != $status_gw )
       {
          update_job_status( $status, $gfacID );
