@@ -3,12 +3,10 @@
  * cleanup.php
  *
  * functions relating to copying results and cleaning up the gfac DB
+ *  where the job used an Airavata interface.
  *
  */
 
-$us3bin = exec( "ls -d ~us3/bin" );
-include_once "$us3bin/listen-config.php";
-$me              = 'cleanup.php';
 $email_address   = '';
 $queuestatus     = '';
 $jobtype         = '';
@@ -16,7 +14,7 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function gfac_cleanup( $us3_db, $reqID, $gfac_link )
+function aira_cleanup( $us3_db, $reqID, $gfac_link )
 {
    global $dbhost;
    global $user;
@@ -33,8 +31,12 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    global $editXMLFilename;
    global $submittime;
    global $status;
+   global $stderr;
    global $stdout;
+   global $tarfile;
    global $requestID;
+   global $submit_dir;
+   $me        = 'cleanup_aira.php';
 
    $requestID = $reqID;
    $db = $us3_db;
@@ -78,12 +80,6 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
 
    list( $personID ) = mysql_fetch_array( $result );
 
-   /*
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
-             "FROM HPCAnalysisRequest h LEFT JOIN HPCAnalysisResult "            .
-             "ON h.HPCAnalysisRequestID=HPCAnalysisResult.HPCAnalysisRequestID " .
-             "WHERE h.HPCAnalysisRequestID=$requestID";
-   */
    $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
              "FROM HPCAnalysisRequest h, HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
@@ -120,9 +116,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
 
    list( $HPCAnalysisResultID, $gfacID ) = mysql_fetch_array( $result ); 
 
-   ////////
-   // Get data from global GFAC DB and insert it into US3 DB
-   // $gfac_link = mysql_connect( $dbhost, $guser, $gpasswd );
+   // Get data from global GFAC DB then insert it into US3 DB
 
    $result = mysql_select_db( $gDB, $gfac_link );
 
@@ -153,7 +147,8 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
          get_local_files( $gfac_link, $clushost, $requestID, $id, $gfacID );
    }
 
-   $query = "SELECT id, stderr, stdout, tarfile FROM analysis " .
+
+   $query = "SELECT id FROM analysis " .
             "WHERE gfacID='$gfacID'";
 
    $result = mysql_query( $query, $gfac_link );
@@ -165,7 +160,69 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       return( -1 );
    }
 
-   list( $analysisID, $stderr, $stdout, $tarfile ) = mysql_fetch_array( $result );
+   list( $analysisID ) = mysql_fetch_array( $result );
+
+   // Get the request guid (LIMS submit dir name)
+   $query  = "SELECT HPCAnalysisRequestGUID FROM HPCAnalysisRequest " .
+             "WHERE HPCAnalysisRequestID = $requestID ";
+   $result = mysql_query( $query, $us3_link );
+   
+   if ( ! $result )
+   {
+      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+   }
+
+   list( $requestGUID ) = mysql_fetch_array( $result );
+   $output_dir = "$submit_dir/$requestGUID";
+
+   // Get stderr,stdout,tarfile from work directory
+   if ( ! is_dir( "$output_dir" ) ) mkdir( "$output_dir", 0770 );
+   chdir( "$output_dir" );
+//write_log( "$me: gfacID=$gfacID" );
+//write_log( "$me: submit_dir=$submit_dir" );
+//write_log( "$me: requestGUID=$requestGUID" );
+write_log( "$me: output_dir=$output_dir" );
+
+   $stderr     = "";
+   $stdout     = "";
+   $tarfile    = "";
+   $fn_stderr  = "Ultrascan.stderr";
+   $fn_stdout  = "Ultrascan.stdout";
+   $fn_tarfile = "analysis-results.tar";
+   $num_try    = 0;
+   while ( ! file_exists( $fn_tarfile ) && $num_try < 3 )
+   {
+      sleep( 10 );
+      $num_try++;
+   }
+
+   $ofiles     = scandir( $output_dir );
+   foreach ( $ofiles as $ofile )
+   {
+      if ( preg_match( "/^" . $gfacID . ".*stderr$/", $ofile ) )
+         $fn_stderr  = $ofile;
+      if ( preg_match( "/^" . $gfacID . ".*stdout$/", $ofile ) )
+         $fn_stdout  = $ofile;
+//write_log( "$me:    ofile=$ofile" );
+   }
+write_log( "$me: fn_stderr=$fn_stderr" );
+write_log( "$me: fn_stdout=$fn_stdout" );
+if (file_exists($fn_tarfile)) write_log( "$me: fn_tarfile=$fn_tarfile" );
+else                          write_log( "$me: NOT FOUND: $fn_tarfile" );
+
+   if ( file_exists( $fn_stderr  ) ) $stderr   = file_get_contents( $fn_stderr  );
+   if ( file_exists( $fn_stdout  ) ) $stdout   = file_get_contents( $fn_stdout  );
+   if ( file_exists( $fn_tarfile ) ) $tarfile  = file_get_contents( $fn_tarfile );
+
+   if ( $cluster == 'alamo'  || $cluster == 'alamo-local' )
+   {  // Filter "ipath_userinit" lines out of alamo stdout lines
+      $prefln = strlen( $stdout );
+      $output = array();
+      exec( "grep -v 'ipath_userinit' $fn_stdout 2>&1", $output, $err );
+      $stdout = implode( "\n", $output );
+      $posfln = strlen( $stdout );
+write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
+   }
 
    // Save queue messages for post-mortem analysis
    $query = "SELECT message, time FROM queue_messages " .
@@ -202,20 +259,11 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
    }
 
-   // Save stdout, stderr, etc. for message log
-   $query  = "SELECT stdout, stderr, status, queue_msg FROM analysis " .
-             "WHERE gfacID='$gfacID' ";
+   $query = "SELECT queue_msg FROM analysis " .
+            "WHERE gfacID='$gfacID' ";
+
    $result = mysql_query( $query, $gfac_link );
-   try
-   {
-      // What if this is too large?
-      list( $stdout, $stderr, $status, $queue_msg ) = mysql_fetch_array( $result );
-   }
-   catch ( Exception $e )
-   {
-      write_log( "$me: stdout + stderr larger than 128M - $gfacID\n" . mysql_error( $gfac_link ) );
-      // Just go ahead and clean up
-   }
+   list( $queue_msg ) = mysql_fetch_array( $result );
 
    // But let's allow for investigation of other large stdout and/or stderr
    if ( strlen( $stdout ) > 20480000 ||
@@ -240,21 +288,6 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
    }
 
-   // Copy queue messages to LIMS submit directory (files there are deleted after 7 days)
-   global $submit_dir;
-   
-   // Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysql_query( $query, $us3_link );
-   
-   if ( ! $result )
-   {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-   }
-   
-   list( $requestGUID ) = mysql_fetch_array( $result );
-   $output_dir = "$submit_dir/$requestGUID";
 
    // Try to create it if necessary, and write the file
    // Let's use FILE_APPEND, in case this is the second time around and the 
@@ -270,7 +303,8 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
 
    $query = "UPDATE HPCAnalysisResult SET "                              .
             "stderr='" . mysql_real_escape_string( $stderr, $us3_link ) . "', " .
-            "stdout='" . mysql_real_escape_string( $stdout, $us3_link ) . "' "  .
+            "stdout='" . mysql_real_escape_string( $stdout, $us3_link ) . "', " .
+            "queueStatus='completed' " .
             "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
 
    $result = mysql_query( $query, $us3_link );
@@ -282,7 +316,18 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       return( -1 );
    }
 
-   // Save the tarfile and expand it
+   // Delete data from GFAC DB
+   $query = "DELETE from analysis WHERE gfacID='$gfacID'";
+
+   $result = mysql_query( $query, $gfac_link );
+
+   if ( ! $result )
+   {
+      // Just log it and continue
+      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+   }
+
+   // Expand the tar file
 
    if ( strlen( $tarfile ) == 0 )
    {
@@ -291,34 +336,8 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       return( -1 );
    }
 
-   // Shouldn't happen
-   if ( ! is_dir( "$work" ) )
-   {
-      write_log( "$me: $work directory does not exist" );
-      mail_to_user( "fail", "$work directory does not exist" );
-      return( -1 );
-   }
-
-   if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
-   chdir( "$work/$gfacID" );
-
-   $f = fopen( "analysis.tar", "w" );
-   fwrite( $f, $tarfile );
-   fclose( $f );
-
    $tar_out = array();
-   exec( "tar -xf analysis.tar 2>&1", $tar_out, $err );
-
-   if ( $err != 0 )
-   {
-      chdir( $work );
-      exec( "rm -r $gfacID" );
-      $output = implode( "\n", $tar_out );
-
-      write_log( "$me: Bad output tarfile: $output" );
-      mail_to_user( "fail", "Bad output file" );
-      return( -1 );
-   }
+   exec( "tar -xf analysis-results.tar 2>&1", $tar_out, $err );
 
    // Insert the model files and noise files
    $files      = file( "analysis_files.txt", FILE_IGNORE_NEW_LINES );
@@ -340,9 +359,12 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       else
          $fn = $file;
 
+      if ( preg_match( "/mdl.tmp$/", $fn ) )
+         continue;
+
       if ( filesize( $fn ) < 100 )
       {
-         write_log( "$me:fn is invalid $fn" );
+         write_log( "$me:fn is invalid $fn size filesize($fn)" );
          mail_to_user( "fail", "Internal error\n$fn is invalid" );
          return( -1 );
       }
@@ -351,6 +373,18 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       {
          $xml         = file_get_contents( $fn );
          $statistics  = parse_xml( $xml, 'statistics' );
+//         $ntries      = 0;
+//
+//         while ( $statistics['cpucount'] < 1  &&  $ntries < 3 )
+//         {  // job_statistics file not totally copied, so retry
+//            sleep( 10 );
+//            $xml         = file_get_contents( $fn );
+//            $statistics  = parse_xml( $xml, 'statistics' );
+//            $ntries++;
+//write_log( "$me:jobstats retry $ntries" );
+//         }
+//write_log( "$me:cputime=$statistics['cputime']" );
+
          $otherdata   = parse_xml( $xml, 'id' );
 
          $query = "UPDATE HPCAnalysisResult SET "   .
@@ -410,13 +444,61 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
          $modelGUIDs[ $id ] = $modelGUID;
          
       }
-      else  // It's a model file
+
+      else if ( preg_match( "/\.mrecs/", $fn ) > 0 )  // It's an mrecs file
+      {
+         $xml         = file_get_contents( $fn );
+         $mrecs_data  = parse_xml( $xml, "modelrecords" );
+         $desc        = $mrecs_data[ 'description' ];
+         $editGUID    = $mrecs_data[ 'editGUID' ];
+write_log( "$me:   mrecs file editGUID=$editGUID" );
+         if ( strlen( $editGUID ) < 36 )
+            $editGUID    = "12345678-0123-5678-0123-567890123456";
+         $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
+         $modelGUID   = $mrecs_data[ 'modelGUID' ];
+
+         $query = "INSERT INTO pcsa_modelrecs SET "  .
+                  "editedDataID="                .
+                  "(SELECT editedDataID FROM editedData WHERE editGUID='$editGUID')," .
+                  "modelID=0, "             .
+                  "mrecsGUID='$mrecGUID'," .
+                  "description='$desc',"    .
+                  "xml='" . mysql_real_escape_string( $xml, $us3_link ) . "'";
+
+         // Add later after all files are processed: editDataID, modelID
+
+         $result = mysql_query( $query, $us3_link );
+
+         if ( ! $result )
+         {
+            write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+            return( -1 );
+         }
+
+         $id         = mysql_insert_id( $us3_link );
+         $file_type  = "mrecs";
+         $mrecsIDs[] = $id;
+
+         // Keep track of modelGUIDs for later, when we replace them
+         $rmodlGUIDs[ $id ] = $modelGUID;
+//write_log( "$me:   mrecs file inserted into DB : id=$id" );
+      }
+
+      else                                           // It's a model file
       {
          $xml         = file_get_contents( $fn );
          $model_data  = parse_xml( $xml, "model" );
          $description = $model_data[ 'description' ];
          $modelGUID   = $model_data[ 'modelGUID' ];
          $editGUID    = $model_data[ 'editGUID' ];
+
+         if ( $mc_iteration > 1 )
+         {
+            $miter       = sprintf( "_mcN%03d", $mc_iteration );
+            $description = preg_replace( "/_mc[0-9]+/", $miter, $description );
+write_log( "$me:   MODELUpd: O:description=$description" );
+         }
 
          $query = "INSERT INTO model SET "       .
                   "modelGUID='$modelGUID',"      .
@@ -498,15 +580,15 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
    }
    
-   list( $requestGUID ) = mysql_fetch_array( $result );
-   
-   chdir( "$submit_dir/$requestGUID" );
-   $f = fopen( "analysis.tar", "w" );
-   fwrite( $f, $tarfile );
-   fclose( $f );
+//   list( $requestGUID ) = mysql_fetch_array( $result );
+//   
+//   chdir( "$submit_dir/$requestGUID" );
+//   $f = fopen( "analysis-results.tar", "w" );
+//   fwrite( $f, $tarfile );
+//   fclose( $f );
 
    // Clean up
-   chdir ( $work );
+//   chdir ( $work );
    // exec( "rm -rf $gfacID" );
 
    mysql_close( $us3_link );
@@ -544,7 +626,7 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    // Get GFAC status and message
    // function get_gfac_message() also sets global $status
    $gfac_message = get_gfac_message( $gfacID );
-   if ( $gfac_message === false ) $gfac_message = "";
+   if ( $gfac_message === false ) $gfac_message = "Job Finished";
       
    // Create a status to put in the subject line
    switch ( $status )
@@ -560,6 +642,11 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
       case "FAILED":
          $subj_status = 'failed';
+         if ( preg_match( "/^US3-A/i", $gfacID ) )
+         {  // For A/Thrift FAIL, get error message
+            $gfac_message = getExperimentErrors( $gfacID );
+//$gfac_message .= "Test ERROR MESSAGE";
+         }
          break;
 
       case "ERROR":
@@ -571,6 +658,11 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
          break;
 
    }
+
+   $queuestatus = $subj_status;
+   $limshost    = $dbhost;
+   if ( $limshost == 'localhost' )
+      $limshost    = gethostname();
 
    // Parse the editXMLFilename
    list( $runID, $editID, $dataType, $cell, $channel, $wl, $ext ) =
@@ -595,6 +687,7 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    Your UltraScan job is complete:
 
    Submission Time : $submittime
+   LIMS Host       : $limshost
    Analysis ID     : $gfacID
    Request ID      : $requestID  ( $db )
    RunID           : $runID

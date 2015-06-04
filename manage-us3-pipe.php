@@ -88,7 +88,7 @@ function process( $msg )
    list( $gfacID ) = mysql_fetch_row( $result );
    mysql_close( $resource );
 
-   $is_athrift  = preg_match( "/^US3-AIRA/i", $gfacID );
+   $is_athrift  = preg_match( "/^US3-A/i", $gfacID );
    $is_finished = preg_match( "/^Finished/i", $message );
 
    if ( $is_athrift )
