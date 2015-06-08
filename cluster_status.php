@@ -164,12 +164,14 @@ function local_status()
    global $self;
    global $data;
 
-//   $clusters = array( "alamo", "jacinto", "bcf" );
-   $clusters = array( "alamo", "jacinto" );
+//   $clusters = array( "alamo", "jacinto" );
+   $clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "juropa" );
+   //$clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "jureca" );
 //   $clusters = array( "alamo" );
    foreach ( $clusters as $clname )
    {
       $a      = Array();
+/**
       if ( $clname == "alamo" )
       {
          $qstat  = `ssh $clname '/usr/bin/qstat -B 2>&1|tail -1'`;
@@ -201,6 +203,115 @@ function local_status()
          $que    = "0";
          $run    = "0";
       }
+ *a*/
+      switch( $clname )
+      {
+         case 'alamo':
+         {
+            $host   = "us3@alamo.uthscsa.edu";
+            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 10 ];
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
+         case 'stampede':
+         {
+            $host   = "us3@stampede.tacc.utexas.edu";
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 2 ];
+            $run    = $sparts[ 5 ];
+            $que    = $sparts[ 8 ];
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+               $sta    = "down";
+            break;
+         }
+         case 'lonestar':
+         {
+            $host   = "us3@lonestar.tacc.utexas.edu";
+            $qstat  = `ssh $host 'showq 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 2 ];
+            $run    = '0';
+            $que    = '0';
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $run    = $sparts[ 5 ];
+               $que    = $sparts[ 8 ];
+            }
+            break;
+         }
+         case 'comet':
+         {
+            $host   = "us3@comet.sdsc.edu";
+            $qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $sparts = preg_split( '/\//', $knts );
+            $run    = $sparts[ 0 ];
+            $que    = $sparts[ 1 ];
+            break;
+         }
+         case 'gordon':
+         {
+            $host   = "us3@gordon.sdsc.edu";
+            $qstat  = `ssh $host '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 10 ];
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
+         case 'juropa':
+         {
+            $host   = "zdv575@juropa.fz-juelich.de";
+            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 9 ];
+            if ( $sta == "Scheduling" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
+         case 'jureca':
+         {
+            $host   = "swus1@jureca.fz-juelich.de";
+            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $sparts = preg_split( '/\//', $knts );
+            $run    = $sparts[ 0 ];
+            $que    = $sparts[ 1 ];
+            break;
+         }
+      }
+
+      if ( $sta == "down" )
+      {
+         $que    = "0";
+         $run    = "0";
+      }
 
       $a[ 'cluster' ] = $clname;
       $a[ 'queued'  ] = $que;
@@ -208,8 +319,12 @@ function local_status()
       $a[ 'status'  ] = $sta;
 
       $data[] = $a;
-      $a[ 'cluster' ] = $clname . "-local";
-      $data[] = $a;
+
+      if ( $clname == 'alamo' )
+      {
+         $a[ 'cluster' ] = $clname . "-local";
+         $data[] = $a;
+      }
    }
 }
 
