@@ -1055,6 +1055,8 @@ function aira_status( $gfacID, $status_in )
          $status    = standard_status( $status_ex );
       }
 
+if(preg_match("/US3-ADEV/i",$gfacID))
+write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 //write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 //write_log( "  me_d=$me_devel jo_d=$job_devel dm=$devmatch cd=$class_dir" );
       if ( $status != $status_gw )
