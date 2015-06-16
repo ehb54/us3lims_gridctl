@@ -287,7 +287,9 @@ function local_status()
             $que    = $sparts[ 3 ];
             $run    = $sparts[ 4 ];
             $sta    = $sparts[ 9 ];
-            if ( $sta == "Scheduling" )
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else if ( $sta == "Scheduling" )
                $sta    = "up";
             else
                $sta    = "down";
