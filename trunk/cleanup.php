@@ -567,6 +567,28 @@ write_log( "$me:   MODELUpd: O:description=$description" );
       }
    }
 
+   // Now possibly fix up mrecs entries
+
+   foreach ( $mrecsIDs as $mrecsID )
+   {
+      $modelGUID = $rmodlGUIDs[ $mrecsID ];
+      $query = "UPDATE pcsa_modelrecs SET "                                                 .
+               "modelID="                                                          .
+               "(SELECT modelID FROM model WHERE modelGUID='$modelGUID')"          .
+               "WHERE mrecsID=$mrecsID";
+
+      $result = mysql_query( $query, $us3_link );
+
+      if ( ! $result )
+      {
+         write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+         mail_to_user( "fail", "Bad query\n$query\n" . mysql_error( $us3_link ) );
+         return( -1 );
+      }
+write_log( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
+   }
+//write_log( "$me:     mrecs entries updated" );
+
    // Copy results to LIMS submit directory (files there are deleted after 7 days)
    global $submit_dir; // LIMS submit files dir
    
