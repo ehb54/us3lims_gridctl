@@ -171,39 +171,6 @@ function local_status()
    foreach ( $clusters as $clname )
    {
       $a      = Array();
-/**
-      if ( $clname == "alamo" )
-      {
-         $qstat  = `ssh $clname '/usr/bin/qstat -B 2>&1|tail -1'`;
-
-         $sparts = preg_split( '/\s+/', $qstat );
-         $que    = $sparts[ 3 ];
-         $run    = $sparts[ 4 ];
-         $sta    = $sparts[ 10 ];
-      }
-      else  
-      {
-         $qstat  = `ssh $clname '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
-
-         $sparts = preg_split( '/\s+/', $qstat );
-         $que    = $sparts[ 3 ];
-         $run    = $sparts[ 4 ];
-         $sta    = $sparts[ 9 ];
-      }
-
-//echo "$self: cln que run sta   $clname $que $run $sta \n";
-
-      if ( $sta == "Active" )
-      {
-         $sta    = "up";
-      }
-      else
-      {
-         $sta    = "down";
-         $que    = "0";
-         $run    = "0";
-      }
- *a*/
       switch( $clname )
       {
          case 'alamo':
@@ -297,7 +264,8 @@ function local_status()
          }
          case 'jureca':
          {
-            $host   = "swus1@jureca.fz-juelich.de";
+            //$host   = "swus1@jureca.fz-juelich.de";
+            $host   = "swus1@juropatest2.fz-juelich.de";
             $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" 2>&1|tail -1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];

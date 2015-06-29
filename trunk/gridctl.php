@@ -39,9 +39,27 @@ if ( mysql_num_rows( $result ) == 0 )
    exit();  // Nothing to do
 }
 
+$me_devel  = preg_match( "/class_devel/", $class_dir );
+
 while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTime ) 
             = mysql_fetch_array( $result ) )
 {
+   // If this entry does not match class/class_devel, skip processing
+
+   if ( preg_match( "/US3-A/i", $gfacID ) )
+   {  // For thrift, job and gridctl must match
+      $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
+      if ( (  $me_devel  &&  !$job_devel )  ||
+           ( !$me_devel  &&   $job_devel ) )
+      {  // If job not from appropriate Airavata server, skip processing
+         continue;
+      }
+   }
+   else if ( $me_devel )
+   {  // For non-thrift and development, skip
+      continue;
+   }
+
    // Checking we need to do for each entry
 echo "us3db=$us3_db  gfid=$gfacID\n";
    switch ( $us3_db )
@@ -62,6 +80,8 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    $awork = explode( "-", $gfacID );
    $gfacLabl = $awork[0] . "-" . $awork[1] . "-" . $awork[2];
    $loghdr   = $self . ":" . $gfacLabl . "...:";
+   $status_in = $status;
+   $status_gw = $status;
 
    // If entry is for Airvata/Thrift, get the true current status
 
@@ -181,7 +201,7 @@ function submitted( $updatetime )
 
       if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) )
       {
-write_log( "$loghdr submitted:job_status=$job_status" );
+//write_log( "$loghdr submitted:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
       }
 
@@ -216,6 +236,7 @@ function submit_timeout( $updatetime )
 
    if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) )
    {
+//write_log( "$loghdr submit_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -259,7 +280,10 @@ function running( $updatetime )
          return;
 
       if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) )
+      {
+//write_log( "$loghdr running:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
+      }
 
       return;
    }
@@ -292,6 +316,7 @@ function run_timeout( $updatetime )
 
    if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) )
    {
+//write_log( "$loghdr run_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -334,6 +359,7 @@ function wait_data( $updatetime )
 
       if ( $job_status != 'DATA' )
       {
+//write_log( "$loghdr wait_data:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
          return;
       }
@@ -378,6 +404,7 @@ function data_timeout( $updatetime )
 
    if ( $job_status != 'DATA' )
    {
+//write_log( "$loghdr data_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -454,9 +481,10 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
 //write_log( "$loghdr requestID = $requestID  gfacID = $gfacID" );
    if ( $requestID == 0 ) return;
 
+   $me_devel  = preg_match( "/class_devel/", $class_dir );
+
    if ( preg_match( "/US3-A/i", $gfacID ) )
    {
-      $me_devel  = preg_match( "/class_devel/", $class_dir );
       $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
       if ( ( !$me_devel  &&  !$job_devel )  ||
            (  $me_devel  &&   $job_devel ) )
@@ -466,8 +494,9 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
       }
 //write_log( "$loghdr RTN FR aira_cleanup()" );
    }
-   else
-   {
+
+   else if ( ! $me_devel )
+   {  // If this is gridctl_pro and gfac (jureca), do GFAC cleanup
 //write_log( "$loghdr CALLING gfac_cleanup()" );
       gfac_cleanup( $us3_db, $requestID, $gLink );
    }
@@ -486,10 +515,9 @@ function update_job_status( $job_status, $gfacID )
     case 'SUBMITTED'   :
     case 'SUBMITED'    :
     case 'INITIALIZED' :
-    case 'UPDATING'    :
-    case 'PENDING'     :
       $query   = "UPDATE analysis SET status='SUBMITTED' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is SUBMITTED";
+      $message = "Job status request reports job is " . $job_status;
+//write_log( "$loghdr update_job_status(SUBM) job_status=$job_status" );
       break;
 
     case 'STARTED'     :
@@ -535,6 +563,11 @@ function update_job_status( $job_status, $gfacID )
 write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
       $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is not in the queue";
+      break;
+
+    case 'UPDATING'    :
+    case 'PENDING'     :
+      $message = "Job status request reports job is " . $job_status;
       break;
 
     default            :
@@ -626,7 +659,7 @@ function is_aira_job( $gfacID )
    global $cluster;
 
    if ( preg_match( "/US3-A/i", $gfacID )  &&
-        ! preg_match( "/juropa/i", $cluster ) )
+        ! preg_match( "/jur/i", $cluster ) )
    {
       // Then it's an Airavata/Thrift job
       return true;
@@ -647,6 +680,7 @@ function get_gfac_status( $gfacID )
    {
       $status_ex    = getExperimentStatus( $gfacID );
       $gfac_status  = standard_status( $status_ex );
+write_log( "$loghdr get_gfac_status: status_ex=$status_ex gfac_status=$gfac_status" );
       return $gfac_status;
    }
 
@@ -952,9 +986,6 @@ function standard_status( $status_in )
          $status      = 'CANCELED';
          break;
 
-         $status      = 'DATA';
-         break;
-
       case 'COMPLETED' :
       case 'completed' :
          $status      = 'COMPLETE';
@@ -1055,7 +1086,8 @@ function aira_status( $gfacID, $status_in )
          $status    = standard_status( $status_ex );
       }
 
-if(preg_match("/US3-ADEV/i",$gfacID))
+//if(preg_match("/US3-ADEV/i",$gfacID))
+if(preg_match("/US3-A/i",$gfacID))
 write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 //write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 //write_log( "  me_d=$me_devel jo_d=$job_devel dm=$devmatch cd=$class_dir" );
