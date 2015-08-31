@@ -164,10 +164,8 @@ function local_status()
    global $self;
    global $data;
 
-//   $clusters = array( "alamo", "jacinto" );
-   $clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "juropa" );
-   //$clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "jureca" );
-//   $clusters = array( "alamo" );
+   //$clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon" );
+   $clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "jureca" );
    foreach ( $clusters as $clname )
    {
       $a      = Array();
@@ -223,13 +221,15 @@ function local_status()
          case 'comet':
          {
             $host   = "us3@comet.sdsc.edu";
-            $qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" 2>&1|tail -1'`;
+            $qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
             $knts   = $sparts[ 1 ];
             $sparts = preg_split( '/\//', $knts );
             $run    = $sparts[ 0 ];
             $que    = $sparts[ 1 ];
+            if ( $sta == "" )
+               $sta    = "down";
             break;
          }
          case 'gordon':
@@ -246,26 +246,9 @@ function local_status()
                $sta    = "down";
             break;
          }
-         case 'juropa':
-         {
-            $host   = "zdv575@juropa.fz-juelich.de";
-            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 9 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
-            else if ( $sta == "Scheduling" )
-               $sta    = "up";
-            else
-               $sta    = "down";
-            break;
-         }
          case 'jureca':
          {
-            //$host   = "swus1@jureca.fz-juelich.de";
-            $host   = "swus1@juropatest2.fz-juelich.de";
+            $host   = "swus1@jureca.fz-juelich.de";
             $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" 2>&1|tail -1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
