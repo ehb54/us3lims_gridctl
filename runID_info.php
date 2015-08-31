@@ -729,7 +729,7 @@ HTML;
   // Get GFAC job status
   global $uses_airavata;
 
-  if ( $uses_airavata === true && $cluster != 'juropa.fz-juelich.de' )
+  if ( $uses_airavata === true )
   {
     $row['gfacStatus'] = nl2br( getExperimentStatus( $row['gfacID'] ) );
   }
