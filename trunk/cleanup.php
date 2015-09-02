@@ -199,9 +199,9 @@ write_log( "$me: output_dir=$output_dir" );
    $ofiles     = scandir( $output_dir );
    foreach ( $ofiles as $ofile )
    {
-      if ( preg_match( "/^" . $gfacID . ".*stderr$/", $ofile ) )
+      if ( preg_match( "/.*stderr$/", $ofile ) )
          $fn_stderr  = $ofile;
-      if ( preg_match( "/^" . $gfacID . ".*stdout$/", $ofile ) )
+      if ( preg_match( "/.*stdout$/", $ofile ) )
          $fn_stdout  = $ofile;
 //write_log( "$me:    ofile=$ofile" );
    }
