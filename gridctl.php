@@ -82,6 +82,7 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    $loghdr   = $self . ":" . $gfacLabl . "...:";
    $status_in = $status;
    $status_gw = $status;
+   $status_ex = $status;
 
    // If entry is for Airvata/Thrift, get the true current status
 
@@ -168,10 +169,13 @@ write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
 
       case "FINISHED":
       case "DONE":
-//         if ( is_aira_job( $gfacID ) )
-//         {
-//            complete();
-//         }
+         if ( is_aira_job( $gfacID ) )
+         {
+            $status_ex    = getExperimentStatus( $gfacID );
+write_log( "$loghdr     status=$status status_ex=$status_ex" );
+            if ( $status_ex === 'COMPLETED' )
+               complete();
+         }
       case "PROCESSING":
       default:
          break;
@@ -678,6 +682,15 @@ function get_gfac_status( $gfacID )
    if ( is_aira_job( $gfacID ) )
    {
       $status_ex    = getExperimentStatus( $gfacID );
+
+      if ( $status_ex == 'EXECUTING' )
+      {
+         if ( $gfac_status == 'SUBMITTED' )
+            $status_ex    = 'QUEUED';
+         if ( $gfac_status == 'RUNNING' )
+            $status_ex    = 'ACTIVE';
+      }
+
       $gfac_status  = standard_status( $status_ex );
 write_log( "$loghdr get_gfac_status: status_ex=$status_ex gfac_status=$gfac_status" );
       return $gfac_status;
