@@ -164,8 +164,10 @@ function local_status()
    global $self;
    global $data;
 
-   //$clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon" );
-   $clusters = array( "alamo", "lonestar", "stampede", "comet", "gordon", "jureca" );
+//   $clusters = array( "alamo", "lonestar", "lonestar5", "stampede",
+//                      "comet", "gordon" );
+   $clusters = array( "alamo", "lonestar", "lonestar5", "stampede",
+                      "comet", "gordon", "jureca", "jacinto" );
    foreach ( $clusters as $clname )
    {
       $a      = Array();
@@ -179,6 +181,20 @@ function local_status()
             $que    = $sparts[ 3 ];
             $run    = $sparts[ 4 ];
             $sta    = $sparts[ 10 ];
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
+         case 'jacinto':
+         {
+            $host   = "us3@jacinto.uthscsa.edu";
+            $qstat  = `ssh $host '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 9 ];
             if ( $sta == "Active" )
                $sta    = "up";
             else
@@ -202,6 +218,26 @@ function local_status()
          {
             $host   = "us3@lonestar.tacc.utexas.edu";
             $qstat  = `ssh $host 'showq 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 2 ];
+            $run    = '0';
+            $que    = '0';
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $run    = $sparts[ 5 ];
+               $que    = $sparts[ 8 ];
+            }
+            break;
+         }
+         case 'lonestar5':
+         {
+            $host   = "us3@ls5.tacc.utexas.edu";
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|tail -1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = '0';
@@ -249,16 +285,17 @@ function local_status()
          case 'jureca':
          {
             $host   = "swus1@jureca.fz-juelich.de";
-            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" 2>&1|tail -1'`;
+            $qstat  = `ssh $host '~swus1/scripts/qstat-jureca 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $sparts = preg_split( '/\//', $knts );
-            $run    = $sparts[ 0 ];
-            $que    = $sparts[ 1 ];
+            $run    = $sparts[ 1 ];
+            $que    = $sparts[ 2 ];
             break;
          }
       }
+
+      if ( $sta == "" )
+         $sta    = "down";
 
       if ( $sta == "down" )
       {
@@ -273,7 +310,7 @@ function local_status()
 
       $data[] = $a;
 
-      if ( $clname == 'alamo' )
+      if ( $clname == 'alamo'  ||  $clname == 'jacinto' )
       {
          $a[ 'cluster' ] = $clname . "-local";
          $data[] = $a;

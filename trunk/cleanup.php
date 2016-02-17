@@ -343,6 +343,8 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
    $files      = file( "analysis_files.txt", FILE_IGNORE_NEW_LINES );
    $noiseIDs   = array();
    $modelGUIDs = array();
+   $mrecsIDs   = array();
+   $fns_used   = array();
 
    foreach ( $files as $file )
    {
@@ -361,6 +363,11 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
 
       if ( preg_match( "/mdl.tmp$/", $fn ) )
          continue;
+
+      if ( in_array( $fn, $fns_used ) )
+         continue;
+
+      $fns_used[] = $fn;
 
       if ( filesize( $fn ) < 100 )
       {
