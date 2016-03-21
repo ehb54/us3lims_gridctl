@@ -412,6 +412,7 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
 
          file_put_contents( "$output_dir/$fn", $xml );    // Copy to submit dir
 
+         $file_type = "jobstats";
       }
 
       else if ( preg_match( "/\.noise/", $fn ) > 0 ) // It's a noise file

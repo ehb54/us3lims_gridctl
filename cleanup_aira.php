@@ -7,7 +7,7 @@
  *
  */
 
-$us3bin = exec( "ls -d ~us3/bin" );
+$us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
 include $class_dir_p . "experiment_status.php";
 include $class_dir_p . "experiment_errors.php";

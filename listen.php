@@ -1,6 +1,6 @@
 <?php
 
-$us3bin = exec( "ls -d ~us3/bin" );
+$us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 
 $socket = socket_create(  AF_INET,  SOCK_DGRAM,  SOL_UDP );
@@ -17,7 +17,7 @@ $handle = fopen( $pipe, "r+" );
 
 $php = "/usr/bin/php";
 
-$cmd = "/usr/bin/nohup $php $home/bin/manage-us3-pipe.php >>$home/etc/manage.log 2>&1 </dev/null &";
+$cmd = "/usr/bin/nohup $php $home/lims/bin/manage-us3-pipe.php >>$home/lims/etc/manage.log 2>&1 </dev/null &";
 
 exec( $cmd );
 

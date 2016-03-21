@@ -1,7 +1,7 @@
 <?php
 
-$us3bin = exec( "ls -d ~us3/bin" );
-$us3etc = exec( "ls -d ~us3/etc" );
+$us3bin = exec( "ls -d ~us3/lims/bin" );
+$us3etc = exec( "ls -d ~us3/lims/etc" );
 include_once "$us3bin/listen-config.php";
 
 // Get the US3 system release string
@@ -121,10 +121,10 @@ echo "   numrows = $num_rows \n";
 while ( list( $id, $type, $rev, $msg ) = mysql_fetch_array( $result ) )
 {
    $key    = $type . $rev;
-   $msgf   = $notices[ $key ][ 'msg'  ];
 
    if ( in_array( $key, $keys ) )
    {  // Entry is in both file and DB
+      $msgf   = $notices[ $key ][ 'msg'  ];
       $notices[ $key ][ 'id'   ] = $id;
       $notices[ $key ][ 'type' ] = $type;
       $notices[ $key ][ 'rev'  ] = $rev;
