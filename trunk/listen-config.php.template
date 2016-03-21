@@ -1,5 +1,5 @@
 <?php
-$home        = exec( "ls -d ~us3" );
+$home        = exec( "ls -d ~us3/lims" );
 $home_remote = "$home";                                // for local submission
 $work        = "$home/work";
 $work_remote = "$home_remote/work";
