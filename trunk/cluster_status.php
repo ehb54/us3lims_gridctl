@@ -164,9 +164,7 @@ function local_status()
    global $self;
    global $data;
 
-//   $clusters = array( "alamo", "lonestar", "lonestar5", "stampede",
-//                      "comet", "gordon" );
-   $clusters = array( "alamo", "lonestar", "lonestar5", "stampede",
+   $clusters = array( "alamo", "lonestar5", "stampede",
                       "comet", "gordon", "jureca", "jacinto" );
    foreach ( $clusters as $clname )
    {

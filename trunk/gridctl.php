@@ -7,6 +7,7 @@ $submittime = 0;
 $cluster    = '';
 
 //global $self;
+global $status_ex, $status_gw;
 
 // Produce some output temporarily, so cron will send me message
 $now = time();
@@ -678,6 +679,7 @@ function get_gfac_status( $gfacID )
    global $self;
    global $loghdr;
    global $cluster;
+   global $status_ex, $status_gw;
 
    if ( is_aira_job( $gfacID ) )
    {
@@ -685,9 +687,9 @@ function get_gfac_status( $gfacID )
 
       if ( $status_ex == 'EXECUTING' )
       {
-         if ( $gfac_status == 'SUBMITTED' )
+         if ( $status_gw == 'SUBMITTED' )
             $status_ex    = 'QUEUED';
-         if ( $gfac_status == 'RUNNING' )
+         if ( $status_gw == 'RUNNING' )
             $status_ex    = 'ACTIVE';
       }
 
