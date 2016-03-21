@@ -10,6 +10,9 @@ $listen_port = 12233;
 //$dbhost      = "uslims3.uthscsa.edu";
 $dbhost      = "localhost";
 $self        = basename( $_SERVER['PHP_SELF'] );
+$class_dir_p = '/srv/www/htdocs/common/class/';        // Class dir for production
+$class_dir_d = '/srv/www/htdocs/common/class_devel/';  // Class dir for development
+$class_dir   = $class_dir_p;                           // Class dir default
 
 // Global DB credentials
 $guser       = "gfac";
