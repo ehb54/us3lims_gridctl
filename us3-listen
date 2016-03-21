@@ -17,7 +17,7 @@
 case "${1}" in
    start)
       echo -n "Starting us3-listen daemons ..."
-      /usr/bin/php ~us3/bin/listen.php &
+      /usr/bin/php ~us3/lims/bin/listen.php &
       echo ""
       sleep 1
       ${0} status

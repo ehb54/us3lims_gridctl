@@ -1,6 +1,6 @@
 <?php
 
-$us3bin = exec( "ls -d ~us3/bin" );
+$us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 
 $xml  = get_data();
