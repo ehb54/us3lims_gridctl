@@ -687,10 +687,10 @@ function get_gfac_status( $gfacID )
 
       if ( $status_ex == 'EXECUTING' )
       {
-         if ( $status_gw == 'SUBMITTED' )
-            $status_ex    = 'QUEUED';
          if ( $status_gw == 'RUNNING' )
             $status_ex    = 'ACTIVE';
+         else
+            $status_ex    = 'QUEUED';
       }
 
       $gfac_status  = standard_status( $status_ex );
