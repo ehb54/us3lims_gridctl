@@ -108,6 +108,7 @@ function update( $cluster, $queued, $status, $running )
    global $gpasswd;
    global $gDB;
    global $self;
+//echo  " $cluster $queued, $status, $running\n";
 
    $gfac_link = mysql_connect( $dbhost, $guser, $gpasswd );
    $result = mysql_select_db( $gDB, $gfac_link );
@@ -166,6 +167,8 @@ function local_status()
 
    $clusters = array( "alamo", "lonestar5", "stampede",
                       "comet", "gordon", "jureca", "jacinto" );
+//   $clusters = array( "alamo", "lonestar5", "stampede",
+//                      "comet", "gordon", "jureca"            );
    foreach ( $clusters as $clname )
    {
       $a      = Array();
@@ -202,7 +205,7 @@ function local_status()
          case 'stampede':
          {
             $host   = "us3@stampede.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|tail -1'`;
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = $sparts[ 5 ];
@@ -212,30 +215,10 @@ function local_status()
                $sta    = "down";
             break;
          }
-         case 'lonestar':
-         {
-            $host   = "us3@lonestar.tacc.utexas.edu";
-            $qstat  = `ssh $host 'showq 2>&1|tail -1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 2 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 5 ];
-               $que    = $sparts[ 8 ];
-            }
-            break;
-         }
          case 'lonestar5':
          {
             $host   = "us3@ls5.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|tail -1'`;
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = '0';

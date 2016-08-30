@@ -527,7 +527,7 @@ write_log( "$me:   mrecs file editGUID=$editGUID" );
 //write_log( "$me:   mrecs file inserted into DB : id=$id" );
       }
 
-      else                                           // It's a model file
+      else if ( preg_match( "/\.model/", $fn ) > 0 ) // It's a model file
       {
          $xml         = file_get_contents( $fn );
          $model_data  = parse_xml( $xml, "model" );
