@@ -412,7 +412,8 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
 
          file_put_contents( "$output_dir/$fn", $xml );    // Copy to submit dir
 
-         $file_type = "jobstats";
+         $file_type = "job_stats";
+         $id        = 1;
       }
 
       else if ( preg_match( "/\.noise/", $fn ) > 0 ) // It's a noise file
@@ -535,6 +536,9 @@ write_log( "$me:   MODELUpd: O:description=$description" );
                   "modelID=$modelID, personID=$personID";
          $result = mysql_query( $query, $us3_link );
       }
+
+      else      // Undetermined type:  skip result data update
+         continue;
 
       $query = "INSERT INTO HPCAnalysisResultData SET "       .
                "HPCAnalysisResultID='$HPCAnalysisResultID', " .
