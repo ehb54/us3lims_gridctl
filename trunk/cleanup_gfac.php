@@ -158,12 +158,19 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    list( $status, $cluster, $id ) = mysql_fetch_array( $result );
 //write_log( "$me:     db=$db; requestID=$requestID; status=$status; cluster=$cluster" );
 
-   if ( $cluster == 'bcf-local'  ||  $cluster == 'alamo-local' )
+//   if ( $cluster == 'bcf-local'  ||  $cluster == 'alamo-local' )
+   if ( preg_match( "/\-local/", $cluster )  ||
+        preg_match( "/us3iab/",  $cluster ) )
    {
-      $clushost = $cluster;
-      $clushost = preg_replace( "/\-local/", "", $clushost );
+//      $clushost = $cluster;
+//      $clushost = preg_replace( "/\-local/", "", $clushost );
+      $parts    = explode( "-", $cluster );
+      $clushost = $parts[ 0 ];
       get_local_files( $gfac_link, $clushost, $requestID, $id, $gfacID );
+write_log( "$me:     clushost=$clushost  reqID=$requestID get_local_files() gfacID=$gfacID" );
    }
+else
+write_log( "$me:     NO get_local_files()" );
 
    $query = "SELECT id, stderr, stdout, tarfile FROM analysis " .
             "WHERE gfacID='$gfacID'";
@@ -327,7 +334,7 @@ write_log( "$me: Output dir determined: $output_dir" );
    $message_filename = "$output_dir/$db-$requestID-messages.txt";
    file_put_contents( $message_filename, $message_log, FILE_APPEND );
   // mysql_close( $gfac_link );
-//write_log( "$me: *messages.txt written" );
+write_log( "$me: *messages.txt written" );
 
    /////////
    // Insert data into HPCAnalysis
@@ -345,7 +352,6 @@ write_log( "$me: Output dir determined: $output_dir" );
       mail_to_user( "fail", "Bad query:\n$query\n" . mysql_error( $us3_link ) );
       return( -1 );
    }
-//write_log( "$me: HPCAnalysisResult stderr,stdout updated" );
 
    // Save the tarfile and expand it
 
@@ -367,13 +373,13 @@ write_log( "$me: Output dir determined: $output_dir" );
    if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
    chdir( "$work/$gfacID" );
 
-   $f = fopen( "analysis.tar", "w" );
+   $f = fopen( "analysis-results.tar", "w" );
    fwrite( $f, $tarfile );
    fclose( $f );
-write_log( "$me: analysis.tar file written to work dir" );
+//write_log( "$me: analysis-results.tar file written to work dir" );
 
    $tar_out = array();
-   exec( "tar -xf analysis.tar 2>&1", $tar_out, $err );
+   exec( "tar -xf analysis-results.tar 2>&1", $tar_out, $err );
 
    if ( $err != 0 )
    {
@@ -460,7 +466,7 @@ write_log( "$me: analysis.tar file written to work dir" );
          $query = "INSERT INTO noise SET "  .
                   "noiseGUID='$noiseGUID'," .
                   "modelGUID='$modelGUID'," .
-                  "editedDataID=1, "        .
+                  "editedDataID=2, "        .
                   "modelID=1, "             .
                   "noiseType='$type',"      .
                   "description='$desc',"    .
@@ -669,5 +675,4 @@ write_log( "$me:   MODELUpd: O:description=$description" );
 
    mail_to_user( "success", "" );
 }
-
 ?>

@@ -2,7 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
-include "/srv/www/htdocs/common/class/experiment_status.php";
+include "$class_dir/experiment_status.php";
 
 write_log( "$self: Starting" );
 

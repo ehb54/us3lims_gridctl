@@ -13,6 +13,6 @@ include $class_dir_p . "experiment_status.php";
 include $class_dir_p . "experiment_errors.php";
 $me              = 'cleanup_aira.php';
 $class_dir       = $class_dir_p;
-include_once "cleanup.php";
+include_once "$us3bin/cleanup.php";
 
 ?>

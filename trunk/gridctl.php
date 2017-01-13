@@ -1,5 +1,10 @@
 <?php
 
+$us3bin = exec( "ls -d ~us3/lims/bin" );
+include_once "$us3bin/listen-config.php";
+//include "$us3bin/cleanup_aira.php";
+//include "$us3bin/cleanup_gfac.php";
+
 // Global variables
 $gfac_message = "";
 $updateTime = 0;
@@ -52,13 +57,9 @@ while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTim
       $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
       if ( (  $me_devel  &&  !$job_devel )  ||
            ( !$me_devel  &&   $job_devel ) )
-      {  // If job not from appropriate Airavata server, skip processing
+      {  // Job type and Airavata server mismatch:  skip processing
          continue;
       }
-   }
-   else if ( $me_devel )
-   {  // For non-thrift and development, skip
-      continue;
    }
 
    // Checking we need to do for each entry
@@ -77,12 +78,11 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
          break;
    }
 
-   $awork = array();
-   $awork = explode( "-", $gfacID );
-   $gfacLabl = $awork[0] . "-" . $awork[1] . "-" . $awork[2];
+//   $awork = array();
+//   $awork = explode( "-", $gfacID );
+//   $gfacLabl = $awork[0] . "-" . $awork[1] . "-" . $awork[2];
+   $gfacLabl = $gfacID;
    $loghdr   = $self . ":" . $gfacLabl . "...:";
-   $status_in = $status;
-   $status_gw = $status;
    $status_ex = $status;
 
    // If entry is for Airvata/Thrift, get the true current status
@@ -90,18 +90,27 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    if ( is_aira_job( $gfacID ) )
    {
       $status_in  = $status;
+//write_log( "$loghdr status_in=$status_in" );
       $status     = aira_status( $gfacID, $status_in );
 if($status != $status_in )
 write_log( "$loghdr Set to $status from $status_in" );
    }
-   else
+   else if ( is_gfac_job( $gfacID ) )
    {
       $status_gw  = $status;
       $status     = get_gfac_status( $gfacID );
       //if ( $status == 'FINISHED' )
       if ( $status_gw == 'COMPLETE' )
          $status     = $status_gw;
-write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
+//write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
+   }
+   else
+   {
+      $status_gw  = $status;
+      $status     = get_local_status( $gfacID );
+      if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
+         $status     = $status_gw;
+//write_log( "$loghdr Local status=$status status_gw=$status_gw" );
    }
 
    // Sometimes during testing, the us3_db entry is not set
@@ -159,6 +168,7 @@ write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
 
       case "COMPLETED":
       case "COMPLETE":
+write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
          complete();
          break;
 
@@ -172,11 +182,9 @@ write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
       case "DONE":
          if ( is_aira_job( $gfacID ) )
          {
-            $status_ex    = getExperimentStatus( $gfacID );
-write_log( "$loghdr     status=$status status_ex=$status_ex" );
-            if ( $status_ex === 'COMPLETED' )
-               complete();
+            complete();
          }
+write_log( "$loghdr   FINISHED gfacID=$gfacID" );
       case "PROCESSING":
       default:
          break;
@@ -206,7 +214,7 @@ function submitted( $updatetime )
 
       if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) )
       {
-//write_log( "$loghdr submitted:job_status=$job_status" );
+write_log( "$loghdr submitted:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
       }
 
@@ -241,7 +249,6 @@ function submit_timeout( $updatetime )
 
    if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) )
    {
-//write_log( "$loghdr submit_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -285,10 +292,7 @@ function running( $updatetime )
          return;
 
       if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) )
-      {
-//write_log( "$loghdr running:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
-      }
 
       return;
    }
@@ -321,7 +325,6 @@ function run_timeout( $updatetime )
 
    if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) )
    {
-//write_log( "$loghdr run_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -364,7 +367,6 @@ function wait_data( $updatetime )
 
       if ( $job_status != 'DATA' )
       {
-//write_log( "$loghdr wait_data:job_status=$job_status" );
          update_job_status( $job_status, $gfacID );
          return;
       }
@@ -409,7 +411,6 @@ function data_timeout( $updatetime )
 
    if ( $job_status != 'DATA' )
    {
-//write_log( "$loghdr data_timeout:job_status=$job_status" );
       update_job_status( $job_status, $gfacID );
       return;
    }
@@ -462,7 +463,6 @@ function cleanup()
    global $gfacID;
    global $us3_db;
    global $loghdr;
-   global $class_dir;
 
    // Double check that the gfacID exists
    $query  = "SELECT count(*) FROM analysis WHERE gfacID='$gfacID'";
@@ -487,22 +487,22 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
    if ( $requestID == 0 ) return;
 
    $me_devel  = preg_match( "/class_devel/", $class_dir );
+   $me_local  = preg_match( "/class_local/", $class_dir );
 
    if ( preg_match( "/US3-A/i", $gfacID ) )
    {
       $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
       if ( ( !$me_devel  &&  !$job_devel )  ||
            (  $me_devel  &&   $job_devel ) )
-      {  // If job from appropriate Airavata server, process it
+      {  // Job is of same type (prod/devel) as Server:  process it
 //write_log( "$loghdr CALLING aira_cleanup()" );
          aira_cleanup( $us3_db, $requestID, $gLink );
       }
 //write_log( "$loghdr RTN FR aira_cleanup()" );
    }
-
-   else if ( ! $me_devel )
-   {  // If this is gridctl_pro and gfac (jureca), do GFAC cleanup
-//write_log( "$loghdr CALLING gfac_cleanup()" );
+   else if ( ! $me_local )
+   {
+write_log( "$loghdr CALLING gfac_cleanup() reqID=$requestID" );
       gfac_cleanup( $us3_db, $requestID, $gLink );
    }
 }
@@ -520,9 +520,10 @@ function update_job_status( $job_status, $gfacID )
     case 'SUBMITTED'   :
     case 'SUBMITED'    :
     case 'INITIALIZED' :
+    case 'UPDATING'    :
+    case 'PENDING'     :
       $query   = "UPDATE analysis SET status='SUBMITTED' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is " . $job_status;
-//write_log( "$loghdr update_job_status(SUBM) job_status=$job_status" );
+      $message = "Job status request reports job is SUBMITTED";
       break;
 
     case 'STARTED'     :
@@ -568,11 +569,6 @@ function update_job_status( $job_status, $gfacID )
 write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
       $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is not in the queue";
-      break;
-
-    case 'UPDATING'    :
-    case 'PENDING'     :
-      $message = "Job status request reports job is " . $job_status;
       break;
 
     default            :
@@ -694,12 +690,13 @@ function get_gfac_status( $gfacID )
       }
 
       $gfac_status  = standard_status( $status_ex );
-write_log( "$loghdr get_gfac_status: status_ex=$status_ex gfac_status=$gfac_status" );
       return $gfac_status;
    }
 
    else if ( ! is_gfac_job( $gfacID ) )
+   {
       return false;
+   }
 
    $url = "$serviceURL/jobstatus/$gfacID";
    try
@@ -757,7 +754,8 @@ function get_gfac_outputs( $gfacID )
    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false )
    {
       // Then it's not a GFAC job
-      return false;
+      $job_status = get_local_status( $gfacID );
+      return $job_status;
    }
 
    if ( ! in_array( $job_status, array( 'DONE', 'FAILED', 'COMPLETE', 'FINISHED' ) ) )
@@ -824,20 +822,25 @@ function get_local_status( $gfacID )
    global $cluster;
    global $self;
 
-   $system = "$cluster.uthscsa.edu";
-   $system = preg_replace( "/\-local/", "", $system );
-   $cmd    = "/usr/bin/ssh -x us3@$system qstat -a $gfacID 2>&1";
+   $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
+   if ( ! preg_match( "/us3iab/", $cluster ) )
+   {
+      $system = "$cluster.uthscsa.edu";
+      $system = preg_replace( "/\-local/", "", $system );
+      $cmd    = "/usr/bin/ssh -x us3@$system " . $cmd;
+   }
 
    $result = exec( $cmd );
 
    if ( $result == ""  ||  preg_match( "/^qstat: Unknown/", $result ) )
    {
       write_log( "$self get_local_status: Local job $gfacID unknown" );
+write_log( "$self get_local_status: result=$result" );
       return 'UNKNOWN';
    }
 
    $values = preg_split( "/\s+/", $result );
-//   write_log( "$self: get_local_status: job status = /{$values[9]}/");
+//write_log( "$self: get_local_status: job status = /{$values[9]}/");
    switch ( $values[ 9 ] )
    {
       case "W" :                      // Waiting for execution time to be reached
@@ -1000,6 +1003,9 @@ function standard_status( $status_in )
          $status      = 'CANCELED';
          break;
 
+         $status      = 'DATA';
+         break;
+
       case 'COMPLETED' :
       case 'completed' :
          $status      = 'COMPLETE';
@@ -1042,7 +1048,6 @@ function aira_status( $gfacID, $status_in )
 {
    global $self;
    global $loghdr;
-   global $class_dir;
 //echo "a_st: st_in$status_in : $gfacID\n";
    //$status_gw = standard_status( $status_in );
    $status_gw = $status_in;
@@ -1053,12 +1058,9 @@ function aira_status( $gfacID, $status_in )
    $devmatch  = ( ( !$me_devel  &&  !$job_devel )  ||
                   (  $me_devel  &&   $job_devel ) );
 
-//write_log( "$loghdr  gfacID=$gfacID  devmatch=$devmatch" );
-//write_log( "$loghdr   me_d=$me_devel  jo_d=$job_devel  cd=$class_dir" );
    if ( preg_match( "/US3-A/i", $gfacID )  &&  $devmatch )
-   {  // Airavata job and development/production type is right
+   {
       $status_ex = getExperimentStatus( $gfacID );
-//write_log( "$loghdr status_ex $status_ex" );
 
       if ( $status_ex == 'COMPLETED' )
       {  // Experiment is COMPLETED: check for 'FINISHED' or 'DONE'
@@ -1100,11 +1102,7 @@ function aira_status( $gfacID, $status_in )
          $status    = standard_status( $status_ex );
       }
 
-if(preg_match("/US3-A/i",$gfacID))
-//if(preg_match("/US3-ADEV/i",$gfacID))
-write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 //write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
-//write_log( "  me_d=$me_devel jo_d=$job_devel dm=$devmatch cd=$class_dir" );
       if ( $status != $status_gw )
       {
          update_job_status( $status, $gfacID );

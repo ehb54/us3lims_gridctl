@@ -16,6 +16,7 @@ $status          = '';
 
 function aira_cleanup( $us3_db, $reqID, $gfac_link )
 {
+   global $org_domain;
    global $dbhost;
    global $user;
    global $passwd;
@@ -140,7 +141,10 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
    
    list( $status, $cluster, $id ) = mysql_fetch_array( $result );
 
-   if ( $cluster == 'bcf-local'  || $cluster == 'alamo-local' )
+   $is_us3iab  = preg_match( "/us3iab/", $cluster );
+   $is_local   = preg_match( "/-local/", $cluster );
+
+   if ( $is_us3iab  ||  $is_local )
    {
          $clushost = $cluster;
          $clushost = preg_replace( "/\-local/", "", $clushost );
@@ -190,18 +194,21 @@ write_log( "$me: output_dir=$output_dir" );
    $fn_stdout  = "Ultrascan.stdout";
    $fn_tarfile = "analysis-results.tar";
    $num_try    = 0;
+$len1 = strlen( $fn_tarfile );
+write_log( "$me: fn_tarfile=$fn_tarfile  len(tar)=$len1" );
    while ( ! file_exists( $fn_tarfile ) && $num_try < 3 )
    {
       sleep( 10 );
       $num_try++;
+write_log( "$me:  tar-exists: num_try=$num_try" );
    }
 
    $ofiles     = scandir( $output_dir );
    foreach ( $ofiles as $ofile )
    {
-      if ( preg_match( "/.*stderr$/", $ofile ) )
+      if ( preg_match( "/^" . $gfacID . ".*stderr$/", $ofile ) )
          $fn_stderr  = $ofile;
-      if ( preg_match( "/.*stdout$/", $ofile ) )
+      if ( preg_match( "/^" . $gfacID . ".*stdout$/", $ofile ) )
          $fn_stdout  = $ofile;
 //write_log( "$me:    ofile=$ofile" );
    }
@@ -653,6 +660,7 @@ function mail_to_user( $type, $msg )
    global $gfacID;
    global $editXMLFilename;
    global $stdout;
+   global $org_domain;
 
 global $me;
 write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
@@ -696,7 +704,11 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    $queuestatus = $subj_status;
    $limshost    = $dbhost;
    if ( $limshost == 'localhost' )
+   {
       $limshost    = gethostname();
+      if ( ! preg_match( "/\./", $limshost ) )
+         $limshost    = $limshost . $org_domain;
+   }
 
    // Parse the editXMLFilename
    list( $runID, $editID, $dataType, $cell, $channel, $wl, $ext ) =
@@ -840,63 +852,102 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    global $me;
    global $db;
    global $status;
-
-   // Figure out local working directory
-   if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
-   $pwd = chdir( "$work/$gfacID" );
+   $is_us3iab  = preg_match( "/us3iab/", $cluster );
 
    // Figure out remote directory
    $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
+write_log( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
 
    // Get stdout, stderr, output/analysis-results.tar
    $output = array();
-//   $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stdout . 2>&1";
-//
-//   exec( $cmd, $output, $stat );
-//   if ( $stat != 0 ) 
-//      write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-//     
-//   $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stderr . 2>&1";
-//   exec( $cmd, $output, $stat );
-//   if ( $stat != 0 ) 
-//      write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
 
-   $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/output/analysis-results.tar . 2>&1";
-   exec( $cmd, $output, $stat );
-   if ( $stat != 0 ) 
-      write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+   if ( $is_us3iab == 0 )
+   {
+      // Figure out local working directory
+      if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
+      $pwd = chdir( "$work/$gfacID" );
 
-   $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stdout . 2>&1";
-   exec( $cmd, $output, $stat );
-   if ( $stat != 0 ) 
-   {
-      write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-      sleep( 10 );
-      write_log( "$me: RETRY" );
+      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/output/analysis-results.tar . 2>&1";
+
       exec( $cmd, $output, $stat );
-      if ( $stat != 0 ) 
+      if ( $stat != 0 )
          write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-   }
-     
-   $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stderr . 2>&1";
-   exec( $cmd, $output, $stat );
-   if ( $stat != 0 ) 
-   {
-      write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-      sleep( 10 );
-      write_log( "$me: RETRY" );
+
+      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stdout . 2>&1";
+
       exec( $cmd, $output, $stat );
-      if ( $stat != 0 ) 
+      if ( $stat != 0 )
+      {
          write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+         sleep( 10 );
+         write_log( "$me: RETRY" );
+         exec( $cmd, $output, $stat );
+         if ( $stat != 0 )
+            write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+      }
+
+      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stderr . 2>&1";
+
+      exec( $cmd, $output, $stat );
+      if ( $stat != 0 )
+      {
+         write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+         sleep( 10 );
+         write_log( "$me: RETRY" );
+         exec( $cmd, $output, $stat );
+         if ( $stat != 0 )
+            write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+      }
    }
+   else
+   {
+      $pwd = chdir( "$remoteDir" );
+write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
+   }
+
 
    // Write the files to gfacDB
 
-   if ( file_exists( "stderr" ) ) $stderr  = file_get_contents( "stderr" );
+   if ( file_exists( "stderr"  ) )
+   {  // Filter stderr to not have libnnls debug lines
+      exec( "mv stderr stderr+nnls", $output, $stat );
+      exec( "grep -vi nnls stderr+nnls >stderr", $output, $stat );
+      $stderr  = file_get_contents( "stderr" );
+   }
+   else
+      $stderr  = "";
    if ( file_exists( "stdout" ) ) $stdout  = file_get_contents( "stdout" );
-   if ( file_exists( "analysis-results.tar" ) ) 
-      $tarfile = file_get_contents( "analysis-results.tar" );
+   $fn1_tarfile = "analysis-results.tar";
+   $fn2_tarfile = "output/" . $fn1_tarfile;
+   if ( file_exists( $fn1_tarfile ) )
+      $tarfile = file_get_contents( $fn1_tarfile );
+   else if ( file_exists( $fn2_tarfile ) )
+      $tarfile = file_get_contents( $fn2_tarfile );
 
+   $lense = strlen( $stderr );
+   if ( $lense > 1000000 )
+   { // Replace exceptionally large stderr with smaller version
+      exec( "mv stderr stderr-orig", $output, $stat );
+      exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
+      exec( "tail -n 5000 stderr-orig >stderr-t", $output, $stat );
+      exec( "cat stderr-h stderr-t >stderr", $output, $stat );
+      $stderr  = file_get_contents( "stderr" );
+   }
+$lent = strlen( $tarfile );
+write_log( "$me: tarfile size: $lent");
+$lene = strlen( $stderr );
+write_log( "$me: stderr size: $lene  (was $lense)");
+$leno = strlen( $stdout );
+write_log( "$me: stdout size: $leno");
+$estarf=mysql_real_escape_string($tarfile,$gfac_link);
+$lenf = strlen($estarf);
+write_log( "$me: es-tarfile size: $lenf");
+$esstdo=mysql_real_escape_string($stdout,$gfac_link);
+$leno = strlen($esstdo);
+write_log( "$me: es-stdout size: $leno");
+$esstde=mysql_real_escape_string($stderr,$gfac_link);
+$lene = strlen($esstde);
+write_log( "$me: es-stderr size: $lene");
    $query = "UPDATE analysis SET " .
             "stderr='"  . mysql_real_escape_string( $stderr,  $gfac_link ) . "'," .
             "stdout='"  . mysql_real_escape_string( $stdout,  $gfac_link ) . "'," .

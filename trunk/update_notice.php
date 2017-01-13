@@ -23,7 +23,6 @@ $sysrev = "3.3." . $sysrev;
 $notice_db  = "us3_notice";
 $dbhost     = "localhost";
 $dbuser     = "root";
-//$dbpassw    = exec( "cat ~us3/.sec/.pwsq" );
 $dbpassw    = exec( "cat ~/.sec/.pwsq" );
 
 // Produce some output temporarily, so cron will send me message
