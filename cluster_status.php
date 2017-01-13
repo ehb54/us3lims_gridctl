@@ -3,10 +3,13 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 
-$xml  = get_data();
+if ( ! preg_match( "/localhost/", $dbhost ) )
+{
+   $xml  = get_data();
 
-if ( $xml != "" )
-   parse( $xml );
+   if ( $xml != "" )
+      parse( $xml );
+}
 
 $data = array();
 
@@ -164,16 +167,45 @@ function local_status()
 {
    global $self;
    global $data;
+   global $dbhost;
+   global $org_domain;
 
-   $clusters = array( "alamo", "lonestar5", "stampede",
-                      "comet", "gordon", "jureca", "jacinto" );
-//   $clusters = array( "alamo", "lonestar5", "stampede",
-//                      "comet", "gordon", "jureca"            );
+   if ( preg_match( "/localhost/", $dbhost ) )
+   {
+      if ( preg_match( "/attlocal/", $org_domain ) )
+         $clusters = array( "us3iab-devel" );
+      else
+         $clusters = array( "us3iab-node0" );
+   }
+   else
+   {
+      $clusters = array( "alamo", "lonestar5", "stampede", "comet",
+                         "gordon", "jureca", "jacinto" );
+   }
+
    foreach ( $clusters as $clname )
    {
       $a      = Array();
+//echo "$self:   clname=$clname\n";
+
       switch( $clname )
       {
+         case 'us3iab-node0':
+         case 'us3iab-node1':
+         case 'us3iab-devel':
+         {
+            $qstat  = `/usr/bin/qstat -B 2>&1|tail -1`;
+
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 10 ];
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
          case 'alamo':
          {
             $host   = "us3@alamo.uthscsa.edu";
@@ -288,6 +320,7 @@ function local_status()
       $a[ 'queued'  ] = $que;
       $a[ 'running' ] = $run;
       $a[ 'status'  ] = $sta;
+//echo "$self:  $clname  $que $run $sta\n";
 
       $data[] = $a;
 
