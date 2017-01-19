@@ -3,7 +3,7 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 
-if ( ! preg_match( "/localhost/", $dbhost ) )
+if ( ! preg_match( "/_local/", $class_dir ) )
 {
    $xml  = get_data();
 
@@ -17,7 +17,8 @@ local_status();
 
 foreach ( $data as $item )
 {
-   update( $item[ 'cluster' ], $item[ 'queued' ], $item[ 'status' ], $item[ 'running' ] );
+   if ( ! preg_match( "/error/", $item[ 'running' ] ) )
+      update( $item[ 'cluster' ], $item[ 'queued' ], $item[ 'status' ], $item[ 'running' ] );
 }
 
 exit();
@@ -169,8 +170,9 @@ function local_status()
    global $data;
    global $dbhost;
    global $org_domain;
+   global $class_dir;
 
-   if ( preg_match( "/localhost/", $dbhost ) )
+   if ( preg_match( "/_local/", $class_dir ) )
    {
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel" );

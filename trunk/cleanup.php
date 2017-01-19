@@ -194,8 +194,7 @@ write_log( "$me: output_dir=$output_dir" );
    $fn_stdout  = "Ultrascan.stdout";
    $fn_tarfile = "analysis-results.tar";
    $num_try    = 0;
-$len1 = strlen( $fn_tarfile );
-write_log( "$me: fn_tarfile=$fn_tarfile  len(tar)=$len1" );
+write_log( "$me: fn_tarfile=$fn_tarfile" );
    while ( ! file_exists( $fn_tarfile ) && $num_try < 3 )
    {
       sleep( 10 );
@@ -217,9 +216,24 @@ write_log( "$me: fn_stdout=$fn_stdout" );
 if (file_exists($fn_tarfile)) write_log( "$me: fn_tarfile=$fn_tarfile" );
 else                          write_log( "$me: NOT FOUND: $fn_tarfile" );
 
+   $stderr   = '';
+   $stdout   = '';
+   $tarfile  = '';
    if ( file_exists( $fn_stderr  ) ) $stderr   = file_get_contents( $fn_stderr  );
    if ( file_exists( $fn_stdout  ) ) $stdout   = file_get_contents( $fn_stdout  );
    if ( file_exists( $fn_tarfile ) ) $tarfile  = file_get_contents( $fn_tarfile );
+   // If stdout,stderr have no content, retry after delay
+   if ( strlen( $stdout ) == 0  ||  strlen( $stderr ) == 0 )
+   {
+      sleep( 20 );
+      if ( file_exists( $fn_stderr  ) )
+         $stderr   = file_get_contents( $fn_stderr  );
+      if ( file_exists( $fn_stdout  ) )
+         $stdout   = file_get_contents( $fn_stdout  );
+   }
+
+write_log( "$me:  length contents stderr,stdout,tarfile -- "
+ . strlen($stderr) . "," . strlen($stdout) . "," . strlen($tarfile) );
 
    if ( $cluster == 'alamo'  || $cluster == 'alamo-local' )
    {  // Filter "ipath_userinit" lines out of alamo stdout lines

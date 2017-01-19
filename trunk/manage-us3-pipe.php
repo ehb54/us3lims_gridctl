@@ -65,7 +65,7 @@ function process( $msg )
 
    if ( ! mysql_select_db( $db, $resource ) )
    {
-     write_log( "$self: Could not select DB $db" . mysql_error( $resource ) );
+     write_log( "$self: Could not select DB $db " . mysql_error( $resource ) );
      write_log( "$self process(): original msg - $msg" );
      return;
    }
@@ -173,7 +173,7 @@ function update_db( $db, $requestID, $action, $message )
 
    if ( ! mysql_select_db( $db, $resource ) )
    {
-     write_log( "$self: Could not select DB $db" . mysql_error( $resource ) );
+     write_log( "$self: Could not select DB $db " . mysql_error( $resource ) );
      return;
    }
 
@@ -244,7 +244,7 @@ function update_gfac( $gfacID, $status, $message )
   $gLink = mysql_connect( $dbhost, $guser, $gpasswd );
   if ( ! mysql_select_db( $gDB, $gLink ) )
   {
-    write_log( "$self: Could not select DB $gDB" . mysql_error( $gLink ) );
+    write_log( "$self: Could not select DB $gDB " . mysql_error( $gLink ) );
     return;
   }
 
@@ -355,7 +355,7 @@ function update_aira( $gfacID, $message )
    $gLink = mysql_connect( $dbhost, $guser, $gpasswd );
    if ( ! mysql_select_db( $gDB, $gLink ) )
    {
-      write_log( "$self: Could not select DB $gDB" . mysql_error( $gLink ) );
+      write_log( "$self: Could not select DB $gDB " . mysql_error( $gLink ) );
       return;
    }
 

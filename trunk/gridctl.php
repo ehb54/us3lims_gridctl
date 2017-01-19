@@ -180,7 +180,7 @@ write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
 
       case "FINISHED":
       case "DONE":
-         if ( is_aira_job( $gfacID ) )
+         if ( ! is_aira_job( $gfacID ) )
          {
             complete();
          }
@@ -463,6 +463,7 @@ function cleanup()
    global $gfacID;
    global $us3_db;
    global $loghdr;
+   global $class_dir;
 
    // Double check that the gfacID exists
    $query  = "SELECT count(*) FROM analysis WHERE gfacID='$gfacID'";
@@ -1048,6 +1049,7 @@ function aira_status( $gfacID, $status_in )
 {
    global $self;
    global $loghdr;
+   global $class_dir;
 //echo "a_st: st_in$status_in : $gfacID\n";
    //$status_gw = standard_status( $status_in );
    $status_gw = $status_in;
