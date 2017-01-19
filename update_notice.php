@@ -9,7 +9,7 @@ $s_url1 = "//bcf2.uthscsa.edu/ultrascan3/trunk/utils";
 $s_url2 = "//bcf2.uthscsa.edu/ultrascan3/trunk/programs/us";
 
 $s_cmd1 = "/usr/bin/svn info svn:$s_url1|grep Revision|cut -d ' ' -f2";
-$s_cmd2 = "/usr/bin/svn info svn:$s_url1|grep Revision|cut -d ' ' -f2";
+$s_cmd2 = "/usr/bin/svn info svn:$s_url2|grep Revision|cut -d ' ' -f2";
 
 $s_rev1 = exec( $s_cmd1 );
 $s_rev2 = exec( $s_cmd2 );

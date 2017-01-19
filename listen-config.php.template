@@ -12,6 +12,7 @@ $dbhost      = "localhost";
 $self        = basename( $_SERVER['PHP_SELF'] );
 $class_dir_p = '/srv/www/htdocs/common/class/';        // Class dir for production
 $class_dir_d = '/srv/www/htdocs/common/class_devel/';  // Class dir for development
+$class_dir_l = '/srv/www/htdocs/common/class_local/';  // Class dir for development
 $class_dir   = $class_dir_p;                           // Class dir default
 
 // Global DB credentials
