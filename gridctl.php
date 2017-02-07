@@ -851,6 +851,7 @@ write_log( "$self get_local_status: result=$result" );
         break;
 
       case "C" :                      // Job has completed
+      case ""  :
         $status = 'COMPLETED';
         break;
 

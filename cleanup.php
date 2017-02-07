@@ -193,21 +193,23 @@ write_log( "$me: output_dir=$output_dir" );
    $fn_stderr  = "Ultrascan.stderr";
    $fn_stdout  = "Ultrascan.stdout";
    $fn_tarfile = "analysis-results.tar";
+   $secwait    = 10;
    $num_try    = 0;
 write_log( "$me: fn_tarfile=$fn_tarfile" );
    while ( ! file_exists( $fn_tarfile ) && $num_try < 3 )
    {
-      sleep( 10 );
+      sleep( $secwait );
       $num_try++;
+      $secwait   *= 2;
 write_log( "$me:  tar-exists: num_try=$num_try" );
    }
 
    $ofiles     = scandir( $output_dir );
    foreach ( $ofiles as $ofile )
    {
-      if ( preg_match( "/^" . $gfacID . ".*stderr$/", $ofile ) )
+      if ( preg_match( "/^.*stderr$/", $ofile ) )
          $fn_stderr  = $ofile;
-      if ( preg_match( "/^" . $gfacID . ".*stdout$/", $ofile ) )
+      if ( preg_match( "/^.*stdout$/", $ofile ) )
          $fn_stdout  = $ofile;
 //write_log( "$me:    ofile=$ofile" );
    }
@@ -924,8 +926,8 @@ write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
 
    if ( file_exists( "stderr"  ) )
    {  // Filter stderr to not have libnnls debug lines
-      exec( "mv stderr stderr+nnls", $output, $stat );
-      exec( "grep -vi nnls stderr+nnls >stderr", $output, $stat );
+//      exec( "mv stderr stderr+nnls", $output, $stat );
+//      exec( "grep -vi nnls stderr+nnls >stderr", $output, $stat );
       $stderr  = file_get_contents( "stderr" );
    }
    else
@@ -939,7 +941,7 @@ write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
       $tarfile = file_get_contents( $fn2_tarfile );
 
    $lense = strlen( $stderr );
-   if ( $lense > 1000000 )
+   if ( $lense > 10000000 )
    { // Replace exceptionally large stderr with smaller version
       exec( "mv stderr stderr-orig", $output, $stat );
       exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
