@@ -62,6 +62,11 @@ while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTim
       }
    }
 
+   else if ( $me_devel )
+   {  // Local (us3iab/-local) and class_devel:  skip processing
+      continue;
+   }
+
    // Checking we need to do for each entry
 echo "us3db=$us3_db  gfid=$gfacID\n";
    switch ( $us3_db )
@@ -534,6 +539,10 @@ function update_job_status( $job_status, $gfacID )
       $message = "Job status request reports job is RUNNING";
       break;
 
+    case 'EXECUTING'      :
+      $message = "Job status request reports job is EXECUTING";
+      break;
+
     case 'FINISHED'    :
       $query   = "UPDATE analysis SET status='FINISHED' WHERE gfacID='$gfacID'";
       $message = "NONE";
@@ -824,19 +833,25 @@ function get_local_status( $gfacID )
    global $self;
 
    $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
+//write_log( "$self cmd: $cmd" );
+//write_log( "$self cluster: $cluster" );
+//write_log( "$self gfacID: $gfacID" );
    if ( ! preg_match( "/us3iab/", $cluster ) )
    {
       $system = "$cluster.uthscsa.edu";
       $system = preg_replace( "/\-local/", "", $system );
+//write_log( "$self system: $system" );
       $cmd    = "/usr/bin/ssh -x us3@$system " . $cmd;
+//write_log( "$self  cmd: $cmd" );
    }
 
    $result = exec( $cmd );
+//write_log( "$self  result: $result" );
 
    if ( $result == ""  ||  preg_match( "/^qstat: Unknown/", $result ) )
    {
       write_log( "$self get_local_status: Local job $gfacID unknown" );
-write_log( "$self get_local_status: result=$result" );
+//write_log( "$self get_local_status: result=$result" );
       return 'UNKNOWN';
    }
 
@@ -851,7 +866,6 @@ write_log( "$self get_local_status: result=$result" );
         break;
 
       case "C" :                      // Job has completed
-      case ""  :
         $status = 'COMPLETED';
         break;
 
@@ -984,6 +998,7 @@ function standard_status( $status_in )
       case 'VALIDATED' :
       case 'SCHEDULED' :
       case 'submitted' :
+      case 'SUBMITTED' :
       case '' :
          $status      = 'SUBMITTED';
          break;
@@ -1098,6 +1113,12 @@ function aira_status( $gfacID, $status_in )
             write_log( "$loghdr status reset to 'COMPLETE'" );
             $status    = 'COMPLETE';
          }
+      }
+
+      else if ( $status_ex == 'EXECUTING' )
+      {
+         $status    = standard_status( $status_gw );
+write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
       }
 
       else

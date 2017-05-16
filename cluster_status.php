@@ -175,7 +175,7 @@ function local_status()
    if ( preg_match( "/_local/", $class_dir ) )
    {
       if ( preg_match( "/attlocal/", $org_domain ) )
-         $clusters = array( "us3iab-devel" );
+         $clusters = array( "us3iab-devel", "alamo-local" );
       else
          $clusters = array( "us3iab-node0" );
    }
@@ -208,6 +208,7 @@ function local_status()
                $sta    = "down";
             break;
          }
+         case 'alamo-local':
          case 'alamo':
          {
             $host   = "us3@alamo.uthscsa.edu";

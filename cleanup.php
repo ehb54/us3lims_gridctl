@@ -196,7 +196,7 @@ write_log( "$me: output_dir=$output_dir" );
    $secwait    = 10;
    $num_try    = 0;
 write_log( "$me: fn_tarfile=$fn_tarfile" );
-   while ( ! file_exists( $fn_tarfile ) && $num_try < 3 )
+   while ( ! file_exists( $fn_tarfile )  &&  $num_try < 3 )
    {
       sleep( $secwait );
       $num_try++;
@@ -872,13 +872,20 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
 
    // Figure out remote directory
    $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
-write_log( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
+//write_log( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
 
    // Get stdout, stderr, output/analysis-results.tar
    $output = array();
 
    if ( $is_us3iab == 0 )
    {
+      // For "-local", recompute remote work directory
+      $cmd = "ssh us3@$cluster.uthscsa.edu 'ls -d ~us3/lims/work/local' 2/dev/null";
+      exec( $cmd, $output, $stat );
+      $work_remote = $output[ 0 ];
+      $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
+write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
+
       // Figure out local working directory
       if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
       $pwd = chdir( "$work/$gfacID" );
@@ -941,7 +948,7 @@ write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
       $tarfile = file_get_contents( $fn2_tarfile );
 
    $lense = strlen( $stderr );
-   if ( $lense > 10000000 )
+   if ( $lense > 1000000 )
    { // Replace exceptionally large stderr with smaller version
       exec( "mv stderr stderr-orig", $output, $stat );
       exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
