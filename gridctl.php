@@ -496,7 +496,7 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
    $me_local  = preg_match( "/class_local/", $class_dir );
 
    if ( preg_match( "/US3-A/i", $gfacID ) )
-   {
+   {  // Airavata job:  clean up if prod/devel match
       $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
       if ( ( !$me_devel  &&  !$job_devel )  ||
            (  $me_devel  &&   $job_devel ) )
@@ -506,9 +506,9 @@ write_log( "$loghdr count = $count  gfacID = $gfacID" );
       }
 //write_log( "$loghdr RTN FR aira_cleanup()" );
    }
-   else if ( ! $me_local )
-   {
-write_log( "$loghdr CALLING gfac_cleanup() reqID=$requestID" );
+   else
+   {  // Non-airavata job:  clean up in a non-aira way
+write_log( "$loghdr calling gfac_cleanup() reqID=$requestID" );
       gfac_cleanup( $us3_db, $requestID, $gLink );
    }
 }
