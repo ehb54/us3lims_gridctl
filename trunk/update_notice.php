@@ -4,20 +4,11 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 $us3etc = exec( "ls -d ~us3/lims/etc" );
 include_once "$us3bin/listen-config.php";
 
-// Get the US3 system release string
-$s_url1 = "//bcf2.uthscsa.edu/ultrascan3/trunk/utils";
-$s_url2 = "//bcf2.uthscsa.edu/ultrascan3/trunk/programs/us";
-
-$s_cmd1 = "/usr/bin/svn info svn:$s_url1|grep Revision|cut -d ' ' -f2";
-$s_cmd2 = "/usr/bin/svn info svn:$s_url2|grep Revision|cut -d ' ' -f2";
-
-$s_rev1 = exec( $s_cmd1 );
-$s_rev2 = exec( $s_cmd2 );
-
-$sysrev = $s_rev2;
-if ( $s_rev1 > $s_rev2 )
-  $sysrev = $s_rev1;
-$sysrev = "3.3." . $sysrev;
+// Get the US3 system release of latest file on download site
+$s_cmd1 = "ssh us3@ultrascan.uthscsa.edu 'ls -t /srv/www/htdocs/ultrascan3/software/*3.5*";
+$s_cmd1 = "$s_cmd1 | sed -n 1p | sed -e s@^.*3.5@3.5@ | cut -d. -f1-3 | sed -e s@\-setup@@" . "'";
+$s_cmd2 = exec( $s_cmd1 );
+$sysrev = $s_cmd2;
 
 // Global variables
 $notice_db  = "us3_notice";
