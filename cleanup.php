@@ -224,6 +224,8 @@ else                          write_log( "$me: NOT FOUND: $fn_tarfile" );
    if ( file_exists( $fn_stderr  ) ) $stderr   = file_get_contents( $fn_stderr  );
    if ( file_exists( $fn_stdout  ) ) $stdout   = file_get_contents( $fn_stdout  );
    if ( file_exists( $fn_tarfile ) ) $tarfile  = file_get_contents( $fn_tarfile );
+write_log( "$me(0):  length contents stderr,stdout,tarfile -- "
+ . strlen($stderr) . "," . strlen($stdout) . "," . strlen($tarfile) );
    // If stdout,stderr have no content, retry after delay
    if ( strlen( $stdout ) == 0  ||  strlen( $stderr ) == 0 )
    {
@@ -869,6 +871,7 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    global $db;
    global $status;
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
+   $is_jetstr  = preg_match( "/jetstream/", $cluster );
 
    // Figure out remote directory
    $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
@@ -880,7 +883,14 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    if ( $is_us3iab == 0 )
    {
       // For "-local", recompute remote work directory
-      $cmd = "ssh us3@$cluster.uthscsa.edu 'ls -d ~us3/lims/work/local' 2/dev/null";
+      $clushost = "$cluster.uthscsa.edu";
+      $lworkdir = "~us3/lims/work/local";
+      if ( $is_jetstr )
+      {
+         $clushost = "js-157-184.jetstream-cloud.org";
+         $lworkdir = "/N/us3_cluster/work/local";
+      }
+      $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2/dev/null";
       exec( $cmd, $output, $stat );
       $work_remote = $output[ 0 ];
       $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
@@ -890,13 +900,13 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
       if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
       $pwd = chdir( "$work/$gfacID" );
 
-      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/output/analysis-results.tar . 2>&1";
+      $cmd = "scp us3@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )
          write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
 
-      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stdout . 2>&1";
+      $cmd = "scp us3@$clushost:$remoteDir/stdout . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )
@@ -909,7 +919,7 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
             write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
       }
 
-      $cmd = "scp us3@$cluster.uthscsa.edu:$remoteDir/stderr . 2>&1";
+      $cmd = "scp us3@$clushost:$remoteDir/stderr . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )

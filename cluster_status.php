@@ -182,7 +182,7 @@ function local_status()
    else
    {
       $clusters = array( "alamo", "lonestar5", "stampede", "comet",
-                         "gordon", "jureca", "jacinto" );
+                         "stampede2-b", "jetstream", "jureca", "jacinto-b" );
    }
 
    foreach ( $clusters as $clname )
@@ -250,6 +250,19 @@ function local_status()
                $sta    = "down";
             break;
          }
+         case 'stampede2':
+         {
+            $host   = "us3@stampede2.tacc.utexas.edu";
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 2 ];
+            $run    = $sparts[ 5 ];
+            $que    = $sparts[ 8 ];
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+               $sta    = "down";
+            break;
+         }
          case 'lonestar5':
          {
             $host   = "us3@ls5.tacc.utexas.edu";
@@ -266,7 +279,8 @@ function local_status()
             else
             {
                $run    = $sparts[ 5 ];
-               $que    = $sparts[ 8 ];
+//               $que    = $sparts[ 8 ];
+               $que    = $sparts[ 11 ];
             }
             break;
          }
@@ -308,6 +322,21 @@ function local_status()
             $que    = $sparts[ 2 ];
             break;
          }
+         case 'jetstream-local':
+         case 'jetstream':
+         {
+            $host   = "us3@js-157-184.jetstream-cloud.org";
+            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $sparts = preg_split( '/\//', $knts );
+            $run    = $sparts[ 0 ];
+            $que    = $sparts[ 1 ];
+            if ( $sta == "" )
+               $sta    = "down";
+            break;
+         }
       }
 
       if ( $sta == "" )
@@ -327,7 +356,9 @@ function local_status()
 
       $data[] = $a;
 
-      if ( $clname == 'alamo'  ||  $clname == 'jacinto' )
+      if ( $clname == 'alamo'  ||
+           $clname == 'jacinto'  ||
+           $clname == 'jetstream' )
       {
          $a[ 'cluster' ] = $clname . "-local";
          $data[] = $a;
