@@ -69,6 +69,7 @@ while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTim
 
    // Checking we need to do for each entry
 echo "us3db=$us3_db  gfid=$gfacID\n";
+//write_log( " us3db=$us3_db  gfid=$gfacID" );
    switch ( $us3_db )
    {
       case 'Xuslims3_cauma3' :
@@ -98,7 +99,8 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
 //write_log( "$loghdr status_in=$status_in" );
       $status     = aira_status( $gfacID, $status_in );
 if($status != $status_in )
-write_log( "$loghdr Set to $status from $status_in" );
+ write_log( "$loghdr Set to $status from $status_in" );
+//write_log( "$loghdr    aira status=$status" );
    }
    else if ( is_gfac_job( $gfacID ) )
    {
@@ -111,6 +113,7 @@ write_log( "$loghdr Set to $status from $status_in" );
    }
    else
    {
+//write_log( "$loghdr Local gfacID=$gfacID" );
       $status_gw  = $status;
       $status     = get_local_status( $gfacID );
       if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
@@ -135,6 +138,7 @@ write_log( "$loghdr Set to $status from $status_in" );
    }
 
 //echo "  st=$status\n";
+//write_log( "$loghdr switch status=$status" );
    switch ( $status )
    {
       // Already been handled
@@ -173,7 +177,7 @@ write_log( "$loghdr Set to $status from $status_in" );
 
       case "COMPLETED":
       case "COMPLETE":
-write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
+//write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
          complete();
          break;
 
@@ -832,15 +836,21 @@ function get_local_status( $gfacID )
    global $cluster;
    global $self;
 
-   $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
+   $is_jetstr = preg_match( "/jetstream/", $cluster );
+   if ( $is_jetstr )
+      $cmd    = "squeue -a $gfacID 2>&1|tail -n 1";
+   else
+      $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
 //write_log( "$self cmd: $cmd" );
 //write_log( "$self cluster: $cluster" );
 //write_log( "$self gfacID: $gfacID" );
+
    if ( ! preg_match( "/us3iab/", $cluster ) )
    {
       $system = "$cluster.uthscsa.edu";
+      if ( $is_jetstr )
+         $system = "$cluster";
       $system = preg_replace( "/\-local/", "", $system );
-//write_log( "$self system: $system" );
       $cmd    = "/usr/bin/ssh -x us3@$system " . $cmd;
 //write_log( "$self  cmd: $cmd" );
    }
@@ -848,7 +858,21 @@ function get_local_status( $gfacID )
    $result = exec( $cmd );
 //write_log( "$self  result: $result" );
 
-   if ( $result == ""  ||  preg_match( "/^qstat: Unknown/", $result ) )
+///////////////////////////////////////////////////////////////////
+   $secwait    = 2;
+   $num_try    = 0;
+   // Sleep and retry up to 3 times if ssh has "ssh_exchange_identification" error
+   while ( preg_match( "/ssh_exchange_id/", $result )  &&  $num_try < 3 )
+   {
+      sleep( $secwait );
+      $num_try++;
+      $secwait   *= 2;
+write_log( "$me:   num_try=$num_try  secwait=$secwait" );
+   }
+///////////////////////////////////////////////////////////////////
+   if ( $result == ""  ||
+        preg_match( "/^qstat: Unknown/", $result )  ||
+        preg_match( "/ssh_exchange_id/", $result ) )
    {
       write_log( "$self get_local_status: Local job $gfacID unknown" );
 //write_log( "$self get_local_status: result=$result" );
@@ -856,8 +880,9 @@ function get_local_status( $gfacID )
    }
 
    $values = preg_split( "/\s+/", $result );
-//write_log( "$self: get_local_status: job status = /{$values[9]}/");
-   switch ( $values[ 9 ] )
+   $jstat   = ( $is_jetstr == 0 ) ? $values[ 9 ] : $values[ 4 ];
+//write_log( "$self: get_local_status: job status = /$jstat/");
+   switch ( $jstat )
    {
       case "W" :                      // Waiting for execution time to be reached
       case "E" :                      // Job is exiting after having run
@@ -872,6 +897,7 @@ function get_local_status( $gfacID )
       case "T" :                      // Job is being moved
       case "H" :                      // Held
       case "Q" :                      // Queued
+      case "PD" :                     // Queued
         $status = 'SUBMITTED';
         break;
 
@@ -1078,7 +1104,9 @@ function aira_status( $gfacID, $status_in )
 
    if ( preg_match( "/US3-A/i", $gfacID )  &&  $devmatch )
    {
+//write_log( "$loghdr status_in=$status_in status=$status gfacID=$gfacID" );
       $status_ex = getExperimentStatus( $gfacID );
+//write_log( "$loghdr   status_ex=$status_ex" );
 
       if ( $status_ex == 'COMPLETED' )
       {  // Experiment is COMPLETED: check for 'FINISHED' or 'DONE'
