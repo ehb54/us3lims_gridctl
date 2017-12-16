@@ -887,7 +887,7 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
       $lworkdir = "~us3/lims/work/local";
       if ( $is_jetstr )
       {
-         $clushost = "js-157-184.jetstream-cloud.org";
+         $clushost = "js-169-137.jetstream-cloud.org";
          $lworkdir = "/N/us3_cluster/work/local";
       }
       $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2/dev/null";

@@ -838,7 +838,7 @@ function get_local_status( $gfacID )
 
    $is_jetstr = preg_match( "/jetstream/", $cluster );
    if ( $is_jetstr )
-      $cmd    = "squeue -a $gfacID 2>&1|tail -n 1";
+      $cmd    = "squeue -j $gfacID 2>&1|tail -n 1";
    else
       $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
 //write_log( "$self cmd: $cmd" );
@@ -870,8 +870,10 @@ function get_local_status( $gfacID )
 write_log( "$me:   num_try=$num_try  secwait=$secwait" );
    }
 ///////////////////////////////////////////////////////////////////
-   if ( $result == ""  ||
-        preg_match( "/^qstat: Unknown/", $result )  ||
+//   if ( $result == ""  ||
+//        preg_match( "/^qstat: Unknown/", $result )  ||
+//        preg_match( "/ssh_exchange_id/", $result ) )
+   if ( preg_match( "/^qstat: Unknown/", $result )  ||
         preg_match( "/ssh_exchange_id/", $result ) )
    {
       write_log( "$self get_local_status: Local job $gfacID unknown" );
@@ -880,17 +882,20 @@ write_log( "$me:   num_try=$num_try  secwait=$secwait" );
    }
 
    $values = preg_split( "/\s+/", $result );
-   $jstat   = ( $is_jetstr == 0 ) ? $values[ 9 ] : $values[ 4 ];
+   $jstat   = ( $is_jetstr == 0 ) ? $values[ 9 ] : $values[ 5 ];
 //write_log( "$self: get_local_status: job status = /$jstat/");
    switch ( $jstat )
    {
       case "W" :                      // Waiting for execution time to be reached
       case "E" :                      // Job is exiting after having run
       case "R" :                      // Still running
+      case "CG" :                     // Job is completing
         $status = 'ACTIVE';
         break;
 
       case "C" :                      // Job has completed
+      case "ST" :                     // Job has disappeared
+      case "CD" :                     // Job has completed
         $status = 'COMPLETED';
         break;
 
@@ -898,7 +903,20 @@ write_log( "$me:   num_try=$num_try  secwait=$secwait" );
       case "H" :                      // Held
       case "Q" :                      // Queued
       case "PD" :                     // Queued
+      case "CF" :                     // Queued
         $status = 'SUBMITTED';
+        break;
+
+      case "CA" :                     // Job has been canceled
+        $status = 'CANCELED';
+        break;
+
+      case "F"  :                     // Job has failed
+      case "BF" :                     // Job has failed
+      case "NF" :                     // Job has failed
+      case "TO" :                     // Job has timed out
+      case ""   :                     // Job has disappeared
+        $status = 'FAILED';
         break;
 
       default :

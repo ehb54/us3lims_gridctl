@@ -325,14 +325,16 @@ function local_status()
          case 'jetstream-local':
          case 'jetstream':
          {
-            $host   = "us3@js-157-184.jetstream-cloud.org";
-            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+            $host   = "us3@js-169-137.jetstream-cloud.org";
+//            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
             $knts   = $sparts[ 1 ];
             $sparts = preg_split( '/\//', $knts );
             $run    = $sparts[ 0 ];
-            $que    = $sparts[ 1 ];
+            $que    = $sparts[ 2 ];
+            $tot    = $sparts[ 3 ];
             if ( $sta == "" )
                $sta    = "down";
             break;
@@ -352,7 +354,7 @@ function local_status()
       $a[ 'queued'  ] = $que;
       $a[ 'running' ] = $run;
       $a[ 'status'  ] = $sta;
-//echo "$self:  $clname  $que $run $sta\n";
+echo "$self:  $clname  $que $run $sta\n";
 
       $data[] = $a;
 
