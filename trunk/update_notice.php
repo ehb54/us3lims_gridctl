@@ -6,7 +6,7 @@ include_once "$us3bin/listen-config.php";
 
 // Get the US3 system release of latest file on download site
 $s_cmd1 = "ssh us3@ultrascan.uthscsa.edu 'ls -t /srv/www/htdocs/ultrascan3/software/*4.0*";
-$s_cmd1 = "$s_cmd1 | sed -n 1p | sed -e s@^.*3.5@3.5@ | cut -d. -f1-3 | sed -e s@\-setup@@" . "'";
+$s_cmd1 = "$s_cmd1 | sed -n 1p | cut -d\- -f3" . "'";
 $s_cmd2 = exec( $s_cmd1 );
 $sysrev = $s_cmd2;
 
