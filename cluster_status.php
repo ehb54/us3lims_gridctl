@@ -21,7 +21,8 @@ foreach ( $data as $item )
       update( $item[ 'cluster' ], $item[ 'queued' ], $item[ 'status' ], $item[ 'running' ] );
 }
 
-exit();
+//exit();
+exit(0);
 
 // Get the cluster status
 
@@ -114,10 +115,9 @@ function update( $cluster, $queued, $status, $running )
    global $self;
 //echo  " $cluster $queued, $status, $running\n";
 
-   $gfac_link = mysql_connect( $dbhost, $guser, $gpasswd );
-   $result = mysql_select_db( $gDB, $gfac_link );
+   $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
-   if ( ! $result )
+   if ( ! $gfac_link )
    {
       write_log( "$self: Could not connect to DB $gDB" );
       echo "Could not connect to DB $gDB.\n";
@@ -125,16 +125,16 @@ function update( $cluster, $queued, $status, $running )
    }
       
    $query = "SELECT * FROM cluster_status WHERE cluster='$cluster'";
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $gfac_link ) );
-      echo "$self: Query failed $query - " .  mysql_error( $gfac_link ) . "\n";
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gfac_link ) );
+      echo "$self: Query failed $query - " .  mysqli_error( $gfac_link ) . "\n";
       exit();
    }
 
-   $rows = mysql_num_rows( $result );
+   $rows = mysqli_num_rows( $result );
 
    if ( $rows == 0 )  // INSERT
    {
@@ -153,12 +153,12 @@ function update( $cluster, $queued, $status, $running )
                "WHERE cluster='$cluster'";
    }
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $gfac_link ) );
-      echo "$self: Query failed $query - " .  mysql_error( $gfac_link ) . "\n";
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gfac_link ) );
+      echo "$self: Query failed $query - " .  mysqli_error( $gfac_link ) . "\n";
    }
 }
 
@@ -181,8 +181,10 @@ function local_status()
    }
    else
    {
-      $clusters = array( "alamo", "lonestar5", "stampede", "comet",
-                         "stampede2-b", "jetstream", "jureca", "jacinto-b" );
+//      $clusters = array( "alamo", "lonestar5", "comet",
+//                         "stampede2", "jetstream", "jureca", "jacinto" );
+      $clusters = array( "alamo", "lonestar5", "comet",
+                         "stampede2", "jetstream" );
    }
 
    foreach ( $clusters as $clname )
@@ -237,23 +239,10 @@ function local_status()
                $sta    = "down";
             break;
          }
-         case 'stampede':
-         {
-            $host   = "us3@stampede.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 2 ];
-            $run    = $sparts[ 5 ];
-            $que    = $sparts[ 8 ];
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-               $sta    = "down";
-            break;
-         }
          case 'stampede2':
          {
             $host   = "us3@stampede2.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>/dev/null|grep "Total Jobs"'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = $sparts[ 5 ];
@@ -266,7 +255,7 @@ function local_status()
          case 'lonestar5':
          {
             $host   = "us3@ls5.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>&1|grep "Total Jobs"'`;
+            $qstat  = `ssh $host '/usr/local/bin/showq 2>/dev/null|grep "Total Jobs"'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = '0';
@@ -279,37 +268,30 @@ function local_status()
             else
             {
                $run    = $sparts[ 5 ];
-//               $que    = $sparts[ 8 ];
-               $que    = $sparts[ 11 ];
+               $que    = $sparts[ 8 ];
+//               $que    = $sparts[ 11 ];
             }
             break;
          }
          case 'comet':
          {
             $host   = "us3@comet.sdsc.edu";
-            $qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
+            //$qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
+            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $sparts = preg_split( '/\//', $knts );
-            $run    = $sparts[ 0 ];
-            $que    = $sparts[ 1 ];
-            if ( $sta == "" )
+            $tot    = $sparts[ 1 ];
+            $run    = '0';
+            $que    = '0';
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+            {
                $sta    = "down";
-            break;
-         }
-         case 'gordon':
-         {
-            $host   = "us3@gordon.sdsc.edu";
-            $qstat  = `ssh $host '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 10 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
+            }
             else
-               $sta    = "down";
+            {
+               $run    = $sparts[ 3 ];
+               $que    = $sparts[ 5 ];
+            }
             break;
          }
          case 'jureca':
