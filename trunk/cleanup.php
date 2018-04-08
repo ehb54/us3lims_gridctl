@@ -43,83 +43,75 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
 
-   $us3_link = mysql_connect( $dbhost, $user, $passwd );
+   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $us3_link )
    {
-      write_log( "$me: could not connect: $dbhost, $user, $passwd" );
+      write_log( "$me: could not connect: $dbhost, $user, $passwd, $db" );
       mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB" );
-      return( -1 );
-   }
-
-   $result = mysql_select_db( $db, $us3_link );
-
-   if ( ! $result )
-   {
-      write_log( "$me: could not select DB $db" );
-      mail_to_user( "fail", "Internal Error $requestID\n$could not select DB $db" );
       return( -1 );
    }
 
    // First get basic info for email messages
    $query  = "SELECT email, investigatorGUID, editXMLFilename FROM HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID=$requestID";
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
       write_log( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysql_error( $us3_link ) );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
-   list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysql_fetch_array( $result );
+   list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
 
    $query  = "SELECT personID FROM people " .
              "WHERE personGUID='$investigatorGUID'";
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
-   list( $personID ) = mysql_fetch_array( $result );
+   list( $personID ) = mysqli_fetch_array( $result );
 
    $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
              "FROM HPCAnalysisRequest h, HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
 
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
-   if ( mysql_num_rows( $result ) == 0 )
+   if ( mysqli_num_rows( $result ) == 0 )
    {
       write_log( "$me: US3 Table error - No records for requestID: $requestID" );
       return( -1 );
    }
 
-   list( $cluster, $submittime, $queuestatus, $jobtype ) = mysql_fetch_array( $result );
+   list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
    // Get the GFAC ID
    $query = "SELECT HPCAnalysisResultID, gfacID FROM HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
       write_log( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysql_error( $us3_link ) );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
-   list( $HPCAnalysisResultID, $gfacID ) = mysql_fetch_array( $result ); 
+   list( $HPCAnalysisResultID, $gfacID ) = mysqli_fetch_array( $result ); 
 
    // Get data from global GFAC DB then insert it into US3 DB
 
-   $result = mysql_select_db( $gDB, $gfac_link );
+/*
+   $result = mysqli_select_db( $gfac_link, $gDB );
 
    if ( ! $result )
    {
@@ -127,11 +119,12 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
       mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $gDB" );
       return( -1 );
    }
+ */
 
    $query = "SELECT status, cluster, id FROM analysis " .
             "WHERE gfacID='$gfacID'";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
    if ( ! $result )
    {
       write_log( "$me: Could not select GFAC status for $gfacID" );
@@ -139,7 +132,7 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
       return( -1 );
    }
    
-   list( $status, $cluster, $id ) = mysql_fetch_array( $result );
+   list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
 
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_local   = preg_match( "/-local/", $cluster );
@@ -155,28 +148,28 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
    $query = "SELECT id FROM analysis " .
             "WHERE gfacID='$gfacID'";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
-      mail_to_user( "fail", "Internal error " . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
+      mail_to_user( "fail", "Internal error " . mysqli_error( $gfac_link ) );
       return( -1 );
    }
 
-   list( $analysisID ) = mysql_fetch_array( $result );
+   list( $analysisID ) = mysqli_fetch_array( $result );
 
    // Get the request guid (LIMS submit dir name)
    $query  = "SELECT HPCAnalysisRequestGUID FROM HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
    
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
    }
 
-   list( $requestGUID ) = mysql_fetch_array( $result );
+   list( $requestGUID ) = mysqli_fetch_array( $result );
    $output_dir = "$submit_dir/$requestGUID";
 
    // Get stderr,stdout,tarfile from work directory
@@ -253,12 +246,12 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
    $query = "SELECT message, time FROM queue_messages " .
             "WHERE analysisID = $analysisID " .
             "ORDER BY time ";
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
       // Just log it and continue
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
    }
 
    $now = date( 'Y-m-d H:i:s' );
@@ -267,28 +260,28 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
                   "GFAC ID: $gfacID\n" .
                   "Processed: $now\n\n" .
                   "Queue Messages\n\n" ;
-   if ( mysql_num_rows( $result ) > 0 )
+   if ( mysqli_num_rows( $result ) > 0 )
    {
-      while ( list( $message, $time ) = mysql_fetch_array( $result ) )
+      while ( list( $message, $time ) = mysqli_fetch_array( $result ) )
          $message_log .= "$time $message\n";
    }
 
    $query = "DELETE FROM queue_messages " .
             "WHERE analysisID = $analysisID ";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
       // Just log it and continue
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
    }
 
    $query = "SELECT queue_msg FROM analysis " .
             "WHERE gfacID='$gfacID' ";
 
-   $result = mysql_query( $query, $gfac_link );
-   list( $queue_msg ) = mysql_fetch_array( $result );
+   $result = mysqli_query( $gfac_link, $query );
+   list( $queue_msg ) = mysqli_fetch_array( $result );
 
    // But let's allow for investigation of other large stdout and/or stderr
    if ( strlen( $stdout ) > 20480000 ||
@@ -305,12 +298,12 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
    // Delete data from GFAC DB
    $query = "DELETE from analysis WHERE gfacID='$gfacID'";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
       // Just log it and continue
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
    }
 
 
@@ -321,35 +314,35 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
       mkdir( $output_dir, 0775, true );
    $message_filename = "$output_dir/$db-$requestID-messages.txt";
    file_put_contents( $message_filename, $message_log, FILE_APPEND );
-  // mysql_close( $gfac_link );
+  // mysqli_close( $gfac_link );
 
    /////////
    // Insert data into HPCAnalysis
 
    $query = "UPDATE HPCAnalysisResult SET "                              .
-            "stderr='" . mysql_real_escape_string( $stderr, $us3_link ) . "', " .
-            "stdout='" . mysql_real_escape_string( $stdout, $us3_link ) . "', " .
+            "stderr='" . mysqli_real_escape_string( $us3_link, $stderr ) . "', " .
+            "stdout='" . mysqli_real_escape_string( $us3_link, $stdout ) . "', " .
             "queueStatus='completed' " .
             "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
 
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-      mail_to_user( "fail", "Bad query:\n$query\n" . mysql_error( $us3_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+      mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
    // Delete data from GFAC DB
    $query = "DELETE from analysis WHERE gfacID='$gfacID'";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
       // Just log it and continue
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
    }
 
    // Expand the tar file
@@ -428,11 +421,11 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
                   "endTime = '{$otherdata['endtime']}', " .
                   "mgroupcount = {$otherdata['groupcount']} " .
                   "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
-         $result = mysql_query( $query, $us3_link );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+            write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
          }
 
          file_put_contents( "$output_dir/$fn", $xml );    // Copy to submit dir
@@ -449,28 +442,32 @@ write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
          $desc       = $noise_data[ 'description' ];
          $modelGUID  = $noise_data[ 'modelGUID' ];
          $noiseGUID  = $noise_data[ 'noiseGUID' ];
+         $editGUID   = '00000000-0000-0000-0000-000000000000';
+         if ( isset( $model_data[ 'editGUID' ] ) )
+            $editGUID   = $model_data[ 'editGUID' ];
 
          $query = "INSERT INTO noise SET "  .
                   "noiseGUID='$noiseGUID'," .
                   "modelGUID='$modelGUID'," .
-                  "editedDataID=1, "        .
+                  "editedDataID="                .
+                  "(SELECT editedDataID FROM editedData WHERE editGUID='$editGUID')," .
                   "modelID=1, "             .
                   "noiseType='$type',"      .
                   "description='$desc',"    .
-                  "xml='" . mysql_real_escape_string( $xml, $us3_link ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
          // Add later after all files are processed: editDataID, modelID
 
-         $result = mysql_query( $query, $us3_link );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+            write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $id        = mysql_insert_id( $us3_link );
+         $id        = mysqli_insert_id( $us3_link );
          $file_type = "noise";
          $noiseIDs[] = $id;
 
@@ -497,20 +494,20 @@ write_log( "$me:   mrecs file editGUID=$editGUID" );
                   "modelID=0, "             .
                   "mrecsGUID='$mrecGUID'," .
                   "description='$desc',"    .
-                  "xml='" . mysql_real_escape_string( $xml, $us3_link ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
          // Add later after all files are processed: editDataID, modelID
 
-         $result = mysql_query( $query, $us3_link );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+            write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $id         = mysql_insert_id( $us3_link );
+         $id         = mysqli_insert_id( $us3_link );
          $file_type  = "mrecs";
          $mrecsIDs[] = $id;
 
@@ -542,24 +539,24 @@ write_log( "$me:   MODELUpd: O:description=$description" );
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
                   "variance='$variance'," .
-                  "xml='" . mysql_real_escape_string( $xml, $us3_link ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
-         $result = mysql_query( $query, $us3_link );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_log( "$me: Bad query:\n$query " . mysql_error( $us3_link ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+            write_log( "$me: Bad query:\n$query " . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $modelID   = mysql_insert_id( $us3_link );
+         $modelID   = mysqli_insert_id( $us3_link );
          $id        = $modelID;
          $file_type = "model";
 
          $query = "INSERT INTO modelPerson SET " .
                   "modelID=$modelID, personID=$personID";
-         $result = mysql_query( $query, $us3_link );
+         $result = mysqli_query( $us3_link, $query );
       }
 
       else      // Undetermined type:  skip result data update
@@ -570,12 +567,12 @@ write_log( "$me:   MODELUpd: O:description=$description" );
                "HPCAnalysisResultType='$file_type', "         .
                "resultID=$id";
 
-      $result = mysql_query( $query, $us3_link );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-         mail_to_user( "fail", "Internal error\n$query\n" . mysql_error( $us3_link ) );
+         write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
          return( -1 );
       }
    }
@@ -594,12 +591,12 @@ write_log( "$me:   MODELUpd: O:description=$description" );
                "(SELECT modelID FROM model WHERE modelGUID='$modelGUID')"          .
                "WHERE noiseID=$noiseID";
 
-      $result = mysql_query( $query, $us3_link );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysql_error( $us3_link ) );
+         write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
          return( -1 );
       }
    }
@@ -614,12 +611,12 @@ write_log( "$me:   MODELUpd: O:description=$description" );
                "(SELECT modelID FROM model WHERE modelGUID='$modelGUID')"          .
                "WHERE mrecsID=$mrecsID";
 
-      $result = mysql_query( $query, $us3_link );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysql_error( $us3_link ) );
+         write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
          return( -1 );
       }
 write_log( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
@@ -632,14 +629,14 @@ write_log( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
    // Get the request guid (LIMS submit dir name)
    $query  = "SELECT HPCAnalysisRequestGUID FROM HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
    
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $us3_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
    }
    
-//   list( $requestGUID ) = mysql_fetch_array( $result );
+//   list( $requestGUID ) = mysqli_fetch_array( $result );
 //   
 //   chdir( "$submit_dir/$requestGUID" );
 //   $f = fopen( "analysis-results.tar", "w" );
@@ -650,7 +647,7 @@ write_log( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
 //   chdir ( $work );
    // exec( "rm -rf $gfacID" );
 
-   mysql_close( $us3_link );
+   mysqli_close( $us3_link );
 
    /////////
    // Send email 
@@ -724,7 +721,9 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    if ( $limshost == 'localhost' )
    {
       $limshost    = gethostname();
-      if ( ! preg_match( "/\./", $limshost ) )
+      if ( preg_match( "/scyld/", $limshost ) )
+         $limshost    = 'alamo.uthscsa.edu';
+      else if ( ! preg_match( "/\./", $limshost ) )
          $limshost    = $limshost . $org_domain;
    }
 
@@ -869,11 +868,33 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    global $work_remote;
    global $me;
    global $db;
+   global $dbhost;
    global $status;
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_jetstr  = preg_match( "/jetstream/", $cluster );
+   $limshost   = $dbhost;
+   $stderr     = '';
+   $stdout     = '';
+   $tarfile    = '';
 
-   // Figure out remote directory
+   if ( $limshost == 'localhost' )
+   {  // If DB host is local host, get full LIMS host name
+      $limshost    = gethostname();
+      if ( preg_match( "/scyld/", $limshost ) )
+         $limshost    = 'alamo.uthscsa.edu';
+      else if ( ! preg_match( "/\./", $limshost ) )
+         $limshost    = $limshost . $org_domain;
+   }
+
+   if ( preg_match( "/alamo/", $limshost )  &&
+        preg_match( "/alamo/", $cluster  ) )
+   {  // If both LIMS and cluster are alamo, set up local transfers
+      $is_us3iab   = 1;
+      if ( ! preg_match( "/\/local/", $work_remote ) )
+         $work_remote = $work_remote . "/local";
+   }
+
+   // Figure out job's remote (or local) work directory
    $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
 //write_log( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
 
@@ -890,7 +911,7 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
          $clushost = "js-169-137.jetstream-cloud.org";
          $lworkdir = "/N/us3_cluster/work/local";
       }
-      $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2/dev/null";
+      $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2>/dev/null";
       exec( $cmd, $output, $stat );
       $work_remote = $output[ 0 ];
       $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
@@ -933,7 +954,7 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
       }
    }
    else
-   {
+   { // Is US3IAB or alamo-to-alamo, so just change to local work directory
       $pwd = chdir( "$remoteDir" );
 write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
    }
@@ -941,15 +962,36 @@ write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
 
    // Write the files to gfacDB
 
+   $secwait    = 10;
+   $num_try    = 0;
+   while ( ! file_exists( "stderr" )  &&  $num_try < 3 )
+   {  // Do waits and retries to let stderr appear
+      sleep( $secwait );
+      $num_try++;
+      $secwait   *= 2;
+write_log( "$me:  not-exist-stderr: num_try=$num_try" );
+   }
+
+   $lense = 0;
    if ( file_exists( "stderr"  ) )
-   {  // Filter stderr to not have libnnls debug lines
-//      exec( "mv stderr stderr+nnls", $output, $stat );
-//      exec( "grep -vi nnls stderr+nnls >stderr", $output, $stat );
+   {
+      $lense = filesize( "stderr" );
+      if ( $lense > 1000000 )
+      { // Replace exceptionally large stderr with smaller version
+         exec( "mv stderr stderr-orig", $output, $stat );
+         exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
+         exec( "tail -n 5000 stderr-orig >stderr-t", $output, $stat );
+         exec( "cat stderr-h stderr-t >stderr", $output, $stat );
+      }
       $stderr  = file_get_contents( "stderr" );
    }
    else
+   {
       $stderr  = "";
+   }
+
    if ( file_exists( "stdout" ) ) $stdout  = file_get_contents( "stdout" );
+
    $fn1_tarfile = "analysis-results.tar";
    $fn2_tarfile = "output/" . $fn1_tarfile;
    if ( file_exists( $fn1_tarfile ) )
@@ -957,40 +999,40 @@ write_log( "$me: IS US3IAB: pwd=$pwd $remoteDir");
    else if ( file_exists( $fn2_tarfile ) )
       $tarfile = file_get_contents( $fn2_tarfile );
 
-   $lense = strlen( $stderr );
-   if ( $lense > 1000000 )
-   { // Replace exceptionally large stderr with smaller version
-      exec( "mv stderr stderr-orig", $output, $stat );
-      exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
-      exec( "tail -n 5000 stderr-orig >stderr-t", $output, $stat );
-      exec( "cat stderr-h stderr-t >stderr", $output, $stat );
-      $stderr  = file_get_contents( "stderr" );
-   }
-$lent = strlen( $tarfile );
-write_log( "$me: tarfile size: $lent");
+//   $lense = strlen( $stderr );
+//   if ( $lense > 1000000 )
+//   { // Replace exceptionally large stderr with smaller version
+//      exec( "mv stderr stderr-orig", $output, $stat );
+//      exec( "head -n 5000 stderr-orig >stderr-h", $output, $stat );
+//      exec( "tail -n 5000 stderr-orig >stderr-t", $output, $stat );
+//      exec( "cat stderr-h stderr-t >stderr", $output, $stat );
+//      $stderr  = file_get_contents( "stderr" );
+//   }
 $lene = strlen( $stderr );
 write_log( "$me: stderr size: $lene  (was $lense)");
 $leno = strlen( $stdout );
 write_log( "$me: stdout size: $leno");
-$estarf=mysql_real_escape_string($tarfile,$gfac_link);
-$lenf = strlen($estarf);
-write_log( "$me: es-tarfile size: $lenf");
-$esstdo=mysql_real_escape_string($stdout,$gfac_link);
-$leno = strlen($esstdo);
-write_log( "$me: es-stdout size: $leno");
-$esstde=mysql_real_escape_string($stderr,$gfac_link);
+$lent = strlen( $tarfile );
+write_log( "$me: tarfile size: $lent");
+   $esstde = mysqli_real_escape_string( $gfac_link, $stderr );
+   $esstdo = mysqli_real_escape_string( $gfac_link, $stdout );
+   $estarf = mysqli_real_escape_string( $gfac_link, $tarfile );
 $lene = strlen($esstde);
-write_log( "$me: es-stderr size: $lene");
+write_log( "$me:  es-stderr size: $lene");
+$leno = strlen($esstdo);
+write_log( "$me:  es-stdout size: $leno");
+$lenf = strlen($estarf);
+write_log( "$me:  es-tarfile size: $lenf");
    $query = "UPDATE analysis SET " .
-            "stderr='"  . mysql_real_escape_string( $stderr,  $gfac_link ) . "'," .
-            "stdout='"  . mysql_real_escape_string( $stdout,  $gfac_link ) . "'," .
-            "tarfile='" . mysql_real_escape_string( $tarfile, $gfac_link ) . "'";
+            "stderr='"  . $esstde . "'," .
+            "stdout='"  . $esstdo . "'," .
+            "tarfile='" . $estarf . "'";
 
-   $result = mysql_query( $query, $gfac_link );
+   $result = mysqli_query( $gfac_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$me: Bad query:\n$query\n" . mysql_error( $gfac_link ) );
+      write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
       echo "Bad query\n";
       return( -1 );
    }

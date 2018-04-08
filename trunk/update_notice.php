@@ -91,24 +91,24 @@ echo "=====END of PARSE LOOP===== \n";
 //   "upd"  - present in both, but messages differ (update in DB);
 //   "none" - present in both and messages identical (no DB update).
 
-$noteLink = mysql_connect( $dbhost, $dbuser, $dbpassw );
+$noteLink = mysqli_connect( $dbhost, $dbuser, $dbpassw, $notice_db );
 
-if ( ! mysql_select_db( $notice_db, $noteLink ) )
+if ( ! $noteLink )
 {
-   echo "Could not select DB $notice_db - " . mysql_error() . "\n";
+   echo "Could not connect to DB $notice_db - " . mysqli_error($noteLink) . "\n";
    exit();
 }
    
 $query = "SELECT id, type, revision, message FROM notice";
 
-$result = mysql_query( $query, $noteLink )
-   or die( "Query failed : $query<br />" . mysql_error() );
+$result = mysqli_query( $noteLink, $query )
+   or die( "Query failed : $query<br />" . mysqli_error($noteLink) );
 
 echo "=====START of DB QUERY LOOP===== \n";
-$num_rows = mysql_num_rows( $result );
+$num_rows = mysqli_num_rows( $result );
 
 echo "   numrows = $num_rows \n";
-while ( list( $id, $type, $rev, $msg ) = mysql_fetch_array( $result ) )
+while ( list( $id, $type, $rev, $msg ) = mysqli_fetch_array( $result ) )
 {
    $key    = $type . $rev;
 
@@ -179,8 +179,8 @@ foreach ( $keys as $key )
    }
    echo "      query: [ $query ]  \n";
 
-   $result = mysql_query( $query, $noteLink )
-      or die( "Query failed : $query<br />" . mysql_error() );
+   $result = mysqli_query( $noteLink, $query )
+      or die( "Query failed : $query<br />" . mysqli_error($noteLink) );
 
 }
 echo "=====END of DB Update LOOP===== \n";

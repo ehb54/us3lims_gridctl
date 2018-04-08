@@ -19,42 +19,47 @@ $now = time();
 echo "Time started: " . date( 'Y-m-d H:i:s', $now ) . "\n";
 
 // Get data from global GFAC DB 
-$gLink = mysql_connect( $dbhost, $guser, $gpasswd );
+$gLink = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
-if ( ! mysql_select_db( $gDB, $gLink ) )
+if ( ! $gLink )
 {
-   write_log( "$self: Could not select DB $gDB - " . mysql_error() );
+   write_log( "$self: Could not select DB $gDB - " . mysqli_error() );
    mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
+   sleep(300);
    exit();
 }
    
 $query = "SELECT gfacID, us3_db, cluster, status, queue_msg, " .
                 "UNIX_TIMESTAMP(time), time from analysis";
-$result = mysql_query( $query, $gLink );
+$result = mysqli_query( $gLink, $query );
 
 if ( ! $result )
 {
-   write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
-   mail_to_admin( "fail", "Query failed $query\n" .  mysql_error( $gLink ) );
+   write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
+   mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $gLink ) );
    exit();
 }
 
-if ( mysql_num_rows( $result ) == 0 )
+if ( mysqli_num_rows( $result ) == 0 )
 {
 //write_log( "$self: analysis read got numrows==0" );
    exit();  // Nothing to do
 }
+//write_log( "$loghdr    gfac-analysis rows $nrows" );
 
 $me_devel  = preg_match( "/class_devel/", $class_dir );
+//echo "me_devel=$me_devel class_dir=$class_dir\n";
 
 while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTime ) 
-            = mysql_fetch_array( $result ) )
+            = mysqli_fetch_array( $result ) )
 {
    // If this entry does not match class/class_devel, skip processing
+//echo "  gfacID=$gfacID gf_status=$status\n";
 
    if ( preg_match( "/US3-A/i", $gfacID ) )
    {  // For thrift, job and gridctl must match
       $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
+//echo "   THR: job_devel=$job_devel\n";
       if ( (  $me_devel  &&  !$job_devel )  ||
            ( !$me_devel  &&   $job_devel ) )
       {  // Job type and Airavata server mismatch:  skip processing
@@ -64,6 +69,7 @@ while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTim
 
    else if ( $me_devel )
    {  // Local (us3iab/-local) and class_devel:  skip processing
+//echo "   LOC: me_devel=$me_devel\n";
       continue;
    }
 
@@ -98,6 +104,7 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
       $status_in  = $status;
 //write_log( "$loghdr status_in=$status_in" );
       $status     = aira_status( $gfacID, $status_in );
+//echo "$loghdr status_in=$status_in  status_ex=$status\n";
 if($status != $status_in )
  write_log( "$loghdr Set to $status from $status_in" );
 //write_log( "$loghdr    aira status=$status" );
@@ -109,6 +116,7 @@ if($status != $status_in )
       //if ( $status == 'FINISHED' )
       if ( $status_gw == 'COMPLETE' )
          $status     = $status_gw;
+//echo "$loghdr status_gw=$status_gw  status=$status\n";
 //write_log( "$loghdr non-AThrift status=$status status_gw=$status_gw" );
    }
    else
@@ -118,6 +126,7 @@ if($status != $status_in )
       $status     = get_local_status( $gfacID );
       if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
          $status     = $status_gw;
+//echo "$loghdr status_lo=$status\n";
 //write_log( "$loghdr Local status=$status status_gw=$status_gw" );
    }
 
@@ -129,11 +138,11 @@ if($status != $status_in )
       mail_to_admin( "fail", "GFAC DB is NULL\n$gfacID" );
 
       $query2  = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
-      $result2 = mysql_query( $query2, $gLink );
+      $result2 = mysqli_query( $gLink, $query2 );
       $status  = 'ERROR';
 
       if ( ! $result2 )
-         write_log( "$loghdr Query failed $query2 - " .  mysql_error( $gLink ) );
+         write_log( "$loghdr Query failed $query2 - " .  mysqli_error( $gLink ) );
 
    }
 
@@ -199,6 +208,7 @@ write_log( "$loghdr   FINISHED gfacID=$gfacID" );
          break;
    }
 }
+mysqli_close( $gLink );
 
 exit();
 
@@ -234,10 +244,10 @@ write_log( "$loghdr submitted:job_status=$job_status" );
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='SUBMIT_TIMEOUT' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -270,10 +280,10 @@ function submit_timeout( $updatetime )
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -310,10 +320,10 @@ function running( $updatetime )
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='RUN_TIMEOUT' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -348,10 +358,10 @@ function run_timeout( $updatetime )
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -396,10 +406,10 @@ function wait_data( $updatetime )
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='DATA_TIMEOUT' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -444,10 +454,10 @@ function data_timeout( $updatetime )
    write_log( "$self: $message - id: $gfacID" );
    mail_to_admin( "hang", "$message - id: $gfacID" );
    $query = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
 
    if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
 
    update_queue_messages( $message );
    update_db( $message );
@@ -476,19 +486,19 @@ function cleanup()
 
    // Double check that the gfacID exists
    $query  = "SELECT count(*) FROM analysis WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
   
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
-      mail_to_admin( "fail", "Query failed $query\n" .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
+      mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $gLink ) );
       return;
    }
 
-   list( $count ) = mysql_fetch_array( $result );
+   list( $count ) = mysqli_fetch_array( $result );
 
-if ($count==0)
-write_log( "$loghdr count = $count  gfacID = $gfacID" );
+//if ($count==0)
+//write_log( "$loghdr count = $count  gfacID = $gfacID" );
    if ( $count == 0 ) return;
 
    // Now check the us3 instance
@@ -596,9 +606,9 @@ write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
 
   }
 
-   $result =  mysql_query( $query, $gLink );
+   $result =  mysqli_query( $gLink, $query );
    if ( ! $result )
-      write_log( "$loghdr Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$loghdr Query failed $query - " .  mysqli_error( $gLink ) );
 
    if ( $message != 'NONE' )
    {
@@ -618,38 +628,28 @@ function get_us3_data()
    global $updateTime;
    global $loghdr;
 
-   $us3_link = mysql_connect( $dbhost, $user, $passwd );
+   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
    if ( ! $us3_link )
    {
-      write_log( "$loghdr could not connect: $dbhost, $user, $passwd" );
-      mail_to_admin( "fail", "Could not connect to $dbhost" );
-      return 0;
-   }
-
-
-   $result = mysql_select_db( $us3_db, $us3_link );
-
-   if ( ! $result )
-   {
-      write_log( "$loghdr could not select DB $us3_db" );
-      mail_to_admin( "fail", "Could not select DB $us3_db, $dbhost, $user, $passwd" );
+      write_log( "$loghdr could not connect: $dbhost, $user, $passwd, $us3_db" );
+      mail_to_admin( "fail", "Could not connect to $dbhost : $us3_db" );
       return 0;
    }
 
    $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
             "FROM HPCAnalysisResult WHERE gfacID='$gfacID'";
-   $result = mysql_query( $query, $us3_link );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $us3_link ) );
-      mail_to_admin( "fail", "Query failed $query\n" .  mysql_error( $us3_link ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $us3_link ) );
+      mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $us3_link ) );
       return 0;
    }
 
-   list( $requestID, $updateTime ) = mysql_fetch_array( $result );
-   mysql_close( $us3_link );
+   list( $requestID, $updateTime ) = mysqli_fetch_array( $result );
+   mysqli_close( $us3_link );
 
    return $requestID;
 }
@@ -858,7 +858,6 @@ function get_local_status( $gfacID )
    $result = exec( $cmd );
 //write_log( "$self  result: $result" );
 
-///////////////////////////////////////////////////////////////////
    $secwait    = 2;
    $num_try    = 0;
    // Sleep and retry up to 3 times if ssh has "ssh_exchange_identification" error
@@ -869,15 +868,11 @@ function get_local_status( $gfacID )
       $secwait   *= 2;
 write_log( "$me:   num_try=$num_try  secwait=$secwait" );
    }
-///////////////////////////////////////////////////////////////////
-//   if ( $result == ""  ||
-//        preg_match( "/^qstat: Unknown/", $result )  ||
-//        preg_match( "/ssh_exchange_id/", $result ) )
+
    if ( preg_match( "/^qstat: Unknown/", $result )  ||
         preg_match( "/ssh_exchange_id/", $result ) )
    {
-      write_log( "$self get_local_status: Local job $gfacID unknown" );
-//write_log( "$self get_local_status: result=$result" );
+      write_log( "$self get_local_status: Local job $gfacID unknown result=$result" );
       return 'UNKNOWN';
    }
 
@@ -936,22 +931,22 @@ function update_queue_messages( $message )
    // Get analysis table ID
    $query  = "SELECT id FROM analysis " .
              "WHERE gfacID = '$gfacID' ";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
       return;
    }
-   list( $analysisID ) = mysql_fetch_array( $result );
+   list( $analysisID ) = mysqli_fetch_array( $result );
 
    // Insert message into queue_message table
    $query  = "INSERT INTO queue_messages SET " .
-             "message = '" . mysql_real_escape_string( $message, $gLink ) . "', " .
+             "message = '" . mysqli_real_escape_string( $gLink, $message ) . "', " .
              "analysisID = '$analysisID' ";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
    if ( ! $result )
    {
-      write_log( "$self: Query failed $query - " .  mysql_error( $gLink ) );
+      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
       return;
    }
 }
@@ -965,31 +960,21 @@ function update_db( $message )
    global $passwd;
    global $us3_db;
 
-   $us3_link = mysql_connect( $dbhost, $user, $passwd );
+   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
    if ( ! $us3_link )
    {
       write_log( "$self: could not connect: $dbhost, $user, $passwd" );
-      mail_to_admin( "fail", "Could not connect to $dbhost" );
-      return 0;
-   }
-
-
-   $result = mysql_select_db( $us3_db, $us3_link );
-
-   if ( ! $result )
-   {
-      write_log( "$self: could not select DB $us3_db" );
-      mail_to_admin( "fail", "Could not select DB $us3_db, $dbhost, $user, $passwd" );
+      mail_to_admin( "fail", "Could not connect to $dbhost : $us3_db" );
       return 0;
    }
 
    $query = "UPDATE HPCAnalysisResult SET " .
-            "lastMessage='" . mysql_real_escape_string( $message, $us3_link ) . "'" .
+            "lastMessage='" . mysqli_real_escape_string( $us3_link, $message ) . "'" .
             "WHERE gfacID = '$gfacID' ";
 
-   mysql_query( $query, $us3_link );
-   mysql_close( $us3_link );
+   mysqli_query( $us3_link, $query );
+   mysqli_close( $us3_link );
 }
 
 function mail_to_admin( $type, $msg )
@@ -1172,6 +1157,7 @@ write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex"
          $status    = standard_status( $status_ex );
       }
 
+//if ( $status != 'SUBMITTED' )
 //write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
       if ( $status != $status_gw )
       {

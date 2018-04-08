@@ -54,20 +54,13 @@ function process( $msg )
    settype( $requestID, 'integer' );
 
    // We need the gfacID
-   $resource = mysql_connect( $dbhost, $user, $passwd );
+   $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
    {
-      write_log( "$self process(): Could not connect to MySQL - " . mysql_error() );
+      write_log( "$self process(): Could not connect to MySQL - " . mysqli_error($resource) );
       write_log( "$self process(): original msg - $msg" );
       return;
-   }
-
-   if ( ! mysql_select_db( $db, $resource ) )
-   {
-     write_log( "$self: Could not select DB $db " . mysql_error( $resource ) );
-     write_log( "$self process(): original msg - $msg" );
-     return;
    }
 
    $query = "SELECT gfacID FROM HPCAnalysisResult " .
@@ -75,7 +68,7 @@ function process( $msg )
             "ORDER BY HPCAnalysisResultID DESC "                 .
             "LIMIT 1";
 
-   $result = mysql_query( $query, $resource );
+   $result = mysqli_query( $resource, $query );
    
    if ( ! $result )
    {
@@ -85,8 +78,8 @@ function process( $msg )
    }
 
    // Set flags for Airavata/Thrift and "Finished..."
-   list( $gfacID ) = mysql_fetch_row( $result );
-   mysql_close( $resource );
+   list( $gfacID ) = mysqli_fetch_row( $result );
+   mysqli_close( $resource );
 
    $is_athrift  = preg_match( "/^US3-A/i", $gfacID );
    $is_finished = preg_match( "/^Finished/i", $message );
@@ -163,17 +156,11 @@ function update_db( $db, $requestID, $action, $message )
    global $passwd;
    global $self;
 
-   $resource = mysql_connect( $dbhost, $user, $passwd );
+   $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
    {
-      write_log( "$self: Could not connect to DB" );
-      return;
-   }
-
-   if ( ! mysql_select_db( $db, $resource ) )
-   {
-     write_log( "$self: Could not select DB $db " . mysql_error( $resource ) );
+     write_log( "$self: Could not connect to DB $db " . mysqli_error( $resource ) );
      return;
    }
 
@@ -182,7 +169,7 @@ function update_db( $db, $requestID, $action, $message )
             "ORDER BY HPCAnalysisResultID DESC "                 .
             "LIMIT 1";
 
-   $result = mysql_query( $query, $resource );
+   $result = mysqli_query( $resource, $query );
    
    if ( ! $result )
    {
@@ -190,7 +177,7 @@ function update_db( $db, $requestID, $action, $message )
      return;
    }
 
-   list( $resultID ) = mysql_fetch_row( $result );
+   list( $resultID ) = mysqli_fetch_row( $result );
 
    $query = "UPDATE HPCAnalysisResult SET ";
 
@@ -218,11 +205,11 @@ function update_db( $db, $requestID, $action, $message )
          break;
    }
 
-   $query .= "lastMessage='" . mysql_real_escape_string( $message ) . "'" .
+   $query .= "lastMessage='" . mysqli_real_escape_string( $resource, $message ) . "'" .
              "WHERE HPCAnalysisResultID=$resultID";
 
-   mysql_query( $query, $resource );
-   mysql_close( $resource );
+   mysqli_query( $resource, $query );
+   mysqli_close( $resource );
 }
 
 // Function to update the global database status
@@ -241,10 +228,10 @@ function update_gfac( $gfacID, $status, $message )
                          );
 
   // Get data from global GFAC DB 
-  $gLink = mysql_connect( $dbhost, $guser, $gpasswd );
-  if ( ! mysql_select_db( $gDB, $gLink ) )
+  $gLink = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+  if ( ! $gLink )
   {
-    write_log( "$self: Could not select DB $gDB " . mysql_error( $gLink ) );
+    write_log( "$self: Could not select DB $gDB " . mysqli_error( $gLink ) );
     return;
   }
 
@@ -259,52 +246,52 @@ function update_gfac( $gfacID, $status, $message )
   if ( $status == 'UPDATING' )
   {
      $query = "UPDATE analysis " .
-              "SET queue_msg='" . mysql_real_escape_string( $message ) . "' " .
+              "SET queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
               "WHERE gfacID='$gfacID'";
 
 //write_log( "$self process(): updgf-u : status=$status" );
-     mysql_query( $query, $gLink );
+     mysqli_query( $gLink, $query );
   }
 
   else
   {
      $query = "UPDATE analysis SET status='$status', " .
-              "queue_msg='" . mysql_real_escape_string( $message ) . "' " .
+              "queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
               "WHERE gfacID='$gfacID'";
 
 //write_log( "$self process(): updgf-s : status=$status" );
-     mysql_query( $query, $gLink );
+     mysqli_query( $gLink, $query );
   }
 
   // Also update the queue_messages table
   $query  = "SELECT id FROM analysis " .
             "WHERE gfacID = '$gfacID'";
-  $result = mysql_query( $query, $gLink );
+  $result = mysqli_query( $gLink, $query );
   if ( ! $result )
   {
-    write_log( "$self: bad query: $query " . mysql_error( $gLink ) );
+    write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
     return;
   }
 
-  if ( mysql_num_rows( $result ) == 0 )
+  if ( mysqli_num_rows( $result ) == 0 )
   {
     write_log( "$self: can't find $gfacID in GFAC db" );
     return;
   }
 
-  list( $aID ) = mysql_fetch_array( $result );
+  list( $aID ) = mysqli_fetch_array( $result );
 
   $query  = "INSERT INTO queue_messages " .
             "SET analysisID = $aID, " .
-            "message = '" . mysql_real_escape_string( $message ) . "'";
-  $result = mysql_query( $query, $gLink );
+            "message = '" . mysqli_real_escape_string( $gLink, $message ) . "'";
+  $result = mysqli_query( $gLink, $query );
   if ( ! $result )
   {
-    write_log( "$self: bad query: $query " . mysql_error( $gLink ) );
+    write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
     return;
   }
 
-  mysql_close( $gLink );
+  mysqli_close( $gLink );
 }
 
 // function to notify GFAC that the UDP message "Finished" has arrived
@@ -352,49 +339,49 @@ function update_aira( $gfacID, $message )
    global $self;
 
    // Get data from global GFAC DB 
-   $gLink = mysql_connect( $dbhost, $guser, $gpasswd );
-   if ( ! mysql_select_db( $gDB, $gLink ) )
+   $gLink = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+   if ( ! $gLink )
    {
-      write_log( "$self: Could not select DB $gDB " . mysql_error( $gLink ) );
+      write_log( "$self: Could not connect to DB $gDB " . mysqli_error( $gLink ) );
       return;
    }
 
    // Update message and update status to 'FINISHED'
    $query = "UPDATE analysis SET status='FINISHED', " .
-            "queue_msg='" . mysql_real_escape_string( $message ) . "' " .
+            "queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
             "WHERE gfacID='$gfacID'";
 
-   mysql_query( $query, $gLink );
+   mysqli_query( $gLink, $query );
    write_log( "$self: Status FINISHED and 'Finished...' message updated" );
 
    // Also update the queue_messages table
    $query  = "SELECT id FROM analysis " .
              "WHERE gfacID = '$gfacID'";
-   $result = mysql_query( $query, $gLink );
+   $result = mysqli_query( $gLink, $query );
    if ( ! $result )
    {
-      write_log( "$self: bad query: $query " . mysql_error( $gLink ) );
+      write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
       return;
    }
 
-   if ( mysql_num_rows( $result ) == 0 )
+   if ( mysqli_num_rows( $result ) == 0 )
    {
 //      write_log( "$self: can't find $gfacID in GFAC db" );
       return;
    }
 
-   list( $aID ) = mysql_fetch_array( $result );
+   list( $aID ) = mysqli_fetch_array( $result );
 
    $query  = "INSERT INTO queue_messages " .
              "SET analysisID = $aID, " .
-             "message = '" . mysql_real_escape_string( $message ) . "'";
-   $result = mysql_query( $query, $gLink );
+             "message = '" . mysqli_real_escape_string( $gLink, $message ) . "'";
+   $result = mysqli_query( $gLink, $query );
    if ( ! $result )
    {
-      write_log( "$self: bad query: $query " . mysql_error( $gLink ) );
+      write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
       return;
    }
 
-   mysql_close( $gLink );
+   mysqli_close( $gLink );
 }
 ?>
