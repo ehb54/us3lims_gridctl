@@ -332,6 +332,17 @@ function local_status()
          $run    = "0";
       }
 
+      // Insure queued,running counts are numeric
+      $que_s          = $que;
+      $run_s          = $run;
+      $que_e          = preg_replace( '/=/', "", $que_s );
+      $run_e          = preg_replace( '/=/', "", $run_s );
+      $que            = intval( $que_e );
+      $run            = intval( $run_e );
+if($que!=$que_s ||  $run!=$run_s)
+ echo "$self:   *** que s,e,i $que_s $que_e $que  run s,e,i $run_s $run_e $run\n";
+
+      // Save cluster status values
       $a[ 'cluster' ] = $clname;
       $a[ 'queued'  ] = $que;
       $a[ 'running' ] = $run;
