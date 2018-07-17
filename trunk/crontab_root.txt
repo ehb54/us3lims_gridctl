@@ -1,0 +1,12 @@
+#m   h d m wd cmd line
+5    3 * * *  /usr/sbin/logrotate /etc/logrotate.conf
+
+# run nightly system backup script
+# also cleans out old files in the common data directory
+#!runas(root)
+#!mailto(gegorbet)
+0 22 * * * /root/backup-cauma-db.sh
+
+#ssl certificate renewal:
+30 0,12 * * * /usr/bin/certbot renew --quiet
+
