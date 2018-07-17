@@ -181,9 +181,7 @@ function local_status()
    }
    else
    {
-//      $clusters = array( "alamo", "lonestar5", "comet",
-//                         "stampede2", "jetstream", "jureca", "jacinto" );
-      $clusters = array( "alamo", "lonestar5", "comet",
+      $clusters = array( "lonestar5", "comet",
                          "stampede2", "jetstream" );
    }
 

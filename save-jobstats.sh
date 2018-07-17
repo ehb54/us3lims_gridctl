@@ -8,6 +8,9 @@ if [ ! -d ${SAVEDIR} ]; then
   mkdir ${SAVEDIR}
 fi
 HOSTNAME=`uname -n`
+if [ `echo ${HOSTNAME}|grep -c "novalo"` -ne 0 ]; then
+  HOSTNAME="uslims3.aucsolutions.com"
+fi
 echo "HOSTNAME=${HOSTNAME}"
 
 ##JSTIME=`stat ${SAVEDIR} -c %Y`

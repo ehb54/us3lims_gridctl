@@ -723,6 +723,8 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
       $limshost    = gethostname();
       if ( preg_match( "/scyld/", $limshost ) )
          $limshost    = 'alamo.uthscsa.edu';
+      else if ( preg_match( "/novalo/", $limshost ) )
+         $limshost    = 'uslims3.aucsolutions.com';
       else if ( ! preg_match( "/\./", $limshost ) )
          $limshost    = $limshost . $org_domain;
    }
@@ -882,6 +884,8 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
       $limshost    = gethostname();
       if ( preg_match( "/scyld/", $limshost ) )
          $limshost    = 'alamo.uthscsa.edu';
+      else if ( preg_match( "/novalo/", $limshost ) )
+         $limshost    = 'uslims3.aucsolutions.com';
       else if ( ! preg_match( "/\./", $limshost ) )
          $limshost    = $limshost . $org_domain;
    }

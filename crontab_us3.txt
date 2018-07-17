@@ -1,0 +1,11 @@
+##MAILTO=gegorbet@gmail.com
+#nolog(true)
+*/1  * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/gridctl_pro.php
+*/1  * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/gridctl_dev.php
+*/12 * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/cluster_status.php
+*/20 * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/update_notice.php
+
+# each morning: save data directory */job_statistics.xml files
+MAILTO=gegorbet@gmail.com
+15 2 * * * /home/us3/lims/bin/save-jobstats.sh
+
