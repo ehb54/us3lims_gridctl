@@ -72,7 +72,7 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
 
    list( $personID ) = mysqli_fetch_array( $result );
 
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
+   $query  = "SELECT clusterName, submitTime, queueStatus, analType "              .
              "FROM HPCAnalysisRequest h, HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";

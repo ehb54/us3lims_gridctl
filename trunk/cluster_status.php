@@ -177,7 +177,7 @@ function local_status()
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel", "alamo-local", "taito-local" );
       else
-         $clusters = array( "us3iab-node0", "taito-local");
+         $clusters = array( "us3iab-node0", "taito-local" );
    }
    else
    {
@@ -240,7 +240,7 @@ function local_status()
          case 'stampede2':
          {
             $host   = "us3@stampede2.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>/dev/null|grep "Total Jobs"'`;
+            $qstat  = `ssh $host '~us3/scripts/clusstat skx-normal 2>/dev/null'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = $sparts[ 5 ];
@@ -253,7 +253,7 @@ function local_status()
          case 'lonestar5':
          {
             $host   = "us3@ls5.tacc.utexas.edu";
-            $qstat  = `ssh $host '/usr/local/bin/showq 2>/dev/null|grep "Total Jobs"'`;
+            $qstat  = `ssh $host '/opt/apps/tacc/bin/showq 2>/dev/null|grep "Total Jobs"'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = '0';
@@ -268,27 +268,6 @@ function local_status()
                $run    = $sparts[ 5 ];
                $que    = $sparts[ 8 ];
 //               $que    = $sparts[ 11 ];
-            }
-            break;
-         }
-         case 'taito-local':
-         {
-            $host   = "rb_2001068_taito01@taito.csc.fi";
-            //$qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
-            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_taito_robot $host '/homeappl/home/rb_2001068_taito01/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 3 ];
-               $que    = $sparts[ 5 ];
             }
             break;
          }
@@ -310,6 +289,10 @@ function local_status()
             {
                $run    = $sparts[ 3 ];
                $que    = $sparts[ 5 ];
+               if ( $run == '0'  &&  $que == '0' )
+               {
+                  $sta    = "down";
+               }
             }
             break;
          }
@@ -340,6 +323,27 @@ function local_status()
                $sta    = "down";
             break;
          }
+         case 'taito-local':
+         {
+            $host   = "rb_2001068_taito01@taito.csc.fi";
+            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_taito_robot $host '/homeappl/home/rb_2001068_taito01/scripts/cstat 2>&1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 1 ];
+            $run    = '0';
+            $que    = '0';
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $run    = $sparts[ 3 ];
+               $que    = $sparts[ 5 ];
+            }
+            break;
+         }
+
       }
 
       if ( $sta == "" )
