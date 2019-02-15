@@ -23,9 +23,12 @@ $gLink = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 if ( ! $gLink )
 {
-   write_log( "$self: Could not select DB $gDB - " . mysqli_error() );
-   mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
-   sleep(300);
+   write_log( "$self: Could not select DB $gDB - " . mysqli_error($gLink) );
+   //mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
+   mail_to_admin( "fail",
+      "Internal Error: Could not select DB $gDB $dbhost $guser " );
+   //sleep(300);
+   sleep(3);
    exit();
 }
    
@@ -1006,7 +1009,7 @@ function mail_to_admin( $type, $msg )
    $message       = "
    UltraScan job error notification from gridctl.php:
 
-   Update Time    :  $updateTime
+   Update Time    :  $updateTime  [ now=$now ]
    GFAC Status    :  $status
    Cluster        :  $cluster
    ";
@@ -1049,8 +1052,8 @@ function standard_status( $status_in )
          $status      = 'CANCELED';
          break;
 
-         $status      = 'DATA';
-         break;
+//         $status      = 'DATA';
+//         break;
 
       case 'COMPLETED' :
       case 'completed' :
