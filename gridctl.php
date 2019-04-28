@@ -1000,6 +1000,7 @@ function mail_to_admin( $type, $msg )
 
    // Try to avoid spam filters
    $now = time();
+   $tnow = date( 'Y-m-d H:i:s' );
    $headers .= "Message-ID: <" . $now . "gridctl@$dbhost>$requestID\n";
    $headers .= "X-Mailer: PHP v" . phpversion()         . "\n";
    $headers .= "MIME-Version: 1.0"                      . "\n";
@@ -1009,7 +1010,7 @@ function mail_to_admin( $type, $msg )
    $message       = "
    UltraScan job error notification from gridctl.php:
 
-   Update Time    :  $updateTime  [ now=$now ]
+   Update Time    :  $updateTime  [ now=$tnow ]
    GFAC Status    :  $status
    Cluster        :  $cluster
    ";

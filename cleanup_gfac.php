@@ -32,6 +32,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    global $jobtype;
    global $editXMLFilename;
    global $submittime;
+   global $endtime;
    global $status;
    global $stdout;
    global $requestID;
@@ -75,7 +76,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
              "ON h.HPCAnalysisRequestID=HPCAnalysisResult.HPCAnalysisRequestID " .
              "WHERE h.HPCAnalysisRequestID=$requestID";
    */
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
+   $query  = "SELECT clusterName, submitTime, queueStatus, analType "            .
              "FROM HPCAnalysisRequest h, HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
@@ -97,7 +98,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
    // Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, gfacID FROM HPCAnalysisResult " .
+   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
    $result = mysqli_query( $us3_link, $query );
@@ -109,7 +110,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
       return( -1 );
    }
 
-   list( $HPCAnalysisResultID, $gfacID ) = mysqli_fetch_array( $result ); 
+   list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
    ////////
    // Get data from global GFAC DB and insert it into US3 DB
