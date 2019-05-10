@@ -4,6 +4,8 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
 //include "$us3bin/cleanup_aira.php";
 //include "$us3bin/cleanup_gfac.php";
+//include "$us3bin/cleanup.php";
+
 
 // Global variables
 $gfac_message = "";
@@ -840,6 +842,8 @@ function get_local_status( $gfacID )
    global $self;
 
    $is_jetstr = preg_match( "/jetstream/", $cluster );
+   $is_demeler3 = preg_match( "/demeler3/", $cluster );
+
    if ( $is_jetstr )
       $cmd    = "squeue -j $gfacID 2>&1|tail -n 1";
    else
@@ -854,6 +858,12 @@ function get_local_status( $gfacID )
       if ( $is_jetstr )
          $system = "$cluster";
       $system = preg_replace( "/\-local/", "", $system );
+
+      if ( $is_demeler3 )
+      {
+        $system = "demeler3.uleth.ca";
+      }
+      
       $cmd    = "/usr/bin/ssh -x us3@$system " . $cmd;
 //write_log( "$self  cmd: $cmd" );
    }
@@ -992,7 +1002,9 @@ function mail_to_admin( $type, $msg )
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
+   $headers .= "Cc: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
    $headers .= "Bcc: Gary Gorbet<gegorbet@gmail.com>"    . "\n";     // make sure
+
 
    // Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";

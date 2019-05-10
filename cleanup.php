@@ -737,6 +737,8 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
+   $headers .= "CC: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
+   $headers .= "CC: $org_name Admin<gegorbet@gmail.com>"       . "\n";
 
    // Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
@@ -877,8 +879,11 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    global $db;
    global $dbhost;
    global $status;
+   
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_jetstr  = preg_match( "/jetstream/", $cluster );
+   $is_demeler3 = preg_match( "/demeler3/", $cluster );
+
    $limshost   = $dbhost;
    $stderr     = '';
    $stdout     = '';
@@ -920,6 +925,13 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
          $clushost = "js-169-137.jetstream-cloud.org";
          $lworkdir = "/N/us3_cluster/work/local";
       }
+      
+      if ( $is_demeler3 )
+      {
+         $clushost = "demeler3.uleth.ca";
+	 $lworkdir = "/home/us3/work"; 
+      }
+
       $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2>/dev/null";
       exec( $cmd, $output, $stat );
       $work_remote = $output[ 0 ];
