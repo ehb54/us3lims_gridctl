@@ -175,9 +175,9 @@ function local_status()
    if ( preg_match( "/_local/", $class_dir ) )
    {
       if ( preg_match( "/attlocal/", $org_domain ) )
-         $clusters = array( "us3iab-devel", "alamo-local", "taito-local" );
+         $clusters = array( "us3iab-devel" );
       else
-         $clusters = array( "us3iab-node0", "taito-local" );
+         $clusters = array( "us3iab-node0",  "demeler3-local", "taito-local" );
    }
    else
    {
@@ -223,6 +223,22 @@ function local_status()
                $sta    = "down";
             break;
          }
+
+        case 'demeler3-local':
+         {
+            $host   = "us3@demeler3.uleth.ca";
+            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $que    = $sparts[ 3 ];
+            $run    = $sparts[ 4 ];
+            $sta    = $sparts[ 10 ];
+            if ( $sta == "Active" )
+               $sta    = "up";
+            else
+               $sta    = "down";
+            break;
+         }
+
          case 'jacinto':
          {
             $host   = "us3@jacinto.uthscsa.edu";
