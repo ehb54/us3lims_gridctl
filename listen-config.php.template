@@ -17,7 +17,7 @@ $class_dir   = $class_dir_p;                           // Class dir default
 
 // Global DB credentials
 $guser       = "gfac";
-$gpasswd     = "backend";
+$gpasswd     = "PASSW_GF";
 $gDB         = "gfac";
 
 $serviceURL  = "http://gridfarm005.ucs.indiana.edu:8080/ogce-rest/job";
@@ -25,7 +25,7 @@ $serviceURL2 = "http://gridfarm005.ucs.indiana.edu:9090/ogce-rest/job";
 
 // US3 DB credentials
 $user        = "us3php";
-$passwd      = "us3";
+$passwd      = "PASSW_PH";
 
 $org_name    = "UltraScan3 Admin";
 $admin_email = "us3-admin@biochem.uthscsa.edu";
@@ -42,4 +42,17 @@ function write_log( $message )
    fwrite( $log, date( "Y-m-d H:i:s " ) . $message . "\n" );
    fclose( $log );
 }
+
+function password_field( $pwkey, $pwfield )
+{
+   $pwvalue  = $pwkey;
+   if ( preg_match( "/PASSW_/", $pwkey ) )
+   {
+      $mp_cmd   = exec( "ls ~us3/scripts/map_password" );
+      $pwvalue  = exec( "$mp_cmd $pwkey $pwfield" );
+   }
+
+   return $pwvalue;
+}
+
 ?>

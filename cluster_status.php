@@ -115,6 +115,7 @@ function update( $cluster, $queued, $status, $running )
    global $self;
 //echo  " $cluster $queued, $status, $running\n";
 
+   $gpasswd   = password_field( $gpasswd, "PW" );
    $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $gfac_link )

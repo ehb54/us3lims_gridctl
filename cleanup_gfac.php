@@ -40,6 +40,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    $requestID = $reqID;
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
+   $passwd  = password_field( $passwd, "PW" );
 
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $db );
 
@@ -114,6 +115,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
 
    ////////
    // Get data from global GFAC DB and insert it into US3 DB
+   $gpasswd   = password_field( $gpasswd, "PW" );
    $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $gfac_link )

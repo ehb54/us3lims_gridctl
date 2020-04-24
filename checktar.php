@@ -2,14 +2,13 @@
 
 include "listen-config.php";
 
-$gfac_link = mysql_connect( $dbhost, $guser, $gpasswd );
-
-$result = mysql_select_db( $gDB, $gfac_link );
+$gpasswd  = password_field( $gpasswd, "PW" );
+$gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 $query = "SELECT id, time, cluster, tarfile FROM analysis ";
-$result = mysql_query( $query, $gfac_link );
+$result = mysqli_query( $gfac_link, $query );
 
-while ( $row = mysql_fetch_assoc( $result ) )
+while ( $row = mysqli_fetch_assoc( $result ) )
 {
    $tarfile = $row[ 'tarfile' ];
    $id      = $row[ 'id' ];

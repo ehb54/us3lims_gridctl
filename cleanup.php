@@ -43,6 +43,7 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
    $requestID = $reqID;
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
+   $passwd  = password_field( $passwd, "PW" );
 
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $db );
 
@@ -212,6 +213,19 @@ write_log( "$me: fn_stdout=$fn_stdout" );
 if (file_exists($fn_tarfile)) write_log( "$me: fn_tarfile=$fn_tarfile" );
 else                          write_log( "$me: NOT FOUND: $fn_tarfile" );
 
+   if ( file_exists( $fn_stderr ) )
+   {  // Reconstruct stderr if too big
+      $lense = filesize( $fn_stderr );
+      if ( $lense > 1000000 )
+      { // Replace exceptionally large stderr with smaller version
+         exec( "head -n 10000 $fn_stderr >stderr-h", $output, $stat );
+         exec( "tail -n 10000 $fn_stderr >stderr-t", $output, $stat );
+         exec( "mv $fn_stderr stderr-orig",          $output, $stat );
+         exec( "cat stderr-h stderr-t >$fn_stderr",  $output, $stat );
+write_log( "$me:  stderr reduced from $lense original bytes ." );
+      }
+   }
+
    $stderr   = '';
    $stdout   = '';
    $tarfile  = '';
@@ -225,7 +239,18 @@ write_log( "$me(0):  length contents stderr,stdout,tarfile -- "
    {
       sleep( 20 );
       if ( file_exists( $fn_stderr  ) )
+      {
+         $lense = filesize( $fn_stderr );
+         if ( $lense > 1000000 )
+         { // Replace exceptionally large stderr with smaller version
+            exec( "head -n 10000 $fn_stderr >stderr-h", $output, $stat );
+            exec( "tail -n 10000 $fn_stderr >stderr-t", $output, $stat );
+            exec( "mv $fn_stderr stderr-orig",          $output, $stat );
+            exec( "cat stderr-h stderr-t >$fn_stderr",  $output, $stat );
+write_log( "$me:  stderr reduced from $lense original bytes ." );
+         }
          $stderr   = file_get_contents( $fn_stderr  );
+      }
       if ( file_exists( $fn_stdout  ) )
          $stdout   = file_get_contents( $fn_stdout  );
    }

@@ -629,6 +629,7 @@ HTML;
 
   // Now switch over to the global db
   global $globaldbhost, $globaldbuser, $globaldbpasswd, $globaldbname;
+  $globaldbpasswd  = password_field( $globaldbpasswd, "PW" );
 
   $globaldb = mysqli_connect( $globaldbhost, $globaldbuser, $globaldbpasswd, $globaldbname );
 
