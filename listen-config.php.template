@@ -5,10 +5,13 @@ $work        = "$home/work";
 $work_remote = "$home_remote/work";
 $pipe        = "$home/etc/us3-pipe";
 $logfile     = "$home/etc/udp.log";
+$cfgfile     = "$home/.us3lims.ini";
+$configs     = parse_ini_file( $cfgfile, true );
 $submit_dir  = '/srv/www/htdocs/uslims3/uslims3_data'; // LIMS submit files dir
 $listen_port = 12233;
-//$dbhost      = "uslims3.uthscsa.edu";
+//$dbhost      = "uslims.uleth.ca";
 $dbhost      = "localhost";
+$servhost    = "uslims.uleth.ca";
 $self        = basename( $_SERVER['PHP_SELF'] );
 $class_dir_p = '/srv/www/htdocs/common/class/';        // Class dir for production
 $class_dir_d = '/srv/www/htdocs/common/class_devel/';  // Class dir for development
@@ -17,7 +20,7 @@ $class_dir   = $class_dir_p;                           // Class dir default
 
 // Global DB credentials
 $guser       = "gfac";
-$gpasswd     = "PASSW_GF";
+$gpasswd     = $configs[ 'gfac' ][ 'password' ];
 $gDB         = "gfac";
 
 $serviceURL  = "http://gridfarm005.ucs.indiana.edu:8080/ogce-rest/job";
@@ -25,10 +28,11 @@ $serviceURL2 = "http://gridfarm005.ucs.indiana.edu:9090/ogce-rest/job";
 
 // US3 DB credentials
 $user        = "us3php";
-$passwd      = "PASSW_PH";
+$passwd      = $configs[ 'us3php' ][ 'password' ];
 
 $org_name    = "UltraScan3 Admin";
-$admin_email = "us3-admin@biochem.uthscsa.edu";
+$org_domain  = "uleth.ca"
+$admin_email = "us3-admin@biophysics.uleth.ca";
 
 // This is really a library routine
 
@@ -41,18 +45,6 @@ function write_log( $message )
    $log = fopen( $logfile, "a" );
    fwrite( $log, date( "Y-m-d H:i:s " ) . $message . "\n" );
    fclose( $log );
-}
-
-function password_field( $pwkey, $pwfield )
-{
-   $pwvalue  = $pwkey;
-   if ( preg_match( "/PASSW_/", $pwkey ) )
-   {
-      $mp_cmd   = exec( "ls ~us3/scripts/map_password" );
-      $pwvalue  = exec( "$mp_cmd $pwkey $pwfield" );
-   }
-
-   return $pwvalue;
 }
 
 ?>

@@ -43,7 +43,6 @@ function aira_cleanup( $us3_db, $reqID, $gfac_link )
    $requestID = $reqID;
    $db = $us3_db;
    write_log( "$me: debug db=$db; requestID=$requestID" );
-   $passwd  = password_field( $passwd, "PW" );
 
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $db );
 
@@ -695,6 +694,8 @@ function mail_to_user( $type, $msg )
    global $cluster;
    global $jobtype;
    global $org_name;
+   global $org_domain;
+   global $servhost;
    global $admin_email;
    global $db;
    global $dbhost;
@@ -702,7 +703,6 @@ function mail_to_user( $type, $msg )
    global $gfacID;
    global $editXMLFilename;
    global $stdout;
-   global $org_domain;
 
 global $me;
 write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
@@ -748,12 +748,13 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
    if ( $limshost == 'localhost' )
    {
       $limshost    = gethostname();
-      if ( preg_match( "/scyld/", $limshost ) )
-         $limshost    = 'alamo.uthscsa.edu';
-      else if ( preg_match( "/novalo/", $limshost ) )
-         $limshost    = 'uslims3.aucsolutions.com';
-      else if ( ! preg_match( "/\./", $limshost ) )
-         $limshost    = $limshost . $org_domain;
+      if ( ! preg_match( "/\./", $limshost ) )
+      {  // no domain in hostname
+         if ( isset( $org_domain ) )
+            $limshost    = $limshost . "." . $org_domain;
+         else if ( isset( $servhost ) )
+            $limshost    = $servhost;
+      }
    }
 
    // Parse the editXMLFilename
@@ -903,6 +904,8 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    global $me;
    global $db;
    global $dbhost;
+   global $servhost;
+   global $org_domain;
    global $status;
    
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
@@ -915,14 +918,15 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    $tarfile    = '';
 
    if ( $limshost == 'localhost' )
-   {  // If DB host is local host, get full LIMS host name
+   {
       $limshost    = gethostname();
-      if ( preg_match( "/scyld/", $limshost ) )
-         $limshost    = 'alamo.uthscsa.edu';
-      else if ( preg_match( "/novalo/", $limshost ) )
-         $limshost    = 'uslims3.aucsolutions.com';
-      else if ( ! preg_match( "/\./", $limshost ) )
-         $limshost    = $limshost . $org_domain;
+      if ( ! preg_match( "/\./", $limshost ) )
+      {  // no domain in hostname
+         if ( isset( $org_domain ) )
+            $limshost    = $limshost . "." . $org_domain;
+         else if ( isset( $servhost ) )
+            $limshost    = $servhost;
+      }
    }
 
    if ( preg_match( "/alamo/", $limshost )  &&
@@ -954,7 +958,7 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
       if ( $is_demeler3 )
       {
          $clushost = "demeler3.uleth.ca";
-	 $lworkdir = "/home/us3/work"; 
+         $lworkdir = "/home/us3/work"; 
       }
 
       $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2>/dev/null";

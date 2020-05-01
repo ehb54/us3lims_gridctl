@@ -21,7 +21,6 @@ $now = time();
 echo "Time started: " . date( 'Y-m-d H:i:s', $now ) . "\n";
 
 // Get data from global GFAC DB 
-$gpasswd  = password_field( $gpasswd, "PW" );
 $gLink    = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 if ( ! $gLink )
@@ -29,7 +28,7 @@ if ( ! $gLink )
    write_log( "$self: Could not select DB $gDB - " . mysqli_error($gLink) );
    //mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
    mail_to_admin( "fail",
-      "Internal Error: Could not select DB $gDB $dbhost $guser " );
+      "Internal Error: Could not select DB $gDB $dbhost $guser  Server: $servhost" );
    //sleep(300);
    sleep(3);
    exit();
@@ -634,7 +633,6 @@ function get_us3_data()
    global $updateTime;
    global $loghdr;
 
-   $passwd   = password_field( $passwd, "PW" );
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
    if ( ! $us3_link )
@@ -975,7 +973,6 @@ function update_db( $message )
    global $passwd;
    global $us3_db;
 
-   $passwd   = password_field( $passwd, "PW" );
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
    if ( ! $us3_link )
@@ -1001,6 +998,7 @@ function mail_to_admin( $type, $msg )
    global $org_name;
    global $admin_email;
    global $dbhost;
+   global $servhost;
    global $requestID;
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
@@ -1023,7 +1021,7 @@ function mail_to_admin( $type, $msg )
 
    $subject       = "US3 Error Notification";
    $message       = "
-   UltraScan job error notification from gridctl.php:
+   UltraScan job error notification from gridctl.php ($servhost):
 
    Update Time    :  $updateTime  [ now=$tnow ]
    GFAC Status    :  $status

@@ -54,12 +54,12 @@ function process( $msg )
    settype( $requestID, 'integer' );
 
    // We need the gfacID
-   $passwd   = password_field( $passwd, "PW" );
    $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
    {
       write_log( "$self process(): Could not connect to MySQL - " . mysqli_error($resource) );
+      write_log( "$self process(): dbhost,user,passwd,db $dbhost, $user, $passwd, $db" );
       write_log( "$self process(): original msg - $msg" );
       return;
    }
@@ -157,7 +157,6 @@ function update_db( $db, $requestID, $action, $message )
    global $passwd;
    global $self;
 
-   $passwd   = password_field( $passwd, "PW" );
    $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
@@ -230,7 +229,6 @@ function update_gfac( $gfacID, $status, $message )
                          );
 
   // Get data from global GFAC DB 
-  $gpasswd   = password_field( $gpasswd, "PW" );
   $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
   if ( ! $gLink )
   {
@@ -342,7 +340,6 @@ function update_aira( $gfacID, $message )
    global $self;
 
    // Get data from global GFAC DB 
-   $gpasswd   = password_field( $gpasswd, "PW" );
    $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
    if ( ! $gLink )
    {

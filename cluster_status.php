@@ -115,7 +115,6 @@ function update( $cluster, $queued, $status, $running )
    global $self;
 //echo  " $cluster $queued, $status, $running\n";
 
-   $gpasswd   = password_field( $gpasswd, "PW" );
    $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $gfac_link )
@@ -178,7 +177,8 @@ function local_status()
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel" );
       else
-         $clusters = array( "us3iab-node0",  "demeler3-local", "taito-local" );
+//         $clusters = array( "us3iab-node0",  "demeler3-local", "puhti-local" );
+         $clusters = array( "us3iab-devel",  "demeler3-local" );
    }
    else
    {
@@ -340,10 +340,10 @@ function local_status()
                $sta    = "down";
             break;
          }
-         case 'taito-local':
+         case 'puhti-local':
          {
-            $host   = "rb_2001068_taito01@taito.csc.fi";
-            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_taito_robot $host '/homeappl/home/rb_2001068_taito01/scripts/cstat 2>&1'`;
+            $host   = "rb_2001068_puhti01@puhti.csc.fi";
+            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_puhti_robot $host '/homeappl/home/rb_2001068_puhti01/scripts/cstat 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 1 ];
             $run    = '0';
