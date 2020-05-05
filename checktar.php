@@ -2,7 +2,6 @@
 
 include "listen-config.php";
 
-$gpasswd  = password_field( $gpasswd, "PW" );
 $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 $query = "SELECT id, time, cluster, tarfile FROM analysis ";
