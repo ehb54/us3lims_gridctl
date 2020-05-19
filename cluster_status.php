@@ -178,7 +178,7 @@ function local_status()
          $clusters = array( "us3iab-devel" );
       else
 //         $clusters = array( "us3iab-node0",  "demeler3-local", "puhti-local" );
-         $clusters = array( "us3iab-devel",  "demeler3-local" );
+         $clusters = array( "us3iab-node0" );
    }
    else
    {
@@ -194,6 +194,22 @@ function local_status()
       switch( $clname )
       {
          case 'us3iab-node0':
+         {
+            $host   = "us3@js-169-137.jetstream-cloud.org";
+	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
+echo "qstat=$qstat";
+//            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $sparts = preg_split( '/\//', $knts );
+            $run    = $sparts[ 0 ];
+            $que    = $sparts[ 2 ];
+            $tot    = $sparts[ 3 ];
+            if ( $sta == "" )
+               $sta    = "down";
+            break;
+         }
          case 'us3iab-node1':
          case 'us3iab-devel':
          {

@@ -1,4 +1,3 @@
-/bin/cronic
 #!/bin/bash
 
 # Cronic v2 - cron job report wrapper

@@ -131,7 +131,7 @@ if($status != $status_in )
       $status     = get_local_status( $gfacID );
       if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
          $status     = $status_gw;
-//echo "$loghdr status_lo=$status\n";
+echo "$loghdr status_lo=$status\n";
 //write_log( "$loghdr Local status=$status status_gw=$status_gw" );
    }
 
@@ -841,10 +841,11 @@ function get_local_status( $gfacID )
    global $cluster;
    global $self;
 
-   $is_jetstr = preg_match( "/jetstream/", $cluster );
-   $is_demeler3 = preg_match( "/demeler3/", $cluster );
+   $is_slurm  = ( preg_match( "/jetstream/", $cluster )  ||
+	          preg_match( "/us3iab-node0/", $cluster ) );
+   $is_demel3 = preg_match( "/demeler3/", $cluster );
 
-   if ( $is_jetstr )
+   if ( $is_slurm )
       $cmd    = "squeue -j $gfacID 2>&1|tail -n 1";
    else
       $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
@@ -855,11 +856,11 @@ function get_local_status( $gfacID )
    if ( ! preg_match( "/us3iab/", $cluster ) )
    {
       $system = "$cluster.uthscsa.edu";
-      if ( $is_jetstr )
+      if ( $is_slurm )
          $system = "$cluster";
       $system = preg_replace( "/\-local/", "", $system );
 
-      if ( $is_demeler3 )
+      if ( $is_demel3 )
       {
         $system = "demeler3.uleth.ca";
       }
@@ -869,7 +870,8 @@ function get_local_status( $gfacID )
    }
 
    $result = exec( $cmd );
-//write_log( "$self  result: $result" );
+   //write_log( "$self  result: $result" );
+echo "locstat: cmd=$cmd  result=$result\n";
 
    $secwait    = 2;
    $num_try    = 0;
@@ -890,8 +892,8 @@ write_log( "$me:   num_try=$num_try  secwait=$secwait" );
    }
 
    $values = preg_split( "/\s+/", $result );
-   $jstat   = ( $is_jetstr == 0 ) ? $values[ 9 ] : $values[ 5 ];
-//write_log( "$self: get_local_status: job status = /$jstat/");
+   $jstat   = ( $is_slurm == 0 ) ? $values[ 9 ] : $values[ 5 ];
+write_log( "$self: get_local_status: job status = /$jstat/");
    switch ( $jstat )
    {
       case "W" :                      // Waiting for execution time to be reached
