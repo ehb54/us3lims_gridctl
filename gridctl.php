@@ -25,11 +25,9 @@ $gLink    = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 if ( ! $gLink )
 {
-   write_log( "$self: Could not select DB $gDB - " . mysqli_error($gLink) );
-   //mail_to_admin( "fail", "Internal Error: Could not select DB $gDB" );
+   write_log( "$self: Could not select DB $gDB - " . mysqli_error() );
    mail_to_admin( "fail",
       "Internal Error: Could not select DB $gDB $dbhost $guser  Server: $servhost" );
-   //sleep(300);
    sleep(3);
    exit();
 }
@@ -653,6 +651,16 @@ function get_us3_data()
       return 0;
    }
 
+   $numrows =  mysqli_num_rows( $result );
+   if ( $numrows > 1 )
+   {  // Duplicate gfacIDs:  get last
+      $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
+               "FROM HPCAnalysisResult WHERE gfacID='$gfacID' " .
+               " ORDER BY HPCAnalysisResultID DESC LIMIT 1";
+      $result = mysqli_query( $us3_link, $query );
+   }
+
+
    list( $requestID, $updateTime ) = mysqli_fetch_array( $result );
    mysqli_close( $us3_link );
 
@@ -841,11 +849,16 @@ function get_local_status( $gfacID )
    global $cluster;
    global $self;
 
-   $is_slurm  = ( preg_match( "/jetstream/", $cluster )  ||
-	          preg_match( "/us3iab-node0/", $cluster ) );
-   $is_demel3 = preg_match( "/demeler3/", $cluster );
+   $is_demel3 = preg_match( "/demeler3/",   $cluster );
+   $is_jetstr = preg_match( "/jetstream/",  $cluster );
+   $is_chino  = preg_match( "/chinook/",    $cluster );
+   $is_umont  = preg_match( "/umontana/",   $cluster );
+   $is_us3iab = preg_match( "/us3iab/",     $cluster );
+   $is_slurm  = ( $is_jetstr  ||  $is_us3iab );
+   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont );
+   $ruser     = "us3";
 
-   if ( $is_slurm )
+   if ( $is_squeu )
       $cmd    = "squeue -j $gfacID 2>&1|tail -n 1";
    else
       $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
@@ -853,9 +866,9 @@ function get_local_status( $gfacID )
 //write_log( "$self cluster: $cluster" );
 //write_log( "$self gfacID: $gfacID" );
 
-   if ( ! preg_match( "/us3iab/", $cluster ) )
+   if ( ! $is_us3iab )
    {
-      $system = "$cluster.uthscsa.edu";
+      $system = "$cluster.uleth.ca";
       if ( $is_slurm )
          $system = "$cluster";
       $system = preg_replace( "/\-local/", "", $system );
@@ -864,8 +877,17 @@ function get_local_status( $gfacID )
       {
         $system = "demeler3.uleth.ca";
       }
+      if ( $is_chino )
+      {
+        $system = "chinook.hs.umt.edu";
+      }
+      if ( $is_umont )
+      {
+        $system = "login.gscc.umt.edu";
+        $ruser  = "bd142854e";
+      }
       
-      $cmd    = "/usr/bin/ssh -x us3@$system " . $cmd;
+      $cmd    = "/usr/bin/ssh -x $ruser@$system " . $cmd;
 //write_log( "$self  cmd: $cmd" );
    }
 
@@ -892,7 +914,7 @@ write_log( "$me:   num_try=$num_try  secwait=$secwait" );
    }
 
    $values = preg_split( "/\s+/", $result );
-   $jstat   = ( $is_slurm == 0 ) ? $values[ 9 ] : $values[ 5 ];
+   $jstat   = ( $is_squeu == 0 ) ? $values[ 9 ] : $values[ 5 ];
 write_log( "$self: get_local_status: job status = /$jstat/");
    switch ( $jstat )
    {
@@ -984,9 +1006,11 @@ function update_db( $message )
       return 0;
    }
 
+   $requestID = get_us3_data();
+
    $query = "UPDATE HPCAnalysisResult SET " .
             "lastMessage='" . mysqli_real_escape_string( $us3_link, $message ) . "'" .
-            "WHERE gfacID = '$gfacID' ";
+            "WHERE gfacID = '$gfacID' AND HPCAnalysisRequestID = '$requestID' ";
 
    mysqli_query( $us3_link, $query );
    mysqli_close( $us3_link );

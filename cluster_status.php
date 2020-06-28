@@ -194,11 +194,11 @@ function local_status()
       switch( $clname )
       {
          case 'us3iab-node0':
-         {
-            $host   = "us3@js-169-137.jetstream-cloud.org";
-	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
-echo "qstat=$qstat";
+         {  // USiaB local cluster using slurm
+//            $host   = "us3@js-169-137.jetstream-cloud.org";
 //            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
+  	         $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
+echo "qstat=$qstat";
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
             $knts   = $sparts[ 1 ];
@@ -212,7 +212,7 @@ echo "qstat=$qstat";
          }
          case 'us3iab-node1':
          case 'us3iab-devel':
-         {
+         {  // USiaB local cluster using pbs (torque)
             $qstat  = `/usr/bin/qstat -B 2>&1|tail -1`;
 
             $sparts = preg_split( '/\s+/', $qstat );
@@ -225,23 +225,7 @@ echo "qstat=$qstat";
                $sta    = "down";
             break;
          }
-         case 'alamo-local':
-         case 'alamo':
-         {
-            $host   = "us3@alamo.uthscsa.edu";
-            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 10 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
-            else
-               $sta    = "down";
-            break;
-         }
-
-        case 'demeler3-local':
+         case 'demeler3-local':
          {
             $host   = "us3@demeler3.uleth.ca";
             $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
@@ -249,21 +233,6 @@ echo "qstat=$qstat";
             $que    = $sparts[ 3 ];
             $run    = $sparts[ 4 ];
             $sta    = $sparts[ 10 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
-            else
-               $sta    = "down";
-            break;
-         }
-
-         case 'jacinto':
-         {
-            $host   = "us3@jacinto.uthscsa.edu";
-            $qstat  = `ssh $host '/opt/torque/bin/qstat -B 2>&1|tail -1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 9 ];
             if ( $sta == "Active" )
                $sta    = "up";
             else
@@ -339,6 +308,16 @@ echo "qstat=$qstat";
             $que    = $sparts[ 2 ];
             break;
          }
+         case 'juwels':
+         {
+            $host   = "gorbet1@juwels.fz-juelich.de";
+            $qstat  = `ssh $host '~gorbet1/scripts/qstat-juwels 2>null'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $run    = $sparts[ 1 ];
+            $que    = $sparts[ 2 ];
+             break;
+         }
          case 'jetstream-local':
          case 'jetstream':
          {
@@ -354,6 +333,63 @@ echo "qstat=$qstat";
             $tot    = $sparts[ 3 ];
             if ( $sta == "" )
                $sta    = "down";
+            break;
+         }
+         case 'chinook-local':
+         case 'chinook':
+         {
+            $host   = "us3@chinook.hs.umt.edu";
+            $qstat  = `ssh $host '/home/us3/scripts/cstat'`;
+            if ( $qstat == "" )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $sta    = "up";
+               $sparts = preg_split( '/\s+/', $qstat );
+               $tot    = $sparts[ 1 ];
+               $que    = $sparts[ 3 ];
+               $run    = $sparts[ 5 ];
+            }
+            break;
+         }
+         case 'umontana-local':
+         {
+            $host   = "bd142854e@login.gscc.umt.edu";
+            $qstat  = `ssh $host '/home/bd142854e/bin/cstat 2>&1'`;
+            if ( $qstat == "" )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $sta    = "up";
+               $sparts = preg_split( '/\s+/', $qstat );
+               $tot    = $sparts[ 1 ];
+               $run    = $sparts[ 3 ];
+               $que    = $sparts[ 5 ];
+            }
+            break;
+         }
+         case 'taito-local':
+         {
+            $host   = "rb_2001068_taito01@taito.csc.fi";
+            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_taito_robot $host '/homeappl/home/rb_2001068_taito01/scripts/cstat 2>&1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 1 ];
+            $run    = '0';
+            $que    = '0';
+            $sta    = "up";
+            if ( $tot == ''  ||  $tot == '0' )
+            {
+               $sta    = "down";
+            }
+            else
+            {
+               $run    = $sparts[ 3 ];
+               $que    = $sparts[ 5 ];
+            }
             break;
          }
          case 'puhti-local':
