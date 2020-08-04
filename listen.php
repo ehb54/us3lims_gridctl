@@ -4,6 +4,12 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 $us3etc = exec( "ls -d ~us3/lims/etc" );
 include "$us3bin/listen-config.php";
 
+# add locking
+if ( isset( $lock_dir ) ) {
+    $lock_main_script_name  = __FILE__;
+    require "$us3bin/lock.php";
+}
+
 $socket = socket_create(  AF_INET,  SOCK_DGRAM,  SOL_UDP );
 
 // Listen on all interfaces
