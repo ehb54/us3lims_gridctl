@@ -27,9 +27,9 @@ $lock[ "submit"    ]  = "$lock_dir/submitctl.php.lock";
 global $cmd;
 $cmd = array();
 
-$cmd[ "listen"    ] = "listen.php";
-$cmd[ "manage"    ] = "manage-us3-pipe.php";
-$cmd[ "submit"    ] = "submitctl.php";
+$cmd[ "listen"    ] = "$us3bin/listen.php";
+$cmd[ "manage"    ] = "$us3bin/manage-us3-pipe.php";
+$cmd[ "submit"    ] = "$us3bin/submitctl.php";
 
 function stop() {
     global $lock;
@@ -92,6 +92,7 @@ function start() {
             continue;
         }
         $run = "/usr/bin/php $v";
+        # echo __FILE__ . " running exec( 'nohup $run > /dev/null 2>&1&' )\n";
         exec( "nohup $run > /dev/null 2>&1&" );
     }
     sleep( SLEEPTIME );
