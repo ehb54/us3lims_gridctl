@@ -1,7 +1,7 @@
 <?php
 
-if ( count( $argv ) != 2 ) {
-    echo "usage: finishprocess.php ID\n";
+if ( count( $argv ) != 3 ) {
+    echo "usage: finishprocess.php ID status\n";
     exit;
 }
 
@@ -46,7 +46,8 @@ function debug_json( $msg, $json ) {
 
 # Gary: should we have our own log? currently log is "udp.log" 
 
-$ID = $argv[ 1 ];
+$ID     = $argv[ 1 ];
+$status = $argv[ 2 ];
 
 write_logl( "$self: Starting" );
 
@@ -88,7 +89,7 @@ $status_json->{ "processed" }[] = $stage;
     
 debug_json( "after shift to ${processing_key}", $status_json );
 
-$query  = "UPDATE ${submit_request_table_name} SET status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
+$query  = "UPDATE ${submit_request_table_name} SET status='$status', status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
 $result = mysqli_query( $db_handle, $query );
 write_logl( "$self: AutoflowAnalysis submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
 if ( !$result ) {

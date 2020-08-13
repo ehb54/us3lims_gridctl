@@ -24,6 +24,7 @@ $submit_request_table_name         = "AutoflowAnalysis";
 $submit_request_history_table_name = "AutoflowAnalysisHistory";
 $id_field                          = "RequestID";
 $processing_key                    = "submitted";
+$failed_status                     = [ "failed" => 1, "error" => 1 ];
 # ********* end admin defines ***************
 
 
@@ -96,7 +97,10 @@ while( 1 ) {
             continue;
         }
 
-        if ( isset( $status_json->{ "to_process" } ) &&
+        $failed = array_key_exists( $obj->{ 'status' }, $failed_status );
+
+        if ( !$failed &&
+             isset( $status_json->{ "to_process" } ) &&
              count( $status_json->{ "to_process" } ) ) {
             $stage = array_shift( $status_json->{ "to_process" } );
             $status_json->{ $processing_key } = $stage;
@@ -119,8 +123,12 @@ while( 1 ) {
             continue;
         } 
         
-        # must be completed
-        write_logl( "$self: AutoflowAnalysis ${id_field} $ID all processing complete, moving to history", 1 );
+        # must be completed or failed
+        if ( $failed ) {
+            write_logl( "$self: AutoflowAnalysis ${id_field} $ID all processing complete, moving to history", 1 );
+        } else {
+            write_logl( "$self: AutoflowAnalysis ${id_field} $ID processing FAILED, moving to history", 1 );
+        }
 
         $query  = "INSERT ${submit_request_history_table_name} SELECT * FROM ${submit_request_table_name} WHERE ${id_field} = ${ID}";
         $result = mysqli_query( $db_handle, $query );
