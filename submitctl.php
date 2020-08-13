@@ -22,6 +22,8 @@ $logging_level      = 2;
 $db                                = "gfac";
 $submit_request_table_name         = "AutoflowAnalysis";
 $submit_request_history_table_name = "AutoflowAnalysisHistory";
+$id_field                          = "RequestID";
+$processing_key                    = "submitted";
 # ********* end admin defines ***************
 
 
@@ -62,7 +64,7 @@ while( 1 ) {
     write_logl( "$self: checking mysql", 2 );
 
     # read from mysql - $submit_request_table_name
-    $query        = "SELECT ID, us3_db_name, Cluster_default, status, status_json, create_user FROM ${submit_request_table_name}";
+    $query        = "SELECT ${id_field}, us3_db_name, Cluster_default, status, status_json, create_user FROM ${submit_request_table_name}";
     $outer_result = mysqli_query( $db_handle, $query );
 
     if ( !$outer_result || !$outer_result->num_rows ) {
@@ -79,38 +81,38 @@ while( 1 ) {
     $work_done = 0;
 
     while ( $obj =  mysqli_fetch_object( $outer_result ) ) {
-        if ( !isset( $obj->{ 'ID' } ) ) {
+        if ( !isset( $obj->{ $id_field } ) ) {
             write_logl( "$self: critical: no id found in mysql result!" );
             continue;
         }
-        $ID = $obj->{ 'ID' };
+        $ID = $obj->{ $id_field };
 
         $status_json = json_decode( $obj->{"status_json"} );
         debug_json( "after fetch, decode", $status_json );
         
-        if ( isset( $status_json->{ "processing" } ) &&
-             !empty( $status_json->{ "processing" } ) ) {
-            write_logl( "$self: AutoflowAnalysis ID $ID is processing", 1 );
+        if ( isset( $status_json->{ $processing_key } ) &&
+             !empty( $status_json->{ $processing_key } ) ) {
+            write_logl( "$self: AutoflowAnalysis ${id_field} $ID is ${processing_key}", 1 );
             continue;
         }
 
         if ( isset( $status_json->{ "to_process" } ) &&
              count( $status_json->{ "to_process" } ) ) {
             $stage = array_shift( $status_json->{ "to_process" } );
-            $status_json->{"processing"} = $stage;
+            $status_json->{ $processing_key } = $stage;
             
-            debug_json( "after shift to processing", $status_json );
+            debug_json( "after shift to ${processing_key}", $status_json );
 
-            $query  = "UPDATE ${submit_request_table_name} SET status_json='" . json_encode( $status_json ) . "' WHERE ID = ${ID}";
+            $query  = "UPDATE ${submit_request_table_name} SET status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
             $result = mysqli_query( $db_handle, $query );
 
             
 
-            write_logl( "$self: AutoflowAnalysis submitting  ID $ID stage " . json_encode( $stage ), 1 );
+            write_logl( "$self: AutoflowAnalysis submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
             if ( !$result ) {
-                write_logl( "$self: error updating table ${submit_request_table_name} ID ${ID} status_json.", 0 );
+                write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 0 );
             } else {
-                write_logl( "$self: success updating table ${submit_request_table_name} ID ${ID} status_json.", 2 );
+                write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 2 );
             }
             # ADD SUBMIT CALL
             $work_done = 1;
@@ -118,25 +120,25 @@ while( 1 ) {
         } 
         
         # must be completed
-        write_logl( "$self: AutoflowAnalysis ID $ID processing complete, moving to history", 1 );
+        write_logl( "$self: AutoflowAnalysis ${id_field} $ID all processing complete, moving to history", 1 );
 
-        $query  = "INSERT ${submit_request_history_table_name} SELECT * FROM ${submit_request_table_name} WHERE ID = ${ID}";
+        $query  = "INSERT ${submit_request_history_table_name} SELECT * FROM ${submit_request_table_name} WHERE ${id_field} = ${ID}";
         $result = mysqli_query( $db_handle, $query );
 
         if ( !$result ) {
-            write_logl( "$self: error copying ID ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 0 );
+            write_logl( "$self: error copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 0 );
         } else {
-            write_logl( "$self: success copying ID ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 2 );
+            write_logl( "$self: success copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 2 );
             # $result->free_result();
         }        
         
-        $query  = "DELETE FROM ${submit_request_table_name} WHERE ID = ${ID}";
+        $query  = "DELETE FROM ${submit_request_table_name} WHERE ${id_field} = ${ID}";
         $result = mysqli_query( $db_handle, $query );
         
         if ( !$result ) {
-            write_logl( "$self: error deleting ID ${ID} from ${submit_request_table_name}.", 0 );
+            write_logl( "$self: error deleting ${id_field} ${ID} from ${submit_request_table_name}.", 0 );
         } else {
-            write_logl( "$self: success deleting ID ${ID} from ${submit_request_table_name}.", 2 );
+            write_logl( "$self: success deleting ${id_field} ${ID} from ${submit_request_table_name}.", 2 );
             # $result->free_result();
         }
         $work_done = 1;

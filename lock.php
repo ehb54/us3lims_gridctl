@@ -29,13 +29,13 @@ function tryLock() {
     # If lock file exists, check if stale.  If exists and is not stale, return TRUE
     # Else, create lock file and return FALSE.
 
-    echo "tryLock() 0\n";
+    #    echo "tryLock() 0\n";
 
     if (@symlink("/proc/" . getmypid(), LOCK_FILE) !== FALSE) # the @ in front of 'symlink' is to suppress the NOTICE you get if the LOCK_FILE exists
     {
         return true;
     }
-    echo "tryLock() 1\n";
+    #    echo "tryLock() 1\n";
 
     # link already exists
     # check if it's stale
@@ -51,7 +51,7 @@ function tryLock() {
         $isstale = true;
         echo "is stale 2\n";
     }
-    echo "tryLock() 2\n";
+    #    echo "tryLock() 2\n";
 
     if ( !$isstale && is_dir( $link ) ) {
         # make sure the cmdline exists & matches expected
@@ -71,19 +71,19 @@ function tryLock() {
             }
         }
     }
-    echo "tryLock() 3\n";
+    #    echo "tryLock() 3\n";
 
     if (is_link(LOCK_FILE) && !is_dir(LOCK_FILE)) {
         $isstale = true;
     }
 
-    echo "tryLock() 4\n";
+    #    echo "tryLock() 4\n";
     if ( $isstale ) {
         unlink(LOCK_FILE);
         # try to lock again
         return tryLock();
     }
-    echo "tryLock() 5\n";
+    #    echo "tryLock() 5\n";
     return false;
 }
 
