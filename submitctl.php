@@ -7,13 +7,13 @@ include "$class_dir/experiment_status.php";
 # ********* start user defines *************
 
 # the polling interval
-$poll_sleep_seconds = 10;
+$poll_sleep_seconds = 30;
 
 # logging_level 
 # 0 : minimal messages (expected value for production)
-# 1 : add detailed db messages
+# 1 : add some db messages
 # 2 : add idle polling messages
-$logging_level      = 2;
+$logging_level      = 1;
     
 # ********* end user defines ***************
 
@@ -125,7 +125,7 @@ while( 1 ) {
             continue;
         }
 
-        write_logl( "$self: found $outer_result->num_rows in ${submit_request_table_name} to check on db ${lims_db}", 1 );
+        write_logl( "$self: found $outer_result->num_rows in ${submit_request_table_name} to check on db ${lims_db}", 2 );
 
         while ( $obj =  mysqli_fetch_object( $outer_result ) ) {
             if ( !isset( $obj->{ $id_field } ) ) {
@@ -139,7 +139,7 @@ while( 1 ) {
             
             if ( isset( $status_json->{ $processing_key } ) &&
                  !empty( $status_json->{ $processing_key } ) ) {
-                write_logl( "$self: AutoflowAnalysis ${id_field} $ID is ${processing_key}", 1 );
+                write_logl( "$self: AutoflowAnalysis ${id_field} $ID is ${processing_key}", 2 );
                 continue;
             }
 
