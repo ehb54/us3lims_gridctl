@@ -1,10 +1,7 @@
-USE gfac;
-
 DROP TABLE IF EXISTS AutoflowAnalysis;
 CREATE TABLE AutoflowAnalysis (
   RequestID         int(11)      NOT NULL AUTO_INCREMENT,
   TripleName        text         NOT NULL,
-  us3_db_name       text         DEFAULT "unknown",
   Cluster_default   text         DEFAULT "localhost",
   Filename          text,
   AprofileGUID      char(36)     NOT NULL,
@@ -29,7 +26,6 @@ DROP TABLE IF EXISTS AutoflowAnalysisHistory;
 CREATE TABLE AutoflowAnalysisHistory (
   RequestID         int(11)      NOT NULL AUTO_INCREMENT,
   TripleName        text         NOT NULL,
-  us3_db_name       text         DEFAULT "unknown",
   Cluster_default   text         DEFAULT "localhost",
   Filename          text,
   AprofileGUID      char(36)     NOT NULL,

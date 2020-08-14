@@ -2,8 +2,6 @@
 
 # check if already running and register pid
     
-echo "php lock.php ... __FILE__ is " . __FILE__ . "\n"; 
-
 if ( !isset( $lock_dir ) ) {
     fwrite( STDERR, "variable \$lock_dir not set\n" );
     exit(-1);
@@ -22,8 +20,8 @@ if ( !is_dir( $lock_dir ) ) {
 define('LOCK_FILE', "$lock_dir/" . basename( $lock_main_script_name ) . ".lock");
 define('EXPECTED_CMDLINE', basename( $lock_main_script_name ) );
 
-echo "LOCK_FILE: " . LOCK_FILE . "\n";
-echo "EXPECTED_CMDLINE: " . EXPECTED_CMDLINE . "\n";
+# echo "LOCK_FILE: " . LOCK_FILE . "\n";
+# echo "EXPECTED_CMDLINE: " . EXPECTED_CMDLINE . "\n";
 
 function tryLock() {
     # If lock file exists, check if stale.  If exists and is not stale, return TRUE

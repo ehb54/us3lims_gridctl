@@ -1,7 +1,7 @@
 <?php
 
-if ( count( $argv ) != 3 ) {
-    echo "usage: finishprocess.php ID status\n";
+if ( count( $argv ) != 4 ) {
+    echo "usage: finishprocess.php db ID status\n";
     exit;
 }
 
@@ -46,8 +46,9 @@ function debug_json( $msg, $json ) {
 
 # Gary: should we have our own log? currently log is "udp.log" 
 
-$ID     = $argv[ 1 ];
-$status = $argv[ 2 ];
+$lims_db = $argv[ 1 ];
+$ID      = $argv[ 2 ];
+$status  = $argv[ 3 ];
 
 write_logl( "$self: Starting" );
 
@@ -61,14 +62,14 @@ do {
 
 write_logl( "$self: connected to mysql: $dbhost, $user, $db.", 2 );
 
-$query        = "SELECT status_json  FROM ${submit_request_table_name} WHERE ${id_field}=$ID";
+$query        = "SELECT status_json FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID";
 $outer_result = mysqli_query( $db_handle, $query );
 
 if ( !$outer_result || !$outer_result->num_rows ) {
     if ( $outer_result ) {
         # $outer_result->free_result();
     }
-    write_logl( "$self: ${id_field} $ID not found in ${submit_request_table_name}", 2 );
+    write_logl( "$self: ${id_field} $ID not found in ${lims_db}.${submit_request_table_name}", 2 );
     exit;
 }
 
@@ -79,7 +80,7 @@ debug_json( "after fetch, decode", $status_json );
         
 if ( !isset( $status_json->{ $processing_key } ) ||
      empty( $status_json->{ $processing_key } ) ) {
-    write_logl( "$self: AutoflowAnalysis ${id_field} $ID is NOT ${processing_key}", 1 );
+    write_logl( "$self: AutoflowAnalysis db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
     exit;
 }
 
@@ -89,11 +90,11 @@ $status_json->{ "processed" }[] = $stage;
     
 debug_json( "after shift to ${processing_key}", $status_json );
 
-$query  = "UPDATE ${submit_request_table_name} SET status='$status', status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
+$query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='$status', status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
 $result = mysqli_query( $db_handle, $query );
-write_logl( "$self: AutoflowAnalysis submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
+write_logl( "$self: AutoflowAnalysis db ${lims_db} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
 if ( !$result ) {
-    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 0 );
+    write_logl( "$self: error updating db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} status_json.", 0 );
 } else {
-    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 2 );
+    write_logl( "$self: success updating db db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} status_json.", 2 );
 }
