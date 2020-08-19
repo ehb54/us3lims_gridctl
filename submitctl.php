@@ -13,8 +13,8 @@ $poll_sleep_seconds = 30;
 # 0 : minimal messages (expected value for production)
 # 1 : add some db messages
 # 2 : add idle polling messages
-$logging_level      = 1;
-    
+$logging_level      = 2;
+
 # ********* end user defines ***************
 
 # ********* start admin defines *************
@@ -115,7 +115,6 @@ while( 1 ) {
         
         # read from mysql - $submit_request_table_name
         $query        = "SELECT ${id_field}, Cluster_default, status, status_json, create_user FROM ${lims_db}.${submit_request_table_name}";
-        echo "query is\n$query\n";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
