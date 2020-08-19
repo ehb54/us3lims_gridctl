@@ -8,7 +8,6 @@ CREATE TABLE AutoflowAnalysis (
   Filename          text,
   AprofileGUID      char(36)     NOT NULL,
 
-  FinalStage        text         NOT NULL,
   CurrentGfacID     varchar(80)  DEFAULT NULL,
 
   status_json       longtext     ,
@@ -32,7 +31,6 @@ CREATE TABLE AutoflowAnalysisHistory (
   Filename          text,
   AprofileGUID      char(36)     NOT NULL,
   
-  FinalStage        text         NOT NULL,
   CurrentGfacID     varchar(80)  DEFAULT NULL,
 
   status_json       longtext     ,
@@ -47,3 +45,5 @@ CREATE TABLE AutoflowAnalysisHistory (
   PRIMARY KEY (RequestID)
   ) ENGINE=MyISAM DEFAULT CHARSET=latin1;
 
+GRANT ALL ON gfac.* TO 'us3php'@'localhost';
+GRANT SELECT, INSERT, DELETE, UPDATE ON `uslims3_%`.* to 'us3php'@'localhost';
