@@ -1,9 +1,11 @@
 <?php
 
 # begin to build up data in replacement of queue_setup_1,2,3.php in prep for 2DSA_? submit
+
+$self = __FILE__;
     
 $notes = <<<__EOD
-usage: __FILE__ db ID
+usage: $self db ID
 
 1. finds db.AnalysisRequest with a RequestID = ID
 2. finds associated db.analysisprofile
@@ -69,6 +71,10 @@ function db_obj_result( $db_handle, $query ) {
         exit;
     }
 
+    if ( $result->num_rows > 1 ) {
+        write_logl( "db query returned " . $result->num_rows . " rows : $query" );
+    }    
+
     return mysqli_fetch_object( $result );
 }
 
@@ -108,7 +114,7 @@ write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETT
 
 # get analysisprofile record
 
-$aprofileguid = $autoflowanalysis->{ 'AprofileGUID' };
+$aprofileguid = $autoflowanalysis->{ 'aprofileGUID' };
 
 $analysisprofile = db_obj_result( $db_handle, 
                                   "SELECT * FROM ${lims_db}.analysisprofile WHERE aprofileGUID='${aprofileguid}'" );
@@ -124,7 +130,7 @@ write_logl( "analysisprofile's xml in json:\n" . json_encode( $xmljson, JSON_PRE
 $xmljsonfilename = $xmljson->{ 'analysis_profile' }->{ '@attributes' }->{ 'name' };
 $xmljsonguid     = $xmljson->{ 'analysis_profile' }->{ '@attributes' }->{ 'guid' };
 $aprofilename    = $analysisprofile->{'name'};
-$aaname          = $autoflowanalysis->{'Filename'};
+$aaname          = $autoflowanalysis->{'filename'};
 
 if ( $xmljsonfilename != $aprofilename ||
      $xmljsonfilename != $aaname ) {
