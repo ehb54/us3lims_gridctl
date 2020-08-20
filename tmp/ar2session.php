@@ -37,9 +37,9 @@ $logging_level      = 3;
 # ********* start admin defines *************
 # these should only be changed by developers
 $db                                = "gfac";
-$submit_request_table_name         = "AutoflowAnalysis";
-$submit_request_history_table_name = "AutoflowAnalysisHistory";
-$id_field                          = "RequestID";
+$submit_request_table_name         = "autoflowAnalysis";
+$submit_request_history_table_name = "autoflowAnalysisHistory";
+$id_field                          = "requestID";
 $processing_key                    = "submitted";
 # ********* end admin defines ***************
 
@@ -90,18 +90,18 @@ write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 # get AutoflowAnalysis record
 
 $autoflowanalysis = db_obj_result( $db_handle, 
-                                   "SELECT Cluster_default, TripleName, Filename, AprofileGUID, status_json FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
+                                   "SELECT clusterDefault, tripleName, filename, aprofileGUID, statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
 
-$status_json = json_decode( $autoflowanalysis->{"status_json"} );
-debug_json( "after fetch, decode", $status_json );
+$statusJson = json_decode( $autoflowanalysis->{"statusJson"} );
+debug_json( "after fetch, decode", $statusJson );
         
-if ( !isset( $status_json->{ $processing_key } ) ||
-     empty( $status_json->{ $processing_key } ) ) {
+if ( !isset( $statusJson->{ $processing_key } ) ||
+     empty( $statusJson->{ $processing_key } ) ) {
     write_logl( "AutoflowAnalysis db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
     exit;
 }
 
-$stage = $status_json->{ $processing_key };
+$stage = $statusJson->{ $processing_key };
 
 write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETTY_PRINT ) );
 

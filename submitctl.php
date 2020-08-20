@@ -20,9 +20,9 @@ $logging_level      = 2;
 # ********* start admin defines *************
 # these should only be changed by developers
 $db                                = "gfac";
-$submit_request_table_name         = "AutoflowAnalysis";
-$submit_request_history_table_name = "AutoflowAnalysisHistory";
-$id_field                          = "RequestID";
+$submit_request_table_name         = "autoflowAnalysis";
+$submit_request_history_table_name = "autoflowAnalysisHistory";
+$id_field                          = "requestID";
 $processing_key                    = "submitted";
 $failed_status                     = [ "failed" => 1, "error" => 1 ];
 # ********* end admin defines ***************
@@ -81,10 +81,10 @@ foreach ( $trylimsdbs as $v ) {
     $msg = "checking db $v for autoflow tables";
     echo  "$msg\n";
     $success = false;
-    $query  = "select count(*) from ${v}.AutoflowAnalysis";
+    $query  = "select count(*) from ${v}.${submit_request_table_name}";
     $result = mysqli_query( $db_handle, $query );
     if ( $result ) {
-        $query  = "select count(*) from ${v}.AutoflowAnalysisHistory";
+        $query  = "select count(*) from ${v}.${submit_request_history_table_name}";
         $result = mysqli_query( $db_handle, $query );
         if ( $result ) {
             $success = true;
@@ -95,13 +95,13 @@ foreach ( $trylimsdbs as $v ) {
     if ( $success ) {
         write_logl( "$self: added db $v for autoflow submission control", 1 );
     } else {
-        write_logl( "$self: db $v does not have AutoflowAnalysis tables, ignoring", 1 );
+        write_logl( "$self: db $v does not have ${submit_request_history_table_name} tables, ignoring", 1 );
     }
 }
 unset( $trylimsdbs );
 
 if ( !count( $limsdbs ) ) {
-    write_logl( "$self: found no databases with AutoflowAnalysis tables, quitting", 0 );
+    write_logl( "$self: found no databases with ${submit_request_history_table_name}, quitting", 0 );
     exit;
 }
     
@@ -114,7 +114,7 @@ while( 1 ) {
         write_logl( "$self: checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, Cluster_default, status, status_json, create_user FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, statusJson, createUser FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -133,33 +133,33 @@ while( 1 ) {
             }
             $ID = $obj->{ $id_field };
 
-            $status_json = json_decode( $obj->{"status_json"} );
-            debug_json( "after fetch, decode", $status_json );
+            $statusJson = json_decode( $obj->{"statusJson"} );
+            debug_json( "after fetch, decode", $statusJson );
             
-            if ( isset( $status_json->{ $processing_key } ) &&
-                 !empty( $status_json->{ $processing_key } ) ) {
-                write_logl( "$self: AutoflowAnalysis ${id_field} $ID is ${processing_key}", 2 );
+            if ( isset( $statusJson->{ $processing_key } ) &&
+                 !empty( $statusJson->{ $processing_key } ) ) {
+                write_logl( "$self: autoflowAnalysis ${id_field} $ID is ${processing_key}", 2 );
                 continue;
             }
 
             $failed = array_key_exists( $obj->{ 'status' }, $failed_status );
 
             if ( !$failed &&
-                 isset( $status_json->{ "to_process" } ) &&
-                 count( $status_json->{ "to_process" } ) ) {
-                $stage = array_shift( $status_json->{ "to_process" } );
-                $status_json->{ $processing_key } = $stage;
+                 isset( $statusJson->{ "to_process" } ) &&
+                 count( $statusJson->{ "to_process" } ) ) {
+                $stage = array_shift( $statusJson->{ "to_process" } );
+                $statusJson->{ $processing_key } = $stage;
                 
-                debug_json( "after shift to ${processing_key}", $status_json );
+                debug_json( "after shift to ${processing_key}", $statusJson );
 
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
-                write_logl( "$self: AutoflowAnalysis submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
+                write_logl( "$self: ${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 0 );
+                    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
                 } else {
-                    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} status_json.", 2 );
+                    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
                 # ADD SUBMIT CALL
                 $work_done = 1;
@@ -168,9 +168,9 @@ while( 1 ) {
             
             # must be completed or failed
             if ( $failed ) {
-                write_logl( "$self: AutoflowAnalysis ${id_field} $ID all processing complete, moving to history", 1 );
+                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
             } else {
-                write_logl( "$self: AutoflowAnalysis ${id_field} $ID processing FAILED, moving to history", 1 );
+                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
             }
 
             $query  = "INSERT ${lims_db}.${submit_request_history_table_name} SELECT * FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field} = ${ID}";

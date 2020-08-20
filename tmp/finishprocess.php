@@ -25,9 +25,9 @@ $logging_level      = 2;
 # ********* start admin defines *************
 # these should only be changed by developers
 $db                                = "gfac";
-$submit_request_table_name         = "AutoflowAnalysis";
-$submit_request_history_table_name = "AutoflowAnalysisHistory";
-$id_field                          = "RequestID";
+$submit_request_table_name         = "autoflowAnalysis";
+$submit_request_history_table_name = "autoflowAnalysisHistory";
+$id_field                          = "requestID";
 $processing_key                    = "submitted";
 # ********* end admin defines ***************
 
@@ -62,7 +62,7 @@ do {
 
 write_logl( "$self: connected to mysql: $dbhost, $user, $db.", 2 );
 
-$query        = "SELECT status_json FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID";
+$query        = "SELECT statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID";
 $outer_result = mysqli_query( $db_handle, $query );
 
 if ( !$outer_result || !$outer_result->num_rows ) {
@@ -75,26 +75,26 @@ if ( !$outer_result || !$outer_result->num_rows ) {
 
 $obj =  mysqli_fetch_object( $outer_result );
 
-$status_json = json_decode( $obj->{"status_json"} );
-debug_json( "after fetch, decode", $status_json );
+$statusJson = json_decode( $obj->{"statusJson"} );
+debug_json( "after fetch, decode", $statusJson );
         
-if ( !isset( $status_json->{ $processing_key } ) ||
-     empty( $status_json->{ $processing_key } ) ) {
-    write_logl( "$self: AutoflowAnalysis db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
+if ( !isset( $statusJson->{ $processing_key } ) ||
+     empty( $statusJson->{ $processing_key } ) ) {
+    write_logl( "$self: ${submit_request_table_name} db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
     exit;
 }
 
-$stage = $status_json->{ $processing_key };
-unset( $status_json->{ $processing_key } );
-$status_json->{ "processed" }[] = $stage;
+$stage = $statusJson->{ $processing_key };
+unset( $statusJson->{ $processing_key } );
+$statusJson->{ "processed" }[] = $stage;
     
-debug_json( "after shift to ${processing_key}", $status_json );
+debug_json( "after shift to ${processing_key}", $statusJson );
 
-$query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='$status', status_json='" . json_encode( $status_json ) . "' WHERE ${id_field} = ${ID}";
+$query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='$status', statusJson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
 $result = mysqli_query( $db_handle, $query );
-write_logl( "$self: AutoflowAnalysis db ${lims_db} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
+write_logl( "$self: ${submit_request_table_name} db ${lims_db} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
 if ( !$result ) {
-    write_logl( "$self: error updating db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} status_json.", 0 );
+    write_logl( "$self: error updating db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
 } else {
-    write_logl( "$self: success updating db db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} status_json.", 2 );
+    write_logl( "$self: success updating db db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
 }
