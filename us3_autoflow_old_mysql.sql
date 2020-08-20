@@ -28,6 +28,7 @@ CREATE TABLE autoflowAnalysisHistory (
   clusterDefault    text         ,
   filename          text         NOT NULL,
   aprofileGUID      char(36)     NOT NULL,
+  invID             int(11)      NOT NULL,
   currentGfacID     varchar(80)  DEFAULT NULL,
   statusJson        longtext     ,
   status            text         ,
