@@ -72,7 +72,7 @@ function db_obj_result( $db_handle, $query ) {
     }
 
     if ( $result->num_rows > 1 ) {
-        write_logl( "db query returned " . $result->num_rows . " rows : $query" );
+        write_logl( "WARNING: db query returned " . $result->num_rows . " rows : $query" );
     }    
 
     return mysqli_fetch_object( $result );
@@ -96,7 +96,7 @@ write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 # get AutoflowAnalysis record
 
 $autoflowanalysis = db_obj_result( $db_handle, 
-                                   "SELECT clusterDefault, tripleName, filename, aprofileGUID, statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
+                                   "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
 
 $statusJson = json_decode( $autoflowanalysis->{"statusJson"} );
 debug_json( "after fetch, decode", $statusJson );
@@ -107,8 +107,9 @@ if ( !isset( $statusJson->{ $processing_key } ) ||
     exit;
 }
 
-$stage = $statusJson->{ $processing_key };
+$stage  = $statusJson->{ $processing_key };
 $triple = $autoflowanalysis->{ 'tripleName' };
+$invID  = $autoflowanalysis->{ 'invID' };
 
 write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETTY_PRINT ) );
 
@@ -151,4 +152,9 @@ $editdata = db_obj_result( $db_handle,
                           "select editedDataID, filename from ${lims_db}.editedData where filename like '${aaname}%${triple}%'" );
 
 echo json_encode( $editdata, JSON_PRETTY_PRINT ) . "\n";
+
+$person = db_obj_result( $db_handle,
+                          "select * from ${lims_db}.people where personID='${invID}'" );
+
+echo json_encode( $person, JSON_PRETTY_PRINT ) . "\n";
 
