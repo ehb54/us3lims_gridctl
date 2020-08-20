@@ -1,49 +1,44 @@
 # seriously crippled version for obsolete mysql versions
 
-DROP TABLE IF EXISTS AutoflowAnalysis;
-CREATE TABLE AutoflowAnalysis (
-  RequestID         int(11)      NOT NULL AUTO_INCREMENT,
-  TripleName        text         NOT NULL,
-  Cluster_default   text         ,
-  Filename          text,
-  AprofileGUID      char(36)     NOT NULL,
-
-  CurrentGfacID     varchar(80)  DEFAULT NULL,
-
-  status_json       longtext     ,
-
+DROP TABLE IF EXISTS autoflowAnalysis;
+CREATE TABLE autoflowAnalysis (
+  requestID         int(11)      NOT NULL AUTO_INCREMENT,
+  tripleName        text         NOT NULL,
+  clusterDefault    text         ,
+  filename          text         NOT NULL,
+  aprofileGUID      char(36)     NOT NULL,
+  invID             int(11)      NOT NULL,
+  currentGfacID     varchar(80)  DEFAULT NULL,
+  statusJson        longtext     ,
   status            text         ,
-  status_msg        text         ,
-  create_time       timestamp    DEFAULT CURRENT_TIMESTAMP,
-  update_time       timestamp    ,
-  create_user       varchar(128) ,
-  update_user       varchar(128) ,
+  statusMsg         text         ,
+  createTime        timestamp    DEFAULT CURRENT_TIMESTAMP,
+  updateTime        timestamp    ,
+  createUser        varchar(128) ,
+  updateUser        varchar(128) ,
 
   PRIMARY KEY (RequestID)
-  ) ENGINE=MyISAM DEFAULT CHARSET=latin1;
+  ) ENGINE=InnoDB;
 
 
-DROP TABLE IF EXISTS AutoflowAnalysisHistory;
-CREATE TABLE AutoflowAnalysisHistory (
-  RequestID         int(11)      NOT NULL AUTO_INCREMENT,
-  TripleName        text         NOT NULL,
-  Cluster_default   text         ,
-  Filename          text,
-  AprofileGUID      char(36)     NOT NULL,
-  
-  CurrentGfacID     varchar(80)  DEFAULT NULL,
-
-  status_json       longtext     ,
-
+DROP TABLE IF EXISTS autoflowAnalysisHistory;
+CREATE TABLE autoflowAnalysisHistory (
+  requestID         int(11)      NOT NULL AUTO_INCREMENT,
+  tripleName        text         NOT NULL,
+  clusterDefault    text         ,
+  filename          text         NOT NULL,
+  aprofileGUID      char(36)     NOT NULL,
+  currentGfacID     varchar(80)  DEFAULT NULL,
+  statusJson        longtext     ,
   status            text         ,
-  status_msg        text         ,
-  create_time       timestamp    DEFAULT CURRENT_TIMESTAMP,
-  update_time       timestamp    ,
-  create_user       varchar(128) ,
-  update_user       varchar(128) ,
+  statusMsg         text         ,
+  createTime        timestamp    DEFAULT CURRENT_TIMESTAMP,
+  updateTime        timestamp    ,
+  createUser        varchar(128) ,
+  updateUser        varchar(128) ,
 
   PRIMARY KEY (RequestID)
-  ) ENGINE=MyISAM DEFAULT CHARSET=latin1;
+  ) ENGINE=InnoDB;
 
 GRANT ALL ON gfac.* TO 'us3php'@'localhost';
 GRANT SELECT, INSERT, DELETE, UPDATE ON `uslims3_%`.* to 'us3php'@'localhost';
