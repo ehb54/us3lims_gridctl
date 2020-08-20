@@ -102,6 +102,7 @@ if ( !isset( $statusJson->{ $processing_key } ) ||
 }
 
 $stage = $statusJson->{ $processing_key };
+$triple = $autoflowanalysis->{ 'tripleName' };
 
 write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETTY_PRINT ) );
 
@@ -130,6 +131,18 @@ if ( $xmljsonfilename != $aprofilename ||
     write_logl( "table name inconsistencies $xmljsonfilename vs $aprofilename vs $aaname" );
 }
 
-$autoflow = db_obj_result( $db_handle, 
-                           "SELECT * FROM ${lims_db}.autoflow WHERE aprofileGUID='${aprofileguid}'" );
+write_logl( "analysisprofile filename $aaname triplename $triple" );
+
+# $autoflow = db_obj_result( $db_handle, 
+#                           "SELECT * FROM ${lims_db}.autoflow WHERE aprofileGUID='${aprofileguid}'" );
+
+$rawdata = db_obj_result( $db_handle,
+                          "select rawDataID, filename from ${lims_db}.rawData where filename like '${aaname}%${triple}%'" );
+
+echo json_encode( $rawdata, JSON_PRETTY_PRINT ) . "\n";
+
+$editdata = db_obj_result( $db_handle,
+                          "select editedDataID, filename from ${lims_db}.editedData where filename like '${aaname}%${triple}%'" );
+
+echo json_encode( $editdata, JSON_PRETTY_PRINT ) . "\n";
 
