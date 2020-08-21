@@ -158,3 +158,33 @@ $person = db_obj_result( $db_handle,
 
 echo json_encode( $person, JSON_PRETTY_PRINT ) . "\n";
 
+$clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
+
+echo "personid:" .  $person->{'personID'} . "\n";
+
+$_SESSION = [];
+
+$_SESSION[ 'id' ]               = $person->{'personID'};
+$_SESSION[ 'loginID' ]          = $person->{'personID'};
+$_SESSION[ 'firstname' ]        = $person->{'fname'};
+$_SESSION[ 'lastname' ]         = $person->{'lname'};
+$_SESSION[ 'phone' ]            = $person->{'phone'};
+$_SESSION[ 'email' ]            = $person->{'email'};
+$_SESSION[ 'submitter_email' ]  = $person->{'email'};
+$_SESSION[ 'userlevel' ]        = $person->{'userlevel'};
+$_SESSION[ 'instance' ]         = $lims_db;
+$_SESSION[ 'user_id' ]          = $person->{'fname'} . "_" . $person->{'lname'} . "_" . $person->{'personGUID'} ;
+$_SESSION[ 'advancelevel' ]     = $person->{'userlevel'};
+$_SESSION[ 'clusterAuth' ]      = [ $clusterAuth ];
+$_SESSION[ 'gwhostid' ]         = $host_name;
+
+echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
+
+$_REQUEST = [];
+$_REQUEST[ 'submitter_email' ]  = $person->{'email'};
+$_REQUEST[ 'expIDs' ]           = [ $rawdata->{'rawDataID' } ];
+$_REQUEST[ 'cells' ]            = [ $rawdata->{'rawDataID' } . ":" . $rawdata->{ 'filename' } ]; 
+$_REQUEST[ 'next' ]             = "Add to Queue";
+
+echo "request now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+
