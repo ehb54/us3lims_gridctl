@@ -34,6 +34,10 @@ $poll_sleep_seconds = 30;
 # 2 : add idle polling messages
 $logging_level      = 3;
     
+$dumpfile = "/home/us3/lims/etc/dumpfile.txt";
+global $dumpfile;
+unlink( $dumpfile );
+
 # ********* end user defines ***************
 
 # ********* start admin defines *************
@@ -77,6 +81,11 @@ function db_obj_result( $db_handle, $query ) {
 
     return mysqli_fetch_object( $result );
 }
+
+function truestr( $val ) {
+    return $val ? "true" : "false";
+}
+
 
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
@@ -162,6 +171,12 @@ $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 
 echo "personid:" .  $person->{'personID'} . "\n";
 
+$php_base          = "/srv/www/htdocs/uslims3/${lims_db}";
+$php_queue_setup_1 = "${php_base}/queue_setup_1.php";
+$php_queue_setup_2 = "${php_base}/queue_setup_2.php";
+$php_queue_setup_3 = "${php_base}/queue_setup_3.php";
+echo "preparing to call $php_queue_setup_1\n";
+
 $_SESSION = [];
 
 $_SESSION[ 'id' ]               = $person->{'personID'};
@@ -174,8 +189,8 @@ $_SESSION[ 'submitter_email' ]  = $person->{'email'};
 $_SESSION[ 'userlevel' ]        = $person->{'userlevel'};
 $_SESSION[ 'instance' ]         = $lims_db;
 $_SESSION[ 'user_id' ]          = $person->{'fname'} . "_" . $person->{'lname'} . "_" . $person->{'personGUID'} ;
-$_SESSION[ 'advancelevel' ]     = $person->{'userlevel'};
-$_SESSION[ 'clusterAuth' ]      = [ $clusterAuth ];
+$_SESSION[ 'advancelevel' ]     = $person->{'advancelevel'};
+$_SESSION[ 'clusterAuth' ]      = $clusterAuth;
 $_SESSION[ 'gwhostid' ]         = $host_name;
 
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
@@ -186,5 +201,30 @@ $_REQUEST[ 'expIDs' ]           = [ $rawdata->{'rawDataID' } ];
 $_REQUEST[ 'cells' ]            = [ $rawdata->{'rawDataID' } . ":" . $rawdata->{ 'filename' } ]; 
 $_REQUEST[ 'next' ]             = "Add to Queue";
 
-echo "request now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+$_POST = $_REQUEST;
+
+echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+
+
+function dump_it( $str ) {
+   global $dumpfile;
+   file_put_contents( $dumpfile, $str, FILE_APPEND );
+   chmod( $dumpfile, 0666 );
+   return true;
+}
+
+ob_start( "dump_it" );
+include( $php_queue_setup_1 );
+while (ob_get_level()) ob_end_flush();
+
+$_REQUEST[ 'save' ]             = 'Save Queue Information';
+
+$_POST = $_REQUEST;
+
+echo "preparing to call $php_queue_setup_2\n";
+echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
+echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+ob_start( "dump_it" );
+include( $php_queue_setup_2 );
+while (ob_get_level()) ob_end_flush();
 
