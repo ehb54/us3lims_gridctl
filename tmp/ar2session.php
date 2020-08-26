@@ -178,6 +178,7 @@ $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 echo "personid:" .  $person->{'personID'} . "\n";
 
 $php_base          = "/srv/www/htdocs/uslims3/${lims_db}";
+set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
 # ************* queue_setup_1 ***************
 
@@ -285,6 +286,11 @@ if ( isset( $job_attributes->{'interactive'} ) ) {
     exit();
 }
 
+if ( $cluster == "localhost" ) {
+    $cluster = "us3iab-node1";
+}
+$queue = "normal";
+
 $conv_2dsa_keys = [
     "s_min"              => "s_value_min"
     ,"s_max"             => "s_value_max"
@@ -324,10 +330,6 @@ $defaults_2dsa = [
     "TIGRE"              =>  "Submit"
 ];    
 
-if ( $cluster == "localhost" ) {
-    $cluster = "us3iab-node1";
-}
-$queue = "normal";
 
 $_REQUEST = $defaults_2dsa;
 
@@ -375,11 +377,14 @@ $_POST = $_REQUEST;
 
 $php_2dsa_1 = "${php_base}/2DSA_1.php";
 $php_2dsa_2 = "${php_base}/2DSA_2.php";
-$php_2dsa_3 = "${php_base}/2DSA_3.php";
+
 
 echo "preparing to call $php_2dsa_1\n";
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
 echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+ob_start( "dump_it" );
+include( $php_2dsa_1 );
+while (ob_get_level()) ob_end_flush();
     
 # what we need to add for 2DSA
 /*
