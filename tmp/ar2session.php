@@ -58,6 +58,11 @@ function write_logl( $msg, $this_level = 0 ) {
     }
 }
 
+function error( $msg ) {
+    write_logl( $msg );
+    exit(-1);
+}
+
 function debug_json( $msg, $json ) {
     echo "$msg\n";
     echo json_encode( $json, JSON_PRETTY_PRINT );
@@ -107,6 +112,7 @@ write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 $autoflowanalysis = db_obj_result( $db_handle, 
                                    "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
 
+$cluster    = $autoflowanalysis->{'clusterDefault'};
 $statusJson = json_decode( $autoflowanalysis->{"statusJson"} );
 debug_json( "after fetch, decode", $statusJson );
         
@@ -172,6 +178,9 @@ $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 echo "personid:" .  $person->{'personID'} . "\n";
 
 $php_base          = "/srv/www/htdocs/uslims3/${lims_db}";
+
+# ************* queue_setup_1 ***************
+
 $php_queue_setup_1 = "${php_base}/queue_setup_1.php";
 $php_queue_setup_2 = "${php_base}/queue_setup_2.php";
 $php_queue_setup_3 = "${php_base}/queue_setup_3.php";
@@ -217,6 +226,9 @@ ob_start( "dump_it" );
 include( $php_queue_setup_1 );
 while (ob_get_level()) ob_end_flush();
 
+# ************* queue_setup_2 ***************
+# queue_setup_3 is chained by queue_setup_2
+
 $_REQUEST[ 'save' ]             = 'Save Queue Information';
 
 $_POST = $_REQUEST;
@@ -227,4 +239,174 @@ echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\
 ob_start( "dump_it" );
 include( $php_queue_setup_2 );
 while (ob_get_level()) ob_end_flush();
+
+echo "queue is prepared\n";
+
+# ************* process xml and determine job type and parameters ***************
+
+
+$jobkey = "job_" . strtolower( $stage );
+
+if ( !isset( $xmljson->{'analysis_profile'} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile' key" );
+}
+
+if ( !isset( $xmljson->{'analysis_profile'}->{'p_2dsa'} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile'->'p_2dsa' key" );
+}
+
+if ( !isset( $xmljson->{'analysis_profile'}->{'p_2dsa'}->{'channel_parms'} ) ||
+     !count( $xmljson->{'analysis_profile'}->{'p_2dsa'}->{'channel_parms'} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile'->'channel_parms' key with a nonzero size" );
+}    
+
+if ( !isset( $xmljson->{'analysis_profile'}->{'p_2dsa'}->{'channel_parms'}[0]->{'@attributes'} ) ) {
+    error( "analysis profile's xml's 'analysis_profile'->'p_2dsa'->'channel_parms' first entry does not contain '\@attributes'" );
+}    
+
+$channel_attributes = $xmljson->{'analysis_profile'}->{'p_2dsa'}->{'channel_parms'}[0]->{'@attributes'};
+debug_json( "channel attributes", $channel_attributes );
+
+if ( !isset( $xmljson->{'analysis_profile'}->{'p_2dsa'}->{$jobkey} ) ) {
+    error( "analysis profile's xml's 'analysis_profile'->'p_2dsa'->'$jobkey' is missing" );
+}
+if ( !isset( $xmljson->{'analysis_profile'}->{'p_2dsa'}->{$jobkey}->{'@attributes'} ) ) {
+    error( "analysis profile's xml's 'analysis_profile'->'p_2dsa'->'$jobkey'->'\@attributes' is missing" );
+}
+
+$job_attributes = $xmljson->{'analysis_profile'}->{'p_2dsa'}->{$jobkey}->{'@attributes'};
+debug_json( "job attributes", $job_attributes );
+
+if ( isset( $job_attributes->{'interactive'} ) ) {
+    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='interactive wait $stage', statusMsg='When $stage is complete, reset status to 'continue' WHERE ${id_field} = ${ID}";
+    $result = mysqli_query( $db_handle, $query );
+    
+    write_logl( "$self: ${submit_request_table_name} now interactive ${id_field} $ID stage " . json_encode( $stage ), 1 );
+    exit();
+}
+
+$conv_2dsa_keys = [
+    "s_min"              => "s_value_min"
+    ,"s_max"             => "s_value_max"
+    ,"s_gridpoints"      => "s_grid_points"
+    ,"k_min"             => "ff0_min"
+    ,"k_max"             => "ff0_max"
+    ,"k_gridpoints"      => "ff0_grid_points"
+    ,"max_iterations"    => "_special_handling_"
+    ,"mc_iterations"     => "mc_iterations"
+    ,"noise"             => "_special_handling_"
+    ,"channel"           => "_ignore_"
+    ,"run"               => "_ignore_"
+    ];
+
+$defaults_2dsa = [
+    "s_value_min"        =>  "1",
+    "s_value_max"        =>  "10",
+    "s_grid_points"      =>  "64",
+    "ff0_min"            =>  "1",
+    "ff0_max"            =>  "4",
+    "ff0_grid_points"    =>  "64",
+    "mc_iterations"      =>  "1",
+    "tinoise_option"     =>  "0",
+    "rinoise_option"     =>  "0",
+    "fit_mb_select"      =>  "0",
+    "meniscus_range"     =>  "0.03",
+    "meniscus_points"    =>  "11",
+    "iterations_option"  =>  "0",
+    "max_iterations"     =>  "10",
+    "debug_level-value"  =>  "0",
+    "debug_text-value"   =>  "",
+    "simpoints-value"    =>  "200",
+    "band_volume-value"  =>  "0.015",
+    "radial_grid"        =>  "0",
+    "time_grid"          =>  "1",
+    "cluster"            =>  "${host_name}:${cluster}:${queue}",
+    "TIGRE"              =>  "Submit"
+];    
+
+if ( $cluster == "localhost" ) {
+    $cluster = "us3iab-node1";
+}
+$queue = "normal";
+
+$_REQUEST = $defaults_2dsa;
+
+$all_attributes = (object) array_merge( (array) $channel_attributes, (array) $job_attributes );
+debug_json( "all attributes", $all_attributes );
+
+foreach ( $all_attributes as $k => $v ) {
+    if ( !isset( $conv_2dsa_keys[ $k ] ) ) {
+        write_logl( "job attribute '$k' missing in conversion table, ignored" );
+        continue;
+    }
+    $ku = $conv_2dsa_keys[ $k ];
+    if ( $ku == '_ignore_' ) {
+        continue;
+    }
+    if ( $ku != '_special_handling_' ) {
+        $_REQUEST[ $ku ] = $v;
+        continue;
+    }
+    if ( $k == 'noise' ) {
+        if ( $v == "(TI Noise)" ) {
+            $_REQUEST[ 'tinoise_option' ] = "1";
+            continue;
+        }
+        if ( $v == "(RI Noise)" ) {
+            $_REQUEST[ 'rinoise_option' ] = "1";
+            continue;
+        }
+        if ( $v == "(TI+RI Noise)" ) {
+            $_REQUEST[ 'tinoise_option' ] = "1";
+            $_REQUEST[ 'rinoise_option' ] = "1";
+            continue;
+        }
+        error( "unknown '$k' value '$v'" );
+    }
+    if ( $k == 'max_iterations' ) {
+        $_REQUEST[ $k ]                  = $v;
+        $_REQUEST[ 'iterations_option' ] = "1";
+        continue;
+    }
+    error( "internal error: no special handling code for attribute '$k'" );
+}
+
+$_POST = $_REQUEST;
+
+$php_2dsa_1 = "${php_base}/2DSA_1.php";
+$php_2dsa_2 = "${php_base}/2DSA_2.php";
+$php_2dsa_3 = "${php_base}/2DSA_3.php";
+
+echo "preparing to call $php_2dsa_1\n";
+echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
+echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
+    
+# what we need to add for 2DSA
+/*
+Post:
+{
+    "s_value_min": "1",
+    "s_value_max": "10",
+    "s_grid_points": "64",
+    "ff0_min": "1",
+    "ff0_max": "4",
+    "ff0_grid_points": "64",
+    "mc_iterations": "1",
+    "tinoise_option": "0",
+    "rinoise_option": "0",
+    "fit_mb_select": "0",
+    "meniscus_range": "0.03",
+    "meniscus_points": "11",
+    "iterations_option": "0",
+    "max_iterations": "10",
+    "debug_level-value": "0",
+    "debug_text-value": "",
+    "simpoints-value": "200",
+    "band_volume-value": "0.015",
+    "radial_grid": "0",
+    "time_grid": "1",
+    "cluster": "129.114.17.229:us3iab-node1:normal",
+    "TIGRE": "Submit"
+}
+*/;
 
