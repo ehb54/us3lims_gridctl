@@ -11,6 +11,7 @@ CREATE TABLE analysis (
   gfacID varchar(80) DEFAULT NULL,
   cluster varchar(64) DEFAULT NULL,
   us3_db varchar(32) DEFAULT NULL,
+  autoflowAnalysisID int(11) DEFAULT NULL,
   stdout longtext,
   stderr longtext,
   tarfile mediumblob,
