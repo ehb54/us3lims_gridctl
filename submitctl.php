@@ -25,6 +25,8 @@ $submit_request_history_table_name = "autoflowAnalysisHistory";
 $id_field                          = "requestID";
 $processing_key                    = "submitted";
 $failed_status                     = [ "failed" => 1, "error" => 1 ];
+$completed_status                  = [ "complete" => 1 ];
+$wait_status                       = [ "wait" => 1 ];
 # ********* end admin defines ***************
 
 
@@ -131,18 +133,32 @@ while( 1 ) {
                 write_logl( "$self: critical: no id found in mysql result!" );
                 continue;
             }
-            $ID = $obj->{ $id_field };
-
+            $ID         = $obj->{ $id_field };
+            $status     = strtolower( $obj->{ 'status' } );
             $statusJson = json_decode( $obj->{"statusJson"} );
+
             debug_json( "after fetch, decode", $statusJson );
             
-            if ( isset( $statusJson->{ $processing_key } ) &&
+            $failed    = array_key_exists( $status, $failed_status );
+            $completed = array_key_exists( $status, $completed_status );
+
+            // not used:
+            // $wait      = array_key_exists( $status, $wait_status );
+
+            if ( !$failed &&
+                 !$completed &&
+                 isset( $statusJson->{ $processing_key } ) &&
                  !empty( $statusJson->{ $processing_key } ) ) {
-                write_logl( "$self: autoflowAnalysis ${id_field} $ID is ${processing_key}", 2 );
+                write_logl( "$self: autoflowAnalysis ${id_field} $ID is ${processing_key} status ${status} ", 2 );
                 continue;
             }
 
-            $failed = array_key_exists( $obj->{ 'status' }, $failed_status );
+            if ( $completed ) {
+                # shift to processed
+                $stage = $statusJson->{ $processing_key };
+                unset( $statusJson->{ $processing_key } );
+                $statusJson->{ "processed" }[] = $stage;
+            }
 
             if ( !$failed &&
                  isset( $statusJson->{ "to_process" } ) &&
@@ -152,7 +168,7 @@ while( 1 ) {
                 
                 debug_json( "after shift to ${processing_key}", $statusJson );
 
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='READY', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logl( "$self: ${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
@@ -161,16 +177,32 @@ while( 1 ) {
                 } else {
                     write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
-                # ADD SUBMIT CALL
+                # run each submit in a separate shell
+                $cmd = "php submitone.php $lims_db $ID >> $home/etc/submit.log 2>&1 &";
+                write_logl( "$self: running cmd" );
+                shell_exec( $cmd );
                 $work_done = 1;
                 continue;
-            } 
+            }
+
+            if ( $completed ) {
+                # update the db for after the final stage completes (if there were more stages, the prior if() would run instead)
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FINISHED', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $result = mysqli_query( $db_handle, $query );
+
+                write_logl( "$self: ${submit_request_table_name} finishing ${id_field} $ID stage " . json_encode( $stage ), 1 );
+                if ( !$result ) {
+                    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                } else {
+                    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
+                }
+            }                
             
             # must be completed or failed
             if ( $failed ) {
-                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
-            } else {
                 write_logl( "$self: ${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
+            } else {
+                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
             }
 
             $query  = "INSERT ${lims_db}.${submit_request_history_table_name} SELECT * FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field} = ${ID}";

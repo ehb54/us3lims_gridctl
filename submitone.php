@@ -34,9 +34,7 @@ $poll_sleep_seconds = 30;
 # 2 : add idle polling messages
 $logging_level      = 3;
     
-$dumpfile = "/home/us3/lims/etc/dumpfile.txt";
-global $dumpfile;
-unlink( $dumpfile );
+$dumpfilebase = "/home/us3/lims/etc/";
 
 # ********* end user defines ***************
 
@@ -53,8 +51,8 @@ function write_logl( $msg, $this_level = 0 ) {
     global $logging_level;
     global $self;
     if ( $logging_level >= $this_level ) {
-        echo "${self}: " . $msg . "\n";
-        # write_log( "${self}: " . $msg );
+        # echo "${self}: " . $msg . "\n";
+        write_log( "${self}: " . $msg );
     }
 }
 
@@ -64,9 +62,10 @@ function error( $msg ) {
 }
 
 function debug_json( $msg, $json ) {
-    echo "$msg\n";
-    echo json_encode( $json, JSON_PRETTY_PRINT );
-    echo "\n";
+    return;
+#    echo "$msg\n";
+#    echo json_encode( $json, JSON_PRETTY_PRINT );
+#    echo "\n";
 }
 
 function db_obj_result( $db_handle, $query ) {
@@ -91,9 +90,12 @@ function truestr( $val ) {
     return $val ? "true" : "false";
 }
 
-
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
+
+$dumpfile = "${dumpfilebase}/submit-debug-dump-$ID.txt";
+global $dumpfile;
+unlink( $dumpfile );
 
 write_logl( "Starting" );
 
@@ -279,10 +281,14 @@ $job_attributes = $xmljson->{'analysis_profile'}->{'p_2dsa'}->{$jobkey}->{'@attr
 debug_json( "job attributes", $job_attributes );
 
 if ( isset( $job_attributes->{'interactive'} ) ) {
-    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='interactive wait $stage', statusMsg='When $stage is complete, reset status to 'continue' WHERE ${id_field} = ${ID}";
+    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='WAIT', statusMsg='When $stage is complete, reset status to COMPLETE' WHERE ${id_field} = ${ID}";
     $result = mysqli_query( $db_handle, $query );
     
-    write_logl( "$self: ${submit_request_table_name} now interactive ${id_field} $ID stage " . json_encode( $stage ), 1 );
+    if ( !$result ) {
+        write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson. query $query", 0 );
+    } else {
+        write_logl( "$self: ${submit_request_table_name} now interactive ${id_field} $ID stage " . json_encode( $stage ), 1 );
+    }
     exit();
 }
 
