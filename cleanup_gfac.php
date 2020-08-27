@@ -261,13 +261,13 @@ write_log( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" 
    }
 
    // Save stdout, stderr, etc. for message log
-   $query  = "SELECT stdout, stderr, status, queue_msg FROM analysis " .
+   $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM analysis " .
              "WHERE gfacID='$gfacID' ";
    $result = mysqli_query( $gfac_link, $query );
    try
    {
       // What if this is too large?
-      list( $stdout, $stderr, $status, $queue_msg ) = mysqli_fetch_array( $result );
+      list( $stdout, $stderr, $status, $queue_msg, $autoflowID ) = mysqli_fetch_array( $result );
    }
    catch ( Exception $e )
    {
@@ -287,6 +287,7 @@ write_log( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" 
                    "\n\n\nGFAC Status: $status\n" .
                    "GFAC message field: $queue_msg\n";
 
+   update_autoflow_status( $status );
    // Delete data from GFAC DB
    $query = "DELETE from analysis WHERE gfacID='$gfacID'";
 
