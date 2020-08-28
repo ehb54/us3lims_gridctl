@@ -150,7 +150,7 @@ echo "$loghdr status_lo=$status\n";
       if ( ! $result2 )
          write_log( "$loghdr Query failed $query2 - " .  mysqli_error( $gLink ) );
 
-      update_autoflow_status( 'ERROR' );
+      update_autoflow_status( 'ERROR', 'GFAC DB is NULL' );
    }
 
 //echo "  st=$status\n";
@@ -175,7 +175,7 @@ echo "$loghdr status_lo=$status\n";
       case "STARTED":
       case "STAGING":
       case "ACTIVE":
-         running( $time );
+         running( $time, $queue_msg );
          break;
 
       case "RUN_TIMEOUT":
@@ -259,7 +259,7 @@ write_log( "$loghdr submitted:job_status=$job_status" );
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'SUBMIT_TIMEOUT' );
+   update_autoflow_status( 'SUBMIT_TIMEOUT', $message );
 
 }
 
@@ -298,10 +298,10 @@ function submit_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'FAILED' );
+   update_autoflow_status( 'FAILED', $message );
 }
 
-function running( $updatetime )
+function running( $updatetime, $queue_msg )
 {
    global $self;
    global $gLink;
@@ -313,7 +313,7 @@ function running( $updatetime )
 
    get_us3_data();
 
-   update_autoflow_status( 'RUNNING' );
+   update_autoflow_status( 'RUNNING', $queue_msg );
 
    if ( $updatetime + 600 > $now ) {
        return;   // message received < 10 minutes ago
@@ -344,7 +344,7 @@ function running( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'RUN_TIMEOUT' );
+   update_autoflow_status( 'RUN_TIMEOUT', $message );
 }
 
 function run_timeout( $updatetime )
@@ -384,7 +384,7 @@ function run_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'FAILED' );
+   update_autoflow_status( 'FAILED', $message );
 }
 
 function wait_data( $updatetime )
@@ -434,7 +434,7 @@ function wait_data( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'DATA_TIMEOUT' );
+   update_autoflow_status( 'DATA_TIMEOUT', $message );
 }
 
 function data_timeout( $updatetime )
@@ -484,7 +484,7 @@ function data_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
-   update_autoflow_status( 'FAILED' );
+   update_autoflow_status( 'FAILED', $message );
 }
 
 function complete()
@@ -649,8 +649,10 @@ write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
    {
       update_queue_messages( $message );
       update_db( $message );
+      update_autoflow_status( $status, $message );
+   } else {
+      update_autoflow_status( $status, $status );
    }
-   update_autoflow_status( $status );
 }
 
 function get_us3_data()
@@ -1245,23 +1247,25 @@ write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex"
    return $status;
 }
 
-function update_autoflow_status( $status ) {
+function update_autoflow_status( $status, $message ) {
     global $gLink;
     global $gfacID;
     global $autoflowID;
     global $us3_db;
     global $self;
+
+    write_log( "$self: update_autoflow_status() id $autoflowID status $status message $message" );
         
     if ( $autoflowID <= 0 ) {
         write_log( "$self: update_autoflow_status() ignored, no id" );
         return;
     }
     $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
-        "status='$status' " . 
+        "status='$status', " . 
+        "statusMsg='$message' " . 
         "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' ";
     
     $result = mysqli_query( $gLink, $query );
-    write_log( "$self: update_autoflow_status() id $autoflowID" );
     if ( ! $result ) {
         // Just log it and continue
         write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );

@@ -13,7 +13,13 @@ $poll_sleep_seconds = 30;
 # 0 : minimal messages (expected value for production)
 # 1 : add some db messages
 # 2 : add idle polling messages
+# 3 : debug messages
+# 4 : way too many debug messages
 $logging_level      = 2;
+
+# www_uslims3, www_common should likely be in listen_config.php
+$www_uslims3   = "/srv/www/htdocs/uslims3";
+$www_common    = "/srv/www/htdocs/common";
 
 # ********* end user defines ***************
 
@@ -25,7 +31,7 @@ $submit_request_history_table_name = "autoflowAnalysisHistory";
 $id_field                          = "requestID";
 $processing_key                    = "submitted";
 $failed_status                     = [ "failed" => 1, "error" => 1 ];
-$completed_status                  = [ "complete" => 1 ];
+$completed_status                  = [ "complete" => 1, "done" => 1 ];
 $wait_status                       = [ "wait" => 1 ];
 # ********* end admin defines ***************
 
@@ -36,6 +42,25 @@ if ( isset( $lock_dir ) ) {
     require "$us3bin/lock.php";
 }
 
+function error_add( $msg ) {
+    global $startup_errors;
+    $startup_errors = true;
+    write_logls( "ERROR : ${msg}." );
+}
+
+function exit_if_errors() {
+    global $startup_errors;
+    if ( $startup_errors ) {
+        write_logls( "ERRORs present, quitting." );
+        exit(-1);
+    }
+}
+
+function write_logls( $msg, $this_level = 0 ) {
+    global $self;
+    write_logl( "$self: $msg", $this_level );
+}
+
 function write_logl( $msg, $this_level = 0 ) {
     global $logging_level;
     if ( $logging_level >= $this_level ) {
@@ -44,6 +69,10 @@ function write_logl( $msg, $this_level = 0 ) {
 }
 
 function debug_json( $msg, $json ) {
+    global $logging_level;
+    if ( $logging_level < 3 ) {
+        return;
+    }
     echo "$msg\n";
     echo json_encode( $json, JSON_PRETTY_PRINT );
     echo "\n";
@@ -51,17 +80,39 @@ function debug_json( $msg, $json ) {
 
 # Gary: should we have our own log? currently log is "udp.log" 
 
-write_logl( "$self: Starting" );
+write_logls( "Starting" );
 
 do {
     $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
     if ( !$db_handle ) {
-        write_logl( "$self: could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
+        write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
         sleep( $poll_sleep_seconds );
     }
 } while ( !$db_handle );
 
-write_logl( "$self: connected to mysql: $dbhost, $user, $db.", 2 );
+# check for gfac.analysis.autoflowAnalysisID
+
+$cfield = "autoflowAnalysisID";
+$query  = "select ${cfield} from gfac.analysis limit 1";
+$result = mysqli_query( $db_handle, $query );
+if ( !$result ) {
+    error_add( "${cfield} is not a field in gfac.analysis" );
+}
+unset( $cfield );
+
+# check www php for autoflow
+$check_file = "${www_common}/class/submit_local.php";
+write_logls( "checking www ${check_file} for autoflow code", 4 );
+if ( file_exists( $check_file ) ) {
+    $qs1 = file_get_contents( $check_file );
+    if ( !strpos( $qs1, '$autoflowID' ) ) {
+        error_add( "file $check_file does not contain autoflow code" );
+    }
+    unset( $qs1 );
+} else {
+    error_add( "file $check_file does not exist" );
+}
+unset( $checkfile );
 
 # find databases with autoflow
 
@@ -80,43 +131,75 @@ while ( $obj =  mysqli_fetch_object( $result ) ) {
 $limsdbs = [];
 
 foreach ( $trylimsdbs as $v ) {
-    $msg = "checking db $v for autoflow tables";
-    echo  "$msg\n";
-    $success = false;
-    $query  = "select count(*) from ${v}.${submit_request_table_name}";
-    $result = mysqli_query( $db_handle, $query );
-    if ( $result ) {
+    write_logls( "checking db $v for autoflow tables", 4 );
+    $success = true;
+
+    # check db for ${submit_request_table_name}
+    if ( $success ) {
+        $query  = "select count(*) from ${v}.${submit_request_table_name}";
+        $result = mysqli_query( $db_handle, $query );
+        $error  = '';
+        if ( !$result ) {
+            $success = false;
+            $error  = "table ${submit_request_table_name} can not be queried";
+        }
+    }
+
+    # check db for ${submit_request_history_table_name}
+    if ( $success ) {
         $query  = "select count(*) from ${v}.${submit_request_history_table_name}";
         $result = mysqli_query( $db_handle, $query );
-        if ( $result ) {
-            $success = true;
-            $limsdbs[] = $v;
+        $error  = '';
+        if ( !$result ) {
+            $success = false;
+            $error  = "table ${submit_request_history_table_name} can not be queried";
+        }
+    }
+
+    # check db's www php for cli compatibility
+    if ( $success ) {
+        $php_base          = "${www_uslims3}/${v}";
+        $php_queue_setup_1 = "${php_base}/queue_setup_1.php";
+        write_logls( "checking www ${php_queue_setup_1} for cli submit compatibility", 4 );
+        if ( file_exists( $php_queue_setup_1 ) ) {
+            $qs1 = file_get_contents( $php_queue_setup_1 );
+            if ( $qs1 && strpos( $qs1, '$is_cli' ) ) {
+                $limsdbs[] = $v;
+            } else {
+                $success = false;
+                $error   = "file $php_queue_setup_1 does not exist";
+            }
+            unset( $qs1 );
+        } else {
+            $success = false;
+            $error   = "file $php_queue_setup_1 is not cli compliant";
         }
     }
 
     if ( $success ) {
-        write_logl( "$self: added db $v for autoflow submission control", 1 );
+        write_logls( "added db $v for autoflow submission control", 1 );
     } else {
-        write_logl( "$self: db $v does not have ${submit_request_history_table_name} tables, ignoring", 1 );
+        write_logls( "ignoring db ${v}. reason: ${error}", 1 );
     }
 }
 unset( $trylimsdbs );
 
 if ( !count( $limsdbs ) ) {
-    write_logl( "$self: found no databases with ${submit_request_history_table_name}, quitting", 0 );
-    exit;
+    error_add( "found no databases with ${submit_request_table_name} and cli complient www php" );
 }
-    
+
+exit_if_errors();
+
 while( 1 ) {
-    write_logl( "$self: checking mysql", 2 );
+    write_logls( "checking mysql", 2 );
 
     $work_done = 0;
 
     foreach ( $limsdbs as $lims_db ) {
-        write_logl( "$self: checking mysql db ${lims_db}", 2 );
+        write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, clusterDefault, status, statusJson, createUser FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -126,11 +209,11 @@ while( 1 ) {
             continue;
         }
 
-        write_logl( "$self: found $outer_result->num_rows in ${submit_request_table_name} to check on db ${lims_db}", 2 );
+        write_logls( "found $outer_result->num_rows in ${submit_request_table_name} to check on db ${lims_db}", 2 );
 
-        while ( $obj =  mysqli_fetch_object( $outer_result ) ) {
+        while ( $obj = mysqli_fetch_object( $outer_result ) ) {
             if ( !isset( $obj->{ $id_field } ) ) {
-                write_logl( "$self: critical: no id found in mysql result!" );
+                write_logls( "critical: no id found in mysql result!" );
                 continue;
             }
             $ID         = $obj->{ $id_field };
@@ -149,7 +232,7 @@ while( 1 ) {
                  !$completed &&
                  isset( $statusJson->{ $processing_key } ) &&
                  !empty( $statusJson->{ $processing_key } ) ) {
-                write_logl( "$self: autoflowAnalysis ${id_field} $ID is ${processing_key} status ${status} ", 2 );
+                write_logls( "autoflowAnalysis ${id_field} $ID is ${processing_key} status ${status} ", 2 );
                 continue;
             }
 
@@ -157,7 +240,14 @@ while( 1 ) {
                 # shift to processed
                 $stage = $statusJson->{ $processing_key };
                 unset( $statusJson->{ $processing_key } );
-                $statusJson->{ "processed" }[] = $stage;
+                $statusJson->{ "processed" }[] =
+                    (object) [
+                        $stage => [
+                            "gfacID"    => $obj->{ 'currentGfacID' },
+                            "status"    => $obj->{ 'status'        },
+                            "statusMsg" => $obj->{ 'statusMsg'     }
+                        ]
+                    ];
             }
 
             if ( !$failed &&
@@ -168,18 +258,18 @@ while( 1 ) {
                 
                 debug_json( "after shift to ${processing_key}", $statusJson );
 
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='READY', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, status='READY', statusMsg='Job ready to submit', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
-                write_logl( "$self: ${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
+                write_logls( "${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
                 } else {
-                    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
+                    write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
                 # run each submit in a separate shell
                 $cmd = "php submitone.php $lims_db $ID >> $home/etc/submit.log 2>&1 &";
-                write_logl( "$self: running cmd" );
+                write_logls( "running cmd" );
                 shell_exec( $cmd );
                 $work_done = 1;
                 continue;
@@ -187,31 +277,31 @@ while( 1 ) {
 
             if ( $completed ) {
                 # update the db for after the final stage completes (if there were more stages, the prior if() would run instead)
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FINISHED', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, status='FINISHED', statusMsg='Final stage completed', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
-                write_logl( "$self: ${submit_request_table_name} finishing ${id_field} $ID stage " . json_encode( $stage ), 1 );
+                write_logls( "${submit_request_table_name} finishing ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
                 } else {
-                    write_logl( "$self: success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
+                    write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
             }                
             
             # must be completed or failed
             if ( $failed ) {
-                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
+                write_logls( "${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
             } else {
-                write_logl( "$self: ${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
+                write_logls( "${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
             }
 
             $query  = "INSERT ${lims_db}.${submit_request_history_table_name} SELECT * FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field} = ${ID}";
             $result = mysqli_query( $db_handle, $query );
 
             if ( !$result ) {
-                write_logl( "$self: error copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 0 );
+                write_logls( "error copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 0 );
             } else {
-                write_logl( "$self: success copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 2 );
+                write_logls( "success copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 2 );
                 # $result->free_result();
             }        
             
@@ -219,16 +309,16 @@ while( 1 ) {
             $result = mysqli_query( $db_handle, $query );
             
             if ( !$result ) {
-                write_logl( "$self: error deleting ${id_field} ${ID} from ${submit_request_table_name}.", 0 );
+                write_logls( "error deleting ${id_field} ${ID} from ${submit_request_table_name}.", 0 );
             } else {
-                write_logl( "$self: success deleting ${id_field} ${ID} from ${submit_request_table_name}.", 2 );
+                write_logls( "success deleting ${id_field} ${ID} from ${submit_request_table_name}.", 2 );
                 # $result->free_result();
             }
             $work_done = 1;
         }
     }
     if ( !$work_done ) {
-        write_logl( "$self: no requests to process sleeping ${poll_sleep_seconds}s", 2 );
+        write_logls( "no requests to process sleeping ${poll_sleep_seconds}s", 2 );
         sleep( $poll_sleep_seconds );
     }
 }

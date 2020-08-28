@@ -36,6 +36,8 @@ $logging_level      = 3;
     
 $dumpfilebase = "/home/us3/lims/etc/";
 
+# www_uslims3 should likely be in listen_config.php
+$www_uslims3   = "/srv/www/htdocs/uslims3";
 # ********* end user defines ***************
 
 # ********* start admin defines *************
@@ -141,7 +143,7 @@ write_logl( "aprofileGUID $aprofileguid found", 3 );
 
 $xmljson = json_decode( json_encode( simplexml_load_string( $analysisprofile->{ 'xml' } ) ) );
 
-write_logl( "analysisprofile's xml in json:\n" . json_encode( $xmljson, JSON_PRETTY_PRINT ) );
+debug_json( "analysisprofile's xml in json:", $xmljson );
 
 # sanity checks
 
@@ -179,7 +181,7 @@ $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 
 echo "personid:" .  $person->{'personID'} . "\n";
 
-$php_base          = "/srv/www/htdocs/uslims3/${lims_db}";
+$php_base          = "${www_uslims3}/${lims_db}";
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
 # ************* queue_setup_1 ***************
@@ -281,7 +283,7 @@ $job_attributes = $xmljson->{'analysis_profile'}->{'p_2dsa'}->{$jobkey}->{'@attr
 debug_json( "job attributes", $job_attributes );
 
 if ( isset( $job_attributes->{'interactive'} ) ) {
-    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='WAIT', statusMsg='When $stage is complete, reset status to COMPLETE' WHERE ${id_field} = ${ID}";
+    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='WAIT', statusMsg='Waiting for manual stage $stage to complete.' WHERE ${id_field} = ${ID}";
     $result = mysqli_query( $db_handle, $query );
     
     if ( !$result ) {
