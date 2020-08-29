@@ -287,7 +287,7 @@ write_log( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" 
                    "\n\n\nGFAC Status: $status\n" .
                    "GFAC message field: $queue_msg\n";
 
-   update_autoflow_status( $status );
+   update_autoflow_status( $status, $queue_msg );
    // Delete data from GFAC DB
    $query = "DELETE from analysis WHERE gfacID='$gfacID'";
 
