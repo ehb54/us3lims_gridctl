@@ -182,8 +182,8 @@ $xml = <<<__EOD
 <job_2dsa run="1" noise="(TI Noise)"/>
 <job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_range="0.3" grid_points="64"/>
 <job_fitmen run="1" interactive="1"/>
-<job_2dsa_it run="1" noise="(TI+RI Noise)" max_iterations="5"/>
-<job_2dsa_mc run="1" mc_iterations="100"/>
+<job_2dsa_it run="1" noise="(TI+RI Noise)" max_iterations="3"/>
+<job_2dsa_mc run="1" mc_iterations="5"/>
 </p_2dsa>
 <p_pcsa job_run="1">
 <channel_parms channel="2A:UV/vis.:BSA in PBS" curve_type="All (IS + DS + SL)" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>

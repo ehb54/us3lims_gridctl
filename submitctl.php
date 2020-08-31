@@ -159,25 +159,26 @@ foreach ( $trylimsdbs as $v ) {
     # check db's www php for cli compatibility
     if ( $success ) {
         $php_base          = "${www_uslims3}/${v}";
-        $php_queue_setup_1 = "${php_base}/queue_setup_1.php";
-        write_logls( "checking www ${php_queue_setup_1} for cli submit compatibility", 4 );
-        if ( file_exists( $php_queue_setup_1 ) ) {
-            $qs1 = file_get_contents( $php_queue_setup_1 );
-            if ( $qs1 && strpos( $qs1, '$is_cli' ) ) {
-                $limsdbs[] = $v;
+        $check_files       = [ "${php_base}/queue_setup_1.php", "${php_base}/config.php" ];
+        foreach ( $check_files as $check_file ) {
+            write_logls( "checking www ${check_file} for cli submit compatibility", 4 );
+            if ( file_exists( $check_file ) ) {
+                $qs1 = file_get_contents( $check_file );
+                if ( !$qs1 || !strpos( $qs1, '$is_cli' ) ) {
+                    $success = false;
+                    $error   = "file $check_file is not cli compliant";
+                }
+                unset( $qs1 );
             } else {
                 $success = false;
-                $error   = "file $php_queue_setup_1 does not exist";
+                $error   = "file $check_file does not exist ";
             }
-            unset( $qs1 );
-        } else {
-            $success = false;
-            $error   = "file $php_queue_setup_1 is not cli compliant";
         }
     }
 
     if ( $success ) {
         write_logls( "added db $v for autoflow submission control", 1 );
+        $limsdbs[] = $v;
     } else {
         write_logls( "ignoring db ${v}. reason: ${error}", 1 );
     }
