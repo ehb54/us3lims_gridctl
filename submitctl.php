@@ -200,7 +200,7 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser, updateTime FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -244,9 +244,10 @@ while( 1 ) {
                 $statusJson->{ "processed" }[] =
                     (object) [
                         $stage => [
-                            "gfacID"    => $obj->{ 'currentGfacID' },
-                            "status"    => $obj->{ 'status'        },
-                            "statusMsg" => $obj->{ 'statusMsg'     }
+                            "gfacID"     => $obj->{ 'currentGfacID' },
+                            "status"     => $obj->{ 'status'        },
+                            "statusMsg"  => $obj->{ 'statusMsg'     },
+                            "updateTime" => $obj->{ 'updateTime'    }
                         ]
                     ];
             }

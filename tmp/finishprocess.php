@@ -1,7 +1,7 @@
 <?php
 
-if ( count( $argv ) != 4 ) {
-    echo "usage: finishprocess.php db ID status\n";
+if ( count( $argv ) != 5 ) {
+    echo "usage: finishprocess.php db ID status statusMsg\n";
     exit;
 }
 
@@ -46,9 +46,10 @@ function debug_json( $msg, $json ) {
 
 # Gary: should we have our own log? currently log is "udp.log" 
 
-$lims_db = $argv[ 1 ];
-$ID      = $argv[ 2 ];
-$status  = $argv[ 3 ];
+$lims_db   = $argv[ 1 ];
+$ID        = $argv[ 2 ];
+$status    = $argv[ 3 ];
+$statusMsg = $argv[ 4 ];
 
 write_logl( "$self: Starting" );
 
@@ -62,39 +63,10 @@ do {
 
 write_logl( "$self: connected to mysql: $dbhost, $user, $db.", 2 );
 
-$query        = "SELECT statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID";
-$outer_result = mysqli_query( $db_handle, $query );
-
-if ( !$outer_result || !$outer_result->num_rows ) {
-    if ( $outer_result ) {
-        # $outer_result->free_result();
-    }
-    write_logl( "$self: ${id_field} $ID not found in ${lims_db}.${submit_request_table_name}", 2 );
-    exit;
-}
-
-$obj =  mysqli_fetch_object( $outer_result );
-
-$statusJson = json_decode( $obj->{"statusJson"} );
-debug_json( "after fetch, decode", $statusJson );
-        
-if ( !isset( $statusJson->{ $processing_key } ) ||
-     empty( $statusJson->{ $processing_key } ) ) {
-    write_logl( "$self: ${submit_request_table_name} db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
-    exit;
-}
-
-$stage = $statusJson->{ $processing_key };
-unset( $statusJson->{ $processing_key } );
-$statusJson->{ "processed" }[] = $stage;
-    
-debug_json( "after shift to ${processing_key}", $statusJson );
-
-$query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='$status', statusJson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+$query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='$status', statusMsg='$statusMsg' WHERE ${id_field} = ${ID}";
 $result = mysqli_query( $db_handle, $query );
-write_logl( "$self: ${submit_request_table_name} db ${lims_db} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
 if ( !$result ) {
-    write_logl( "$self: error updating db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+    write_logl( "$self: error updating db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} status, statusMsg query:\n$query\n", 0 );
 } else {
-    write_logl( "$self: success updating db db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
+    write_logl( "$self: success updating db db ${lims_db} table ${submit_request_table_name} ${id_field} ${ID}", 2 );
 }
