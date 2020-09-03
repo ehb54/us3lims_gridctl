@@ -200,7 +200,7 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser, updateTime FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -244,10 +244,11 @@ while( 1 ) {
                 $statusJson->{ "processed" }[] =
                     (object) [
                         $stage => [
-                            "gfacID"     => $obj->{ 'currentGfacID' },
-                            "status"     => $obj->{ 'status'        },
-                            "statusMsg"  => $obj->{ 'statusMsg'     },
-                            "updateTime" => $obj->{ 'updateTime'    }
+                            "gfacID"     => $obj->{ 'currentGfacID'   },
+                            "status"     => $obj->{ 'status'          },
+                            "statusMsg"  => $obj->{ 'statusMsg'       },
+                            "updateTime" => $obj->{ 'updateTime'      },
+                            "createTime" => $obj->{ 'stageSubmitTime' }
                         ]
                     ];
             }
@@ -260,7 +261,7 @@ while( 1 ) {
                 
                 debug_json( "after shift to ${processing_key}", $statusJson );
 
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, status='READY', statusMsg='Job ready to submit', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, stageSubmitTime=current_time(), status='READY', statusMsg='Job ready to submit', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logls( "${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
