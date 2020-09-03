@@ -219,3 +219,10 @@ $lastaaid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
 $aaID = $lastaaid->{'LAST_INSERT_ID()'};
 
 echo "inserted autoflowAnalysis requestID is $aaID\n";
+
+
+# Update autoflow table with the (single) autoflowAnalysisID
+
+db_obj_insert(
+    $db_handle,
+    "UPDATE ${lims_db}.autoflow SET analysisIDs='$aaID' WHERE ID='$autoflowID'" );
