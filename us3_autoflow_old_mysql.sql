@@ -24,7 +24,7 @@ CREATE TABLE autoflowAnalysis (
 
 DROP TABLE IF EXISTS autoflowAnalysisHistory;
 CREATE TABLE autoflowAnalysisHistory (
-  requestID         int(11)      NOT NULL AUTO_INCREMENT,
+  requestID         int(11)      NOT NULL UNIQUE,
   tripleName        text         NOT NULL,
   clusterDefault    text         ,
   filename          text         NOT NULL,
