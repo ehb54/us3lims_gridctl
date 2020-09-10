@@ -30,7 +30,7 @@ $submit_request_table_name         = "autoflowAnalysis";
 $submit_request_history_table_name = "autoflowAnalysisHistory";
 $id_field                          = "requestID";
 $processing_key                    = "submitted";
-$failed_status                     = [ "failed" => 1, "error" => 1 ];
+$failed_status                     = [ "failed" => 1, "error" => 1, "canceled" => 1 ];
 $completed_status                  = [ "complete" => 1, "done" => 1 ];
 $wait_status                       = [ "wait" => 1 ];
 # ********* end admin defines ***************
