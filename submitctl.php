@@ -200,7 +200,7 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, statusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, currentHPCARID, statusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -244,11 +244,12 @@ while( 1 ) {
                 $statusJson->{ "processed" }[] =
                     (object) [
                         $stage => [
-                            "gfacID"     => $obj->{ 'currentGfacID'   },
-                            "status"     => $obj->{ 'status'          },
-                            "statusMsg"  => $obj->{ 'statusMsg'       },
-                            "updateTime" => $obj->{ 'updateTime'      },
-                            "createTime" => $obj->{ 'stageSubmitTime' }
+                            "gfacID"                => $obj->{ 'currentGfacID'   },
+                            "HPCAnalysisRequestID"  => $obj->{ 'currentHPCARID'  },
+                            "status"                => $obj->{ 'status'          },
+                            "statusMsg"             => $obj->{ 'statusMsg'       },
+                            "updateTime"            => $obj->{ 'updateTime'      },
+                            "createTime"            => $obj->{ 'stageSubmitTime' }
                         ]
                     ];
             }
@@ -261,7 +262,7 @@ while( 1 ) {
                 
                 debug_json( "after shift to ${processing_key}", $statusJson );
 
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, stageSubmitTime=current_time(), status='READY', statusMsg='Job ready to submit', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, stageSubmitTime=current_time(), status='READY', statusMsg='Job ready to submit', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logls( "${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
@@ -280,7 +281,7 @@ while( 1 ) {
 
             if ( $completed ) {
                 # update the db for after the final stage completes (if there were more stages, the prior if() would run instead)
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, status='FINISHED', statusMsg='Final stage completed', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, status='FINISHED', statusMsg='Final stage completed', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logls( "${submit_request_table_name} finishing ${id_field} $ID stage " . json_encode( $stage ), 1 );
@@ -297,6 +298,12 @@ while( 1 ) {
             } else {
                 write_logls( "${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
             }
+
+            # delete previous version if exists (shouldn't happen, but might upon manual intervention such as recreating autoflowAnalysis without recreating autoflowAnalysisHistory)
+            # possibly could be replaced with a REPLACE or ON DUPLICATE KEY UPDATE, haven't tested this
+            $query  = "DELETE FROM ${lims_db}.${submit_request_history_table_name} WHERE ${id_field} = ${ID}";
+            $result = mysqli_query( $db_handle, $query );
+            # ignore result
 
             $query  = "INSERT ${lims_db}.${submit_request_history_table_name} SELECT * FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field} = ${ID}";
             $result = mysqli_query( $db_handle, $query );
