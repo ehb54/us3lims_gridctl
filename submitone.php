@@ -311,6 +311,9 @@ $conv_2dsa_keys = [
     ,"noise"             => "_special_handling_"
     ,"channel"           => "_ignore_"
     ,"run"               => "_ignore_"
+    ,"fit_mb_select"     => "fit_mb_select"
+    ,"meniscus_range"    => "meniscus_range"
+    ,"meniscus_points"   => "meniscus_points"
     ];
 
 $defaults_2dsa = [
