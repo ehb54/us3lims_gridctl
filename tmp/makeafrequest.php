@@ -180,7 +180,7 @@ $xml = <<<__EOD
 <channel_parms channel="2A:Interf.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <channel_parms channel="2B:UV/vis.:Blank/Air" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <job_2dsa run="1" noise="(TI Noise)"/>
-<job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_range="0.3" grid_points="64" fit_mb_select="1" meniscus_rnage="0.03" meniscus_points="11"/>
+<job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_range="0.3" grid_points="64" fit_mb_select="1" meniscus_range="0.03" meniscus_points="11"/>
 <job_fitmen run="1" interactive="1"/>
 <job_2dsa_it run="1" noise="(TI+RI Noise)" max_iterations="3"/>
 <job_2dsa_mc run="1" mc_iterations="5"/>
