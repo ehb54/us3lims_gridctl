@@ -200,7 +200,7 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, currentHPCARID, statusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
+        $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, currentHPCARID, statusMsg, nextWaitStatus, nextWaitStatusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
         $outer_result = mysqli_query( $db_handle, $query );
 
         if ( !$outer_result || !$outer_result->num_rows ) {
@@ -217,17 +217,32 @@ while( 1 ) {
                 write_logls( "critical: no id found in mysql result!" );
                 continue;
             }
-            $ID         = $obj->{ $id_field };
-            $status     = strtolower( $obj->{ 'status' } );
-            $statusJson = json_decode( $obj->{"statusJson"} );
+            $ID                 = $obj->{ $id_field };
+            $status             = strtolower( $obj->{ 'status' } );
+            $statusJson         = json_decode( $obj->{"statusJson"} );
+            $nextWaitStatus     = strtolower( $obj->{ 'nextWaitStatus' } );
+            $next_wait_clear    = strlen( $nextWaitStatus ) > 0;
 
             debug_json( "after fetch, decode", $statusJson );
             
             $failed    = array_key_exists( $status, $failed_status );
             $completed = array_key_exists( $status, $completed_status );
+            $wait      = array_key_exists( $status, $wait_status );
 
-            // not used:
-            // $wait      = array_key_exists( $status, $wait_status );
+            if ( $wait && $next_wait_clear ) {
+                $nextWaitStatusMsg     = $obj->{ 'nextWaitStatusMsg' };
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='${nextWaitStatus}', statusMsg='${nextWaitStatusMsg}', nextWaitStatus=NULL, nextWaitStatusMsg=NULL WHERE ${id_field} = ${ID}";
+                $result = mysqli_query( $db_handle, $query );
+
+                write_logls( "${submit_request_table_name} clearing WAIT ${id_field} $ID stage", 1 );
+                if ( !$result ) {
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} query='$query'.", 0 );
+                } else {
+                    write_logls( "updating table ${submit_request_table_name} ${id_field} ${ID} nextWaitStatus", 2 );
+                }
+                $work_done = 1;
+                continue;
+            }
 
             if ( !$failed &&
                  !$completed &&
