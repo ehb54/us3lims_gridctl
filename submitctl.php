@@ -252,7 +252,7 @@ while( 1 ) {
                 continue;
             }
 
-            if ( $completed ) {
+            if ( $completed || $failed ) {
                 # shift to processed
                 $stage = $statusJson->{ $processing_key };
                 unset( $statusJson->{ $processing_key } );
@@ -314,6 +314,16 @@ while( 1 ) {
                     $scancel = "scancel $currentGfacID >> $home/etc/submit.log 2>&1 &";
                     write_logls( "canceling gfac job with '$scancel'", 1 );
                     shell_exec( "scancel $currentGfacID >> $home/etc/submit.log 2>&1 &" );
+                }
+                # update the db for failure status
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $result = mysqli_query( $db_handle, $query );
+
+                write_logls( "${submit_request_table_name} failing ${id_field} $ID stage " . json_encode( $stage ), 1 );
+                if ( !$result ) {
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                } else {
+                    write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
                 write_logls( "${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
             } else {
