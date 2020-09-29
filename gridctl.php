@@ -1263,7 +1263,7 @@ function update_autoflow_status( $status, $message ) {
     $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
         "status='$status', " . 
         "statusMsg='$message' " . 
-        "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' ";
+        "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
     
     $result = mysqli_query( $gLink, $query );
     if ( ! $result ) {

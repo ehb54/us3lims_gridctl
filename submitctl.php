@@ -309,6 +309,12 @@ while( 1 ) {
             
             # must be completed or failed
             if ( $failed ) {
+                if ( $currentGfacID = $obj->{ 'currentGfacID' } ) {
+                    # only works for slurm
+                    $scancel = "scancel $currentGfacID >> $home/etc/submit.log 2>&1 &";
+                    write_logls( "canceling gfac job with '$scancel'", 1 );
+                    shell_exec( "scancel $currentGfacID >> $home/etc/submit.log 2>&1 &" );
+                }
                 write_logls( "${submit_request_table_name} ${id_field} $ID processing FAILED, moving to history", 1 );
             } else {
                 write_logls( "${submit_request_table_name} ${id_field} $ID all processing complete, moving to history", 1 );
