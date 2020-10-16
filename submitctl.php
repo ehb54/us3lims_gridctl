@@ -287,8 +287,8 @@ while( 1 ) {
                     write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
                 # run each submit in a separate shell
-                $cmd = "php submitone.php $lims_db $ID >> $home/etc/submit.log 2>&1 &";
-                write_logls( "running cmd" );
+                $cmd = "php $home/bin/submitone.php $lims_db $ID >> $home/etc/submit.log 2>&1 &";
+                write_logls( "running $cmd" );
                 shell_exec( $cmd );
                 $work_done = 1;
                 continue;
