@@ -78,6 +78,10 @@ function debug_json( $msg, $json ) {
     echo "\n";
 }
 
+function quote_fix( $str ) {
+    return str_replace( "'", "*", $str );
+}
+
 # Gary: should we have our own log? currently log is "udp.log" 
 
 write_logls( "Starting" );
@@ -201,7 +205,11 @@ while( 1 ) {
         
         # read from mysql - $submit_request_table_name
         $query        = "SELECT ${id_field}, clusterDefault, status, currentGfacID, currentHPCARID, statusMsg, nextWaitStatus, nextWaitStatusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM ${lims_db}.${submit_request_table_name}";
+        
         $outer_result = mysqli_query( $db_handle, $query );
+        if ( mysqli_error( $db_handle ) != "" ) {
+            write_logls( "read from mysql query='$query'. " . mysqli_error( $db_handle ) );
+        }
 
         if ( !$outer_result || !$outer_result->num_rows ) {
             if ( $outer_result ) {
@@ -230,13 +238,14 @@ while( 1 ) {
             $wait      = array_key_exists( $status, $wait_status );
 
             if ( $wait && $next_wait_clear ) {
-                $nextWaitStatusMsg     = $obj->{ 'nextWaitStatusMsg' };
+                $nextWaitStatusMsg     = quote_fix( $obj->{ 'nextWaitStatusMsg' } );
+
                 $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='${nextWaitStatus}', statusMsg='${nextWaitStatusMsg}', nextWaitStatus=NULL, nextWaitStatusMsg=NULL WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logls( "${submit_request_table_name} clearing WAIT ${id_field} $ID stage", 1 );
                 if ( !$result ) {
-                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} query='$query'.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} query='$query'. " . mysqli_error( $db_handle ), 0 );
                 } else {
                     write_logls( "updating table ${submit_request_table_name} ${id_field} ${ID} nextWaitStatus", 2 );
                 }
@@ -262,7 +271,7 @@ while( 1 ) {
                             "gfacID"                => $obj->{ 'currentGfacID'   },
                             "HPCAnalysisRequestID"  => $obj->{ 'currentHPCARID'  },
                             "status"                => $obj->{ 'status'          },
-                            "statusMsg"             => $obj->{ 'statusMsg'       },
+                            "statusMsg"             => quote_fix( $obj->{ 'statusMsg' } ),
                             "updateTime"            => $obj->{ 'updateTime'      },
                             "createTime"            => $obj->{ 'stageSubmitTime' }
                         ]
@@ -282,7 +291,7 @@ while( 1 ) {
 
                 write_logls( "${submit_request_table_name} submitting ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson. $query='$query' " . mysqli_error( $db_handle ), 0 );
                 } else {
                     write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
@@ -296,12 +305,12 @@ while( 1 ) {
 
             if ( $completed ) {
                 # update the db for after the final stage completes (if there were more stages, the prior if() would run instead)
-                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, status='FINISHED', statusMsg='Final stage completed', statusjson='" . json_encode( $statusJson ) . "' WHERE ${id_field} = ${ID}";
+                $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, status='FINISHED', statusMsg='Final stage completed', statusjson='" . str_replace( "'", "\'", json_encode( $statusJson ) ) . "' WHERE ${id_field} = ${ID}";
                 $result = mysqli_query( $db_handle, $query );
 
                 write_logls( "${submit_request_table_name} finishing ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson query='$query'. " . mysqli_error( $db_handle ), 0 );
                 } else {
                     write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
@@ -321,7 +330,7 @@ while( 1 ) {
 
                 write_logls( "${submit_request_table_name} failing ${id_field} $ID stage " . json_encode( $stage ), 1 );
                 if ( !$result ) {
-                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 0 );
+                    write_logls( "error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson query='$query'. " . mysqli_error( $db_handle ), 0 );
                 } else {
                     write_logls( "success updating table ${submit_request_table_name} ${id_field} ${ID} statusJson.", 2 );
                 }
@@ -340,7 +349,7 @@ while( 1 ) {
             $result = mysqli_query( $db_handle, $query );
 
             if ( !$result ) {
-                write_logls( "error copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 0 );
+                write_logls( "error copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}. $query='$query'. " . mysqli_error( $db_handle ), 0 );
             } else {
                 write_logls( "success copying ${id_field} ${ID} from ${submit_request_table_name} to ${submit_request_history_table_name}.", 2 );
                 # $result->free_result();
@@ -350,7 +359,7 @@ while( 1 ) {
             $result = mysqli_query( $db_handle, $query );
             
             if ( !$result ) {
-                write_logls( "error deleting ${id_field} ${ID} from ${submit_request_table_name}.", 0 );
+                write_logls( "error deleting ${id_field} ${ID} from ${submit_request_table_name}. $query='$query'. " . mysqli_error( $db_handle ), 0 );
             } else {
                 write_logls( "success deleting ${id_field} ${ID} from ${submit_request_table_name}.", 2 );
                 # $result->free_result();
