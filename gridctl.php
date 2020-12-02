@@ -1260,9 +1260,11 @@ function update_autoflow_status( $status, $message ) {
         write_log( "$self: update_autoflow_status() ignored, no id" );
         return;
     }
+    # escape quotes in message
+    $sqlmessage = str_replace( "'", "\'", $message );
     $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
         "status='$status', " . 
-        "statusMsg='$message' " . 
+        "statusMsg='$sqlmessage' " . 
         "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
     
     $result = mysqli_query( $gLink, $query );
