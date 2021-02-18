@@ -104,10 +104,13 @@ $cluster_config = "$www_uslims3/$lims_db/$cluster_config_name";
 
 if ( !file_exists( $cluster_config ) ) {
     # write_logl( "Notice: $cluster_config does not exist" );
-    $cluster_config = "$www_uslims3_newlims/$cluster_config_name";
-}
-if ( !file_exists( $cluster_config ) ) {
-    error( "Error: $cluster_config does not exist" );
+    $default_cluster_config = "$www_uslims3_newlims/$cluster_config_name";
+    if ( !file_exists( $default_cluster_config ) ) {
+        error( "Error: $default_cluster_config does not exist" );
+    } else {
+        write_logl( "Notice: copying $default_cluster_config to $cluster_config" );
+        copy( $default_cluster_config, $cluster_config );
+    }
 }
     
 write_logl( "Notice: reading $cluster_config" );
