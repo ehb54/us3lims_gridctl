@@ -295,9 +295,9 @@ if ( isset( $job_attributes->{'interactive'} ) ) {
 }
 
 if ( $cluster == "localhost" ) {
-    $cluster = "us3iab-node1";
+    $cluster = "us3iab-node0";
 }
-$queue = "normal";
+$queue = "batch";
 
 $conv_2dsa_keys = [
     "s_min"              => "s_value_min"
