@@ -5,6 +5,7 @@ $work        = "$home/work";
 $work_remote = "$home_remote/work";
 $pipe        = "$home/etc/us3-pipe";
 $logfile     = "$home/etc/udp.log";
+$lock_dir    = "$home/etc";
 $cfgfile     = "$home/.us3lims.ini";
 $configs     = parse_ini_file( $cfgfile, true );
 $submit_dir  = '/srv/www/htdocs/uslims3/uslims3_data'; // LIMS submit files dir
