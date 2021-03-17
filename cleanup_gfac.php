@@ -47,6 +47,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    {
       write_log( "$me: could not connect: $dbhost, $user, $passwd, $db" );
       mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $db" );
+      update_autoflow_status( 'FAILED', "Internal error - cleanup could not connect to DB $db" );
       return( -1 );
    }
 
@@ -59,6 +60,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    {
       write_log( "$me: Bad query: $query" );
       mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
@@ -86,12 +88,14 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    if ( ! $result )
    {
       write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
    if ( mysqli_num_rows( $result ) == 0 )
    {
       write_log( "$me: US3 Table error - No records for requestID: $requestID" );
+      update_autoflow_status( 'FAILED', "US3 Table error - No recoreds for requestID: $requestID" );
       return( -1 );
    }
 
@@ -107,6 +111,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    {
       write_log( "$me: Bad query: $query" );
       mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
@@ -120,6 +125,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    {
       write_log( "$me: Could not connect to DB $dbhost : $gDB" );
       mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $gDB" );
+      update_autoflow_status( 'FAILED', "Internal error - Could not connect to DB $gDB" );
       return( -1 );
    }
 
@@ -131,6 +137,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    {
       write_log( "$me: Could not select GFAC status for $gfacID" );
       mail_to_user( "fail", "Could not select GFAC status for $gfacID" );
+      update_autoflow_status( 'FAILED', "Could not select GFAC status for $gfacID" );
       return( -1 );
    }
 
@@ -138,6 +145,7 @@ function gfac_cleanup( $us3_db, $reqID, $gfac_link )
    if ( $num_rows == 0 )
    {
       write_log( "$me: Cleanup analysis query found 0 entries for $gfacID" );
+      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
       return( 0 );
    }
 //else
@@ -171,6 +179,7 @@ write_log( "$me:     NO get_local_files()" );
    {
       write_log( "$me: Bad query:\n$query\n" . mysqli_error( $gfac_link ) );
       mail_to_user( "fail", "Internal error " . mysqli_error( $gfac_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $gfac_link ) );
       return( -1 );
    }
 
@@ -178,6 +187,7 @@ write_log( "$me:     NO get_local_files()" );
    if ( $num_rows == 0 )
    {
       write_log( "$me: Cleanup analysis query found 0 entries for $gfacID" );
+      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
       return( 0 );
    }
 
@@ -189,6 +199,7 @@ write_log( "$me:     NO get_local_files()" );
    }
    else
    {  // Log failure at fetch attempt
+      update_autoflow_status( 'FAILED', "Failed data fetch" );
       write_log( "$me: Failed data fetch: $requestID $gfacID" );
       if ( $analysisID == '' )
          $analysisID = '0';
@@ -261,13 +272,13 @@ write_log( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" 
    }
 
    // Save stdout, stderr, etc. for message log
-   $query  = "SELECT stdout, stderr, status, queue_msg FROM analysis " .
+   $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM analysis " .
              "WHERE gfacID='$gfacID' ";
    $result = mysqli_query( $gfac_link, $query );
    try
    {
       // What if this is too large?
-      list( $stdout, $stderr, $status, $queue_msg ) = mysqli_fetch_array( $result );
+      list( $stdout, $stderr, $status, $queue_msg, $autoflowID ) = mysqli_fetch_array( $result );
    }
    catch ( Exception $e )
    {
@@ -287,6 +298,7 @@ write_log( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" 
                    "\n\n\nGFAC Status: $status\n" .
                    "GFAC message field: $queue_msg\n";
 
+   update_autoflow_status( $status, $queue_msg );
    // Delete data from GFAC DB
    $query = "DELETE from analysis WHERE gfacID='$gfacID'";
 
@@ -338,6 +350,7 @@ write_log( "$me: *messages.txt written" );
 
    if ( ! $result )
    {
+      update_autoflow_status( 'FAILED', "Could not insert data into HPCAnalysis" );
       write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       return( -1 );
@@ -348,6 +361,7 @@ write_log( "$me: *messages.txt written" );
    if ( strlen( $tarfile ) == 0 )
    {
       write_log( "$me: No tarfile" );
+      update_autoflow_status( 'FAILED', "Empty results tarfile" );
       mail_to_user( "fail", "No results" );
       return( -1 );
    }
@@ -355,6 +369,7 @@ write_log( "$me: *messages.txt written" );
    // Shouldn't happen
    if ( ! is_dir( "$work" ) )
    {
+      update_autoflow_status( 'FAILED', "$work directory does not exist" );
       write_log( "$me: $work directory does not exist" );
       mail_to_user( "fail", "$work directory does not exist" );
       return( -1 );
@@ -377,6 +392,7 @@ write_log( "$me: *messages.txt written" );
       exec( "rm -r $gfacID" );
       $output = implode( "\n", $tar_out );
 
+      update_autoflow_status( 'FAILED', "Bad output tarfile: $output" );
       write_log( "$me: Bad output tarfile: $output" );
       mail_to_user( "fail", "Bad output file" );
       return( -1 );
@@ -410,6 +426,7 @@ write_log( "$me: *messages.txt written" );
 
       if ( filesize( $fn ) < 100 )
       {
+         update_autoflow_status( 'FAILED', "Internal error - $fn is invalid" );
          write_log( "$me:fn is invalid $fn" );
          mail_to_user( "fail", "Internal error\n$fn is invalid" );
          return( -1 );
@@ -474,6 +491,7 @@ write_log( "$me: *messages.txt written" );
          {
             write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
             mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
@@ -515,6 +533,7 @@ write_log( "$me:   mrecs file editGUID=$editGUID" );
          {
             write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
             mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
@@ -561,6 +580,7 @@ write_log( "$me:   MODELUpd: O:description=$description" );
          {
             write_log( "$me: Bad query:\n$query " . mysqli_error( $us3_link ) );
             mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
@@ -585,6 +605,7 @@ write_log( "$me:   MODELUpd: O:description=$description" );
       {
          write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
          mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 //write_log( "$me:    ResultData updated : file_type=$file_type" );
@@ -610,6 +631,7 @@ write_log( "$me:   MODELUpd: O:description=$description" );
       {
          write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
          mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 //write_log( "$me:     noise entry updated : noiseID=$noiseID" );
@@ -632,6 +654,7 @@ write_log( "$me:   MODELUpd: O:description=$description" );
       {
          write_log( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
          mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 //write_log( "$me:     mrecs entry updated : mrecsID=$mrecsID" );

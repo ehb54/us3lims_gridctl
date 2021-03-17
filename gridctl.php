@@ -20,6 +20,8 @@ global $status_ex, $status_gw;
 $now = time();
 echo "Time started: " . date( 'Y-m-d H:i:s', $now ) . "\n";
 
+write_log( "start of gridctl.php" );
+
 // Get data from global GFAC DB 
 $gLink    = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
@@ -33,7 +35,7 @@ if ( ! $gLink )
 }
    
 $query = "SELECT gfacID, us3_db, cluster, status, queue_msg, " .
-                "UNIX_TIMESTAMP(time), time from analysis";
+                "UNIX_TIMESTAMP(time), time, autoflowAnalysisID from analysis";
 $result = mysqli_query( $gLink, $query );
 
 if ( ! $result )
@@ -53,11 +55,12 @@ if ( mysqli_num_rows( $result ) == 0 )
 $me_devel  = preg_match( "/class_devel/", $class_dir );
 //echo "me_devel=$me_devel class_dir=$class_dir\n";
 
-while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTime ) 
+while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTime, $autoflowID ) 
             = mysqli_fetch_array( $result ) )
 {
    // If this entry does not match class/class_devel, skip processing
 //echo "  gfacID=$gfacID gf_status=$status\n";
+   write_log( "$self: gfacID=$gfacID gf_status=$status autoflowID=$autoflowID" );
 
    if ( preg_match( "/US3-A/i", $gfacID ) )
    {  // For thrift, job and gridctl must match
@@ -147,6 +150,7 @@ echo "$loghdr status_lo=$status\n";
       if ( ! $result2 )
          write_log( "$loghdr Query failed $query2 - " .  mysqli_error( $gLink ) );
 
+      update_autoflow_status( 'ERROR', 'GFAC DB is NULL' );
    }
 
 //echo "  st=$status\n";
@@ -171,7 +175,7 @@ echo "$loghdr status_lo=$status\n";
       case "STARTED":
       case "STAGING":
       case "ACTIVE":
-         running( $time );
+         running( $time, $queue_msg );
          break;
 
       case "RUN_TIMEOUT":
@@ -220,6 +224,7 @@ function submitted( $updatetime )
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    $now = time();
@@ -254,6 +259,8 @@ write_log( "$loghdr submitted:job_status=$job_status" );
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'SUBMIT_TIMEOUT', $message );
+
 }
 
 function submit_timeout( $updatetime )
@@ -261,6 +268,7 @@ function submit_timeout( $updatetime )
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false )
@@ -290,20 +298,26 @@ function submit_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'FAILED', $message );
 }
 
-function running( $updatetime )
+function running( $updatetime, $queue_msg )
 {
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    $now = time();
 
    get_us3_data();
 
-   if ( $updatetime + 600 > $now ) return;   // message received < 10 minutes ago
+   update_autoflow_status( 'RUNNING', $queue_msg );
+
+   if ( $updatetime + 600 > $now ) {
+       return;   // message received < 10 minutes ago
+   }
 
    if ( $updatetime + 86400 > $now ) // Within the first 24 hours
    {
@@ -313,9 +327,9 @@ function running( $updatetime )
       if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' ) 
          return;
 
-      if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) )
+      if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) ) {
          update_job_status( $job_status, $gfacID );
-
+      }
       return;
    }
 
@@ -330,6 +344,7 @@ function running( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'RUN_TIMEOUT', $message );
 }
 
 function run_timeout( $updatetime )
@@ -337,6 +352,7 @@ function run_timeout( $updatetime )
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false )
@@ -368,6 +384,7 @@ function run_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'FAILED', $message );
 }
 
 function wait_data( $updatetime )
@@ -375,6 +392,7 @@ function wait_data( $updatetime )
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    $now = time();
@@ -416,6 +434,7 @@ function wait_data( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'DATA_TIMEOUT', $message );
 }
 
 function data_timeout( $updatetime )
@@ -423,6 +442,7 @@ function data_timeout( $updatetime )
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $loghdr;
 
    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false )
@@ -464,6 +484,7 @@ function data_timeout( $updatetime )
 
    update_queue_messages( $message );
    update_db( $message );
+   update_autoflow_status( 'FAILED', $message );
 }
 
 function complete()
@@ -483,6 +504,7 @@ function cleanup()
    global $self;
    global $gLink;
    global $gfacID;
+   global $autoflowID;
    global $us3_db;
    global $loghdr;
    global $class_dir;
@@ -545,6 +567,7 @@ function update_job_status( $job_status, $gfacID )
     case 'INITIALIZED' :
     case 'UPDATING'    :
     case 'PENDING'     :
+      $status  = 'SUBMITTED';
       $query   = "UPDATE analysis SET status='SUBMITTED' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is SUBMITTED";
       break;
@@ -552,6 +575,7 @@ function update_job_status( $job_status, $gfacID )
     case 'STARTED'     :
     case 'RUNNING'     :
     case 'ACTIVE'      :
+      $status  = 'RUNNING';
       $query   = "UPDATE analysis SET status='RUNNING' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is RUNNING";
       break;
@@ -561,45 +585,53 @@ function update_job_status( $job_status, $gfacID )
       break;
 
     case 'FINISHED'    :
+      $status  = 'FINISHED';
       $query   = "UPDATE analysis SET status='FINISHED' WHERE gfacID='$gfacID'";
       $message = "NONE";
       break;
 
     case 'DONE'        :
+      $status  = 'DONE';
       $query   = "UPDATE analysis SET status='DONE' WHERE gfacID='$gfacID'";
       $message = "NONE";
       break;
 
     case 'COMPLETED'   :
     case 'COMPLETE'   :
+      $status  = 'COMPLETE';
       $query   = "UPDATE analysis SET status='COMPLETE' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is COMPLETED";
       break;
 
     case 'DATA'        :
+      $status  = 'DATA';
       $query   = "UPDATE analysis SET status='DATA' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is COMPLETE, waiting for data";
       break;
 
     case 'CANCELED'    :
     case 'CANCELLED'   :
+      $status  = 'CANCELED';
       $query   = "UPDATE analysis SET status='CANCELED' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is CANCELED";
       break;
 
     case 'FAILED'      :
+      $status  = 'FAILED';
       $query   = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is FAILED";
       break;
 
     case 'UNKNOWN'     :
 write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
+      $status  = 'ERROR';
       $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
       $message = "Job status request reports job is not in the queue";
       break;
 
     default            :
       // We shouldn't ever get here
+      $status  = 'ERROR';
       $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
       $message = "Job status was not recognized - $job_status";
       write_log( "$loghdr update_job_status: " .
@@ -617,6 +649,9 @@ write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
    {
       update_queue_messages( $message );
       update_db( $message );
+      update_autoflow_status( $status, $message );
+   } else {
+      update_autoflow_status( $status, $status );
    }
 }
 
@@ -624,6 +659,7 @@ function get_us3_data()
 {
    global $self;
    global $gfacID;
+   global $autoflowID;
    global $dbhost;
    global $user;
    global $passwd;
@@ -855,7 +891,7 @@ function get_local_status( $gfacID )
    $is_umont  = preg_match( "/umontana/",   $cluster );
    $is_us3iab = preg_match( "/us3iab/",     $cluster );
    $is_slurm  = ( $is_jetstr  ||  $is_us3iab );
-   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont );
+   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab );
    $ruser     = "us3";
 
    if ( $is_squeu )
@@ -1211,4 +1247,31 @@ write_log( "$loghdr status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex"
    return $status;
 }
 
+function update_autoflow_status( $status, $message ) {
+    global $gLink;
+    global $gfacID;
+    global $autoflowID;
+    global $us3_db;
+    global $self;
+
+    write_log( "$self: update_autoflow_status() id $autoflowID status $status message $message" );
+        
+    if ( $autoflowID <= 0 ) {
+        write_log( "$self: update_autoflow_status() ignored, no id" );
+        return;
+    }
+    # escape quotes in message
+    $sqlmessage = str_replace( "'", "\'", $message );
+    $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
+        "status='$status', " . 
+        "statusMsg='$sqlmessage' " . 
+        "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
+    
+    $result = mysqli_query( $gLink, $query );
+    if ( ! $result ) {
+        // Just log it and continue
+        write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );
+    }
+}
+   
 ?>

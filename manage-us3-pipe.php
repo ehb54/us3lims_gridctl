@@ -4,6 +4,12 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 include "$class_dir/experiment_status.php";
 
+# add locking
+if ( isset( $lock_dir ) ) {
+    $lock_main_script_name  = __FILE__;
+    require "$us3bin/lock.php";
+}
+
 write_log( "$self: Starting" );
 
 $handle = fopen( $pipe, "r+" );
