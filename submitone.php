@@ -127,7 +127,7 @@ if ( !isset( $statusJson->{ $processing_key } ) ||
 }
 
 $stage  = $statusJson->{ $processing_key };
-$triple = $autoflowanalysis->{ 'tripleName' };
+$triple = str_replace( ".Interference", ".660", $autoflowanalysis->{ 'tripleName' } );
 $invID  = $autoflowanalysis->{ 'invID' };
 
 write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETTY_PRINT ) );
@@ -182,6 +182,8 @@ $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 echo "personid:" .  $person->{'personID'} . "\n";
 
 $php_base          = "${www_uslims3}/${lims_db}";
+chdir( $php_base );
+
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
 # ************* queue_setup_1 ***************
