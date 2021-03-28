@@ -3,14 +3,6 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
 
-if ( ! preg_match( "/_local/", $class_dir ) )
-{
-   $xml  = get_data();
-
-   if ( $xml != "" )
-      parse( $xml );
-}
-
 $data = array();
 
 local_status();
@@ -23,86 +15,6 @@ foreach ( $data as $item )
 
 //exit();
 exit(0);
-
-// Get the cluster status
-
-function get_data()
-{
-   global $self;
-   $url = "http://community.ucs.indiana.edu:19444/orps-service/XML/gateway/ultrascan";
-
-   try
-   {
-      $post = new HttpRequest( $url, HttpRequest::METH_GET );
-      $http = $post->send();
-      $xml  = $post->getResponseBody();      
-   }
-   catch ( HttpException $e )
-   {
-//      write_log( "$self: Cluster Status not available" );
-      return "";
-   }
-
-   return $xml;
-}
-
-// Parse the xml
-
-function parse( $xml )
-{
-   global $data;
-   
-   $data = array();
-
-   $x = new XML_Array( $xml );
-   $d = $x->ReturnArray();
-
-   if ( ! isset( $d[ 'summaries' ] ) ) exit();  // Bad input
-
-   foreach ( $d[ 'summaries' ] as $item )
-   {
-      $a = Array();
-
-      
-      $a[ 'queued'  ] = $item[ 'waitingJobs' ];
-      $a[ 'running' ] = $item[ 'runningJobs' ];
-
-      if (  $a[ 'queued'  ] == ""  ||  $a[ 'queued'  ] < 0 ) $a[ 'queued'  ] = 0;
-      if (  $a[ 'running' ] == ""  ||  $a[ 'running' ] < 0 ) $a[ 'running' ] = 0;
-
-      $clusterParts  = explode( ".", $item[ 'resourceId' ] );
-      $cluster       = preg_replace( '/\d+$/', "", $clusterParts[ 0 ] );
-
-      if ( $cluster == 'uthscsa-bcf' )   $cluster = 'bcf';
-      if ( $cluster == 'uthscsa-alamo' ) $cluster = 'alamo';
-
-      $a[ 'cluster' ] = $cluster;
-      
-      switch ( $item[ 'resourceStatus' ] )
-      {
-         case 'UP'     :
-            $status = "up";
-            break;
-
-         case 'DOWN'   :
-            $status = "down";
-            break;
-
-         case 'WARN'   :
-            $status = "warn";
-            break;
-
-         case 'FAILED' :
-         default       :
-            $status = "unknown";
-            break;
-      }
-      
-      $a[ 'status' ]  = $status;
-
-      $data[] = $a;
-   }
-}
 
 // Put it in the DB
 
@@ -177,14 +89,16 @@ function local_status()
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel" );
       else
-//         $clusters = array( "us3iab-node0",  "demeler3-local", "puhti-local" );
-         $clusters = array( "us3iab-node0" );
+         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
+//         $clusters = array( "us3iab-node0" );
    }
    else
    {
-      $clusters = array( "lonestar5", "comet",
-                         "stampede2", "jetstream" );
+	   $clusters = array( "stampede2", "lonestar5", "comet", "jetstream",
+                              "bridges2", "expanse", "expanse-gamc",
+                              "umontana-local", "demeler9-local" );
    }
+##                                        "expanse", "expanse-gamc",
 
    foreach ( $clusters as $clname )
    {
@@ -197,8 +111,8 @@ function local_status()
          {  // USiaB local cluster using slurm
 //            $host   = "us3@js-169-137.jetstream-cloud.org";
 //            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
-  	         $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
-echo "qstat=$qstat";
+  	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
+##echo "qstat=$qstat";
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
             $knts   = $sparts[ 1 ];
@@ -239,10 +153,26 @@ echo "qstat=$qstat";
                $sta    = "down";
             break;
          }
+	 case 'demeler9-local':
+         {  // USiaB local cluster using slurm
+            $host   = "us3@demeler9.uleth.ca";
+  	    $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+##echo "qstat=$qstat";
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $sparts = preg_split( '/\//', $knts );
+            $run    = $sparts[ 0 ];
+            $que    = $sparts[ 2 ];
+            $tot    = $sparts[ 3 ];
+            if ( $sta == "" )
+               $sta    = "down";
+            break;
+         }
          case 'stampede2':
          {
             $host   = "us3@stampede2.tacc.utexas.edu";
-            $qstat  = `ssh $host '~us3/scripts/clusstat skx-normal 2>/dev/null'`;
+            $qstat  = `ssh $host '~us3/scripts/clusstat skx-normal 2>/dev/null' 2>/dev/null`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = $sparts[ 5 ];
@@ -255,7 +185,7 @@ echo "qstat=$qstat";
          case 'lonestar5':
          {
             $host   = "us3@ls5.tacc.utexas.edu";
-            $qstat  = `ssh $host '/opt/apps/tacc/bin/showq 2>/dev/null|grep "Total Jobs"'`;
+            $qstat  = `ssh $host '/opt/apps/tacc/bin/showq 2>/dev/null|grep "Total Jobs"' 2>/dev/null`;
             $sparts = preg_split( '/\s+/', $qstat );
             $tot    = $sparts[ 2 ];
             $run    = '0';
@@ -333,6 +263,61 @@ echo "qstat=$qstat";
             $tot    = $sparts[ 3 ];
             if ( $sta == "" )
                $sta    = "down";
+            break;
+         }
+         case 'bridges2':
+         {
+	    $host   = "us3@bridges2.psc.edu";
+	    $partit = "RM-shared";
+            $qstat  = `ssh $host '/jet/home/us3/scripts/cstat $partit 2>&1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 1 ];
+            $run    = '0';
+	    $que    = '0';
+	    $sta    = "up";
+	    if ( $tot == '0' )
+	    {
+               $sta    = "down";
+	    }
+	    else
+	    {
+               $run    = $sparts[ 3 ];
+	       $que    = $sparts[ 5 ];
+	       if ( $run == '0'  &&  $que == '0' )
+	       {
+                  $sta    = "down";
+	       }
+	    }
+            break;
+         }
+         case 'expanse':
+         case 'expanse-gamc':
+         {
+	    $host   = "us3@login.expanse.sdsc.edu";
+	    $partit = "shared";
+	    if ( preg_match( "/-gamc/", $clname ) )
+	    {
+	       $partit = "compute";
+	    }
+            $qstat  = `ssh $host '/home/us3/scripts/cstat $partit 2>&1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $tot    = $sparts[ 1 ];
+            $run    = '0';
+	    $que    = '0';
+	    $sta    = "up";
+	    if ( $tot == '0' )
+	    {
+               $sta    = "down";
+	    }
+	    else
+	    {
+               $run    = $sparts[ 3 ];
+	       $que    = $sparts[ 5 ];
+	       if ( $run == '0'  &&  $que == '0' )
+	       {
+                  $sta    = "down";
+	       }
+	    }
             break;
          }
          case 'chinook-local':

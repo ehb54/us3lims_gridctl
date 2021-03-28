@@ -315,24 +315,6 @@ function notify_gfac_done( $gfacID )
       return false;
    }
 
-   $url = "$serviceURL/setstatus/$gfacID";
-   try
-   {
-      $post = new HttpRequest( $url, HttpRequest::METH_GET );
-      $http = $post->send();
-      $xml  = $post->getResponseBody();      
-   }
-   catch ( HttpException $e )
-   {
-      write_log( "$self: Set status unsuccessful -  $gfacID" );
-      return false;
-   }
-
-   // Parse the result
-   // Not sure we need to know $gfac_status = parse_response( $xml );
-
-   // return $gfac_status;
-
    return true;
 }
 

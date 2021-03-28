@@ -10,6 +10,8 @@ if ( isset( $lock_dir ) ) {
     require "$us3bin/lock.php";
 }
 
+write_log( "$self: startup" );
+
 $socket = socket_create(  AF_INET,  SOCK_DGRAM,  SOL_UDP );
 
 // Listen on all interfaces
@@ -19,6 +21,7 @@ if ( ! socket_bind( $socket, 0, $listen_port ) )
   write_log( "$self: $msg" );
   exit();
 };
+write_log( "$self: socket bound" );
 
 $handle = fopen( $pipe, "r+" );
 
@@ -31,6 +34,7 @@ exec( $cmd );
 do
 {
   socket_recvfrom( $socket, $buf, 200, 0, $from, $port );
+  write_log( "$self: udp receipt: $from $port $buf\n" );
   fwrite( $handle, $buf . chr( 0 ) );
 
 } while ( trim( $buf ) != "Stop listen" );

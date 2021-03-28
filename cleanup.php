@@ -257,16 +257,6 @@ write_log( "$me:  stderr reduced from $lense original bytes ." );
 write_log( "$me:  length contents stderr,stdout,tarfile -- "
  . strlen($stderr) . "," . strlen($stdout) . "," . strlen($tarfile) );
 
-   if ( $cluster == 'alamo'  || $cluster == 'alamo-local' )
-   {  // Filter "ipath_userinit" lines out of alamo stdout lines
-      $prefln = strlen( $stdout );
-      $output = array();
-      exec( "grep -v 'ipath_userinit' $fn_stdout 2>&1", $output, $err );
-      $stdout = implode( "\n", $output );
-      $posfln = strlen( $stdout );
-write_log( "$me: fn_stdout : filtered. Length $prefln -> $posfln ." );
-   }
-
    // Save queue messages for post-mortem analysis
    $query = "SELECT message, time FROM queue_messages " .
             "WHERE analysisID = $analysisID " .
@@ -755,6 +745,10 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
          else if ( isset( $servhost ) )
             $limshost    = $servhost;
       }
+      if ( preg_match( "/lims4.noval/", $limshost ) )
+      {  # simplify name of vm on jetstream
+         $limshost    = "uslims4.aucsolutions.com";
+      }
    }
 
    // Parse the editXMLFilename
@@ -847,22 +841,6 @@ function get_gfac_message( $gfacID )
       return false;
    }
 
-   $url = "$serviceURL/jobstatus/$gfacID";
-   try
-   {
-      $post = new HttpRequest( $url, HttpRequest::METH_GET );
-      $http = $post->send();
-      $xml  = $post->getResponseBody();      
-   }
-   catch ( HttpException $e )
-   {
-      write_log( "$me: Job status not available - $gfacID" );
-      return false;
-   }
-
-   // Parse the result
-   $gfac_message = parse_message( $xml );
-
    return $gfac_message;
 }
 
@@ -910,7 +888,6 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_jetstr  = preg_match( "/jetstream/", $cluster );
-   $is_demeler3 = preg_match( "/demeler3/", $cluster );
 
    $limshost   = $dbhost;
    $stderr     = '';
@@ -939,6 +916,7 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
 
    // Figure out job's remote (or local) work directory
    $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
+   $ruser     = "us3";
 //write_log( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
 
    // Get stdout, stderr, output/analysis-results.tar
@@ -947,21 +925,32 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    if ( $is_us3iab == 0 )
    {
       // For "-local", recompute remote work directory
-      $clushost = "$cluster.uthscsa.edu";
+      $clushost = "$cluster.hs.umt.edu";
       $lworkdir = "~us3/lims/work/local";
-      if ( $is_jetstr )
+      if ( preg_match( "/jetstream/", $cluster ) )
       {
          $clushost = "js-169-137.jetstream-cloud.org";
          $lworkdir = "/N/us3_cluster/work/local";
       }
       
-      if ( $is_demeler3 )
+      if ( preg_match( "/chinook/", $cluster ) )
       {
-         $clushost = "demeler3.uleth.ca";
-         $lworkdir = "/home/us3/work"; 
+         $clushost = "chinook.hs.umt.edu";
+         $lworkdir = "/home/us3/lims/work"; 
+      }
+      if ( preg_match( "/umontana/", $cluster ) )
+      {
+         $clushost = "login.gscc.umt.edu";
+         $ruser    = "bd142854e";
+         $lworkdir = "/home/bd142854e/cluster/work";
+      }
+      if ( preg_match( "/demeler9/", $cluster ) )
+      {
+         $clushost = "demeler9.uleth.ca";
+         $lworkdir = "/home/us3/lims/work"; 
       }
 
-      $cmd         = "ssh us3@$clushost 'ls -d $lworkdir' 2>/dev/null";
+      $cmd         = "ssh $ruser@$clushost 'ls -d $lworkdir' 2>/dev/null";
       exec( $cmd, $output, $stat );
       $work_remote = $output[ 0 ];
       $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
@@ -971,13 +960,13 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
       if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
       $pwd = chdir( "$work/$gfacID" );
 
-      $cmd = "scp us3@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
+      $cmd = "scp $ruser@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )
          write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
 
-      $cmd = "scp us3@$clushost:$remoteDir/stdout . 2>&1";
+      $cmd = "scp $ruser@$clushost:$remoteDir/stdout . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )
@@ -990,7 +979,7 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
             write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
       }
 
-      $cmd = "scp us3@$clushost:$remoteDir/stderr . 2>&1";
+      $cmd = "scp $ruser@$clushost:$remoteDir/stderr . 2>&1";
 
       exec( $cmd, $output, $stat );
       if ( $stat != 0 )

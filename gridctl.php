@@ -133,7 +133,7 @@ if($status != $status_in )
       if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
          $status     = $status_gw;
 echo "$loghdr status_lo=$status\n";
-//write_log( "$loghdr Local status=$status status_gw=$status_gw" );
+write_log( "$loghdr Local status=$status status_gw=$status_gw" );
    }
 
    // Sometimes during testing, the us3_db entry is not set
@@ -154,7 +154,7 @@ echo "$loghdr status_lo=$status\n";
    }
 
 //echo "  st=$status\n";
-//write_log( "$loghdr switch status=$status" );
+write_log( "$loghdr switch status=$status" );
    switch ( $status )
    {
       // Already been handled
@@ -175,6 +175,7 @@ echo "$loghdr status_lo=$status\n";
       case "STARTED":
       case "STAGING":
       case "ACTIVE":
+write_log( "$loghdr   RUNNING gfacID=$gfacID" );
          running( $time, $queue_msg );
          break;
 
@@ -193,7 +194,7 @@ echo "$loghdr status_lo=$status\n";
 
       case "COMPLETED":
       case "COMPLETE":
-//write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
+write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
          complete();
          break;
 
@@ -706,15 +707,7 @@ function get_us3_data()
 // Function to determine if this is a gfac job or not
 function is_gfac_job( $gfacID )
 {
-  $hex = "[0-9a-fA-F]";
-  if ( ! preg_match( "/^US3-Experiment/i", $gfacID ) &&
-       ! preg_match( "/^US3-$hex{8}-$hex{4}-$hex{4}-$hex{4}-$hex{12}$/", $gfacID ) )
-   {
-      // Then it's not a GFAC job
-      return false;
-   }
-
-   return true;
+   return false;
 }
 
 // Function to determine if this is an airavata/thrift job or not
@@ -753,56 +746,12 @@ function get_gfac_status( $gfacID )
       }
 
       $gfac_status  = standard_status( $status_ex );
-      return $gfac_status;
    }
 
-   else if ( ! is_gfac_job( $gfacID ) )
+   else
    {
       return false;
    }
-
-   $url = "$serviceURL/jobstatus/$gfacID";
-   try
-   {
-      $post = new HttpRequest( $url, HttpRequest::METH_GET );
-      $http = $post->send();
-      $xml  = $post->getResponseBody();      
-   }
-   catch ( HttpException $e )
-   {
-      write_log( "$loghdr Status not available - marking failed -  $gfacID" );
-      return 'GFAC_STATUS_UNAVAILABLE';
-   }
-
-   // Parse the result
-   $gfac_status = parse_response( $xml );
-
-   // This may not seem like the best place to do this, but here we have
-   // the xml straight from GFAC
-   $status_types = array('SUBMITTED',
-                         'SUBMITED',
-                         'INITIALIZED',
-                         'PENDING',
-                         'RUNNING',
-                         'ACTIVE',
-                         'STARTED',
-                         'COMPLETED',
-                         'FINISHED',
-                         'DONE',
-                         'DATA',
-                         'RESULTS_GEN',
-                         'CANCELED',
-                         'CANCELLED',
-                         'FAILED',
-                         'STAGING',
-                         'UNKNOWN');
-   if ( ! in_array( $gfac_status, $status_types ) )
-      mail_to_admin( 'debug', "gfacID: /$gfacID/\n" .
-                              "XML:    /$xml/\n"    . 
-                              "Status: /$gfac_status/\n" );
-
-   if ( in_array( $gfac_status, array( 'DONE', 'DATA', 'RESULTS_GEN' ) ) )
-      $gfac_status = 'DATA';
 
    return $gfac_status;
 }
@@ -827,6 +776,7 @@ function get_gfac_outputs( $gfacID )
       return false;
    }
 
+/*
    $url = "$serviceURL/registeroutput/$gfacID";
    try
    {
@@ -840,12 +790,11 @@ function get_gfac_outputs( $gfacID )
       return false;
    }
 
-   mail_to_admin( "debug", "get_gfac_outputs/\n$xml/" );    // Temporary, to see what the xml looks like,
-                                                            //  if we ever get one
+   mail_to_admin( "debug", "get_gfac_outputs/\n$xml/" );
 
-   // Parse the result
    $gfac_status = parse_response( $xml );
 
+ */
    return $gfac_status;
 }
 
@@ -922,14 +871,15 @@ function get_local_status( $gfacID )
         $system = "login.gscc.umt.edu";
         $ruser  = "bd142854e";
       }
-      
+
       $cmd    = "/usr/bin/ssh -x $ruser@$system " . $cmd;
-//write_log( "$self  cmd: $cmd" );
+write_log( "$self  cmd: $cmd" );
    }
 
    $result = exec( $cmd );
    //write_log( "$self  result: $result" );
 echo "locstat: cmd=$cmd  result=$result\n";
+write_log( "$self  locstat: cmd=$cmd  result=$result" );
 
    $secwait    = 2;
    $num_try    = 0;
@@ -991,6 +941,7 @@ write_log( "$self: get_local_status: job status = /$jstat/");
         $status = 'UNKNOWN';          // This should not occur
         break;
    }
+write_log( "$self: get_local_status: status = $status");
   
    return $status;
 }
