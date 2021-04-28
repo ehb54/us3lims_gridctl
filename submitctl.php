@@ -82,19 +82,31 @@ function quote_fix( $str ) {
     return str_replace( "'", "*", $str );
 }
 
-# Gary: should we have our own log? currently log is "udp.log" 
+function db_connect() {
+    global $dbhost;
+    global $user;
+    global $passwd;
+    global $db;
+    global $db_handle;
+    global $poll_sleep_seconds;
+    
+    do {
+        $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
+        if ( !$db_handle ) {
+            write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
+            sleep( $poll_sleep_seconds );
+        }
+    } while ( !$db_handle );
+}
+
 
 write_logls( "Starting" );
 
-do {
-    $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
-    if ( !$db_handle ) {
-        write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
-        sleep( $poll_sleep_seconds );
-    }
-} while ( !$db_handle );
+db_connect();
+
 
 # check for gfac.analysis.autoflowAnalysisID
+
 
 $cfield = "autoflowAnalysisID";
 $query  = "select ${cfield} from gfac.analysis limit 1";
@@ -209,6 +221,11 @@ while( 1 ) {
         $outer_result = mysqli_query( $db_handle, $query );
         if ( mysqli_error( $db_handle ) != "" ) {
             write_logls( "read from mysql query='$query'. " . mysqli_error( $db_handle ) );
+            if ( false !== strpos( mysqli_error( $db_handle ) , "MySQL server has gone away" ) ) {
+                write_logls( "trying to reconnect\n" );
+                db_connect();
+                continue;
+            }
         }
 
         if ( !$outer_result || !$outer_result->num_rows ) {
