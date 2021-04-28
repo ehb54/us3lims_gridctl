@@ -222,8 +222,9 @@ while( 1 ) {
         if ( mysqli_error( $db_handle ) != "" ) {
             write_logls( "read from mysql query='$query'. " . mysqli_error( $db_handle ) );
             if ( false !== strpos( mysqli_error( $db_handle ) , "MySQL server has gone away" ) ) {
-                write_logls( "trying to reconnect\n" );
+                write_logls( "trying to reconnect..." );
                 db_connect();
+                write_logls( "connected..." );
                 continue;
             }
         }
