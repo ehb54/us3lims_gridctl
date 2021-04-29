@@ -99,6 +99,31 @@ function db_connect() {
     } while ( !$db_handle );
 }
 
+# signal handler
+# for PHP < 7.2
+# declare(ticks = 1);
+pcntl_async_signals( true );
+
+function sig_handler($sig) {
+    switch($sig) {
+        case SIGINT:
+        write_logls( "Terminated by signal SIGINT" );
+        break;
+        case SIGHUP:
+        write_logls( "Terminated by signal SIGHUP" );
+        break;
+        case SIGTERM:
+        write_logls( "Terminated by signal SIGTERM" );
+        break;
+      default:
+        write_logls( "Terminated by unknown signal" );
+    }
+    exit(-1);
+}
+
+pcntl_signal(SIGINT,  "sig_handler");
+pcntl_signal(SIGTERM, "sig_handler");
+pcntl_signal(SIGHUP,  "sig_handler");
 
 write_logls( "Starting" );
 
