@@ -3,20 +3,48 @@
 $self = __FILE__;
 
 $notes = <<<__EOD
-usage: $self db {updatepeople}
+
+usage: $self db {copyglobalconfig} {updatepeople}
 
 reads cluster_config.php and sets uslims3_DB.people.clusterAuthorizations defaults
-if updatepeople specified, all uslims3_DB.people will get their clusters also set to the new defaults
+
+options:
+copyglobalconfig   : if specified and a dbinst specific config does not exist, make a dbinst copy from uslims3_newlims
+updatepeople       : if specified, all uslims3_DB.people will get their clusters also set to the new defaults
 
 __EOD;
 
-if ( !( count( $argv ) == 2 || ( count( $argv ) == 3 && $argv[2] == "updatepeople" ) ) ) {
+$u_argv = $argv;
+array_shift( $u_argv ); # first element is program name
+
+if ( !count( $u_argv ) ) {
     echo $notes;
     exit;
 }
 
-$lims_db       = $argv[ 1 ];
-$update_people = count( $argv ) == 3 && $argv[ 2 ] == "updatepeople";
+$lims_db            = array_shift( $u_argv );
+
+$update_people      = false;
+$copy_global_config = false;
+
+while( count( $u_argv ) ) {
+    switch( $u_argv[ 0 ] ) {
+        case "updatepeople": {
+            array_shift( $u_argv );
+            $update_people = true;
+            break;
+        }
+        case "copyglobalconfig": {
+            array_shift( $u_argv );
+            $copy_global_config = true;
+            break;
+        }
+      default: {
+          echo "\nUnknown option '$u_argv[0]'\n\n$notes";
+          exit;
+        }
+    }
+}
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
@@ -108,8 +136,13 @@ if ( !file_exists( $cluster_config ) ) {
     if ( !file_exists( $default_cluster_config ) ) {
         error( "Error: $default_cluster_config does not exist" );
     } else {
-        write_logl( "Notice: copying $default_cluster_config to $cluster_config" );
-        copy( $default_cluster_config, $cluster_config );
+        if ( $copy_global_config ) {
+            write_logl( "Notice: copying $default_cluster_config to $cluster_config" );
+            copy( $default_cluster_config, $cluster_config );
+        } else {
+            write_logl( "Notice: using global config $default_cluster_config" );
+            $cluster_config = $default_cluster_config;
+        }
     }
 }
     
