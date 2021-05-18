@@ -34,7 +34,10 @@ $poll_sleep_seconds = 30;
 # 2 : add idle polling messages
 $logging_level      = 3;
     
-$dumpfilebase = "/home/us3/lims/etc/";
+$dumpfilebase = "/home/us3/lims/etc/submit";
+if ( !is_dir( $dumpfilebase ) ) {
+    mkdir( $dumpfilebase );
+}
 
 # www_uslims3 should likely be in listen_config.php
 $www_uslims3   = "/srv/www/htdocs/uslims3";
@@ -48,6 +51,35 @@ $submit_request_history_table_name = "autoflowAnalysisHistory";
 $id_field                          = "requestID";
 $processing_key                    = "submitted";
 # ********* end admin defines ***************
+
+$cli_errors = [];
+
+function check_cli_errors() {
+    global $cli_errors;
+    if ( count( $cli_errors ) ) {
+        echo implode( "\n", $cli_errors ) . "\n";
+        fail_job();
+        exit(-1);
+    }
+}
+
+function fail_job() {
+    global $lims_db;
+    global $cli_errors;
+    global $submit_request_table_name;
+    global $id_field;
+    global $ID;
+    global $db_handle;
+    
+    $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
+    
+    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', $use_cli_errors ) . "' WHERE ${id_field} = ${ID}";
+    $result = mysqli_query( $db_handle, $query );
+    
+    if ( !$result ) {
+        write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status FAILED. query $query", 0 );
+    }
+}
 
 function write_logl( $msg, $this_level = 0 ) {
     global $logging_level;
@@ -95,9 +127,15 @@ function truestr( $val ) {
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
 
-$dumpfile = "${dumpfilebase}/submit-debug-dump-$ID.txt";
+if ( !is_dir( $dumpfilebase ) ) {
+    write_logl( "ERROR $dumpfilebase is not a directory, logs will not be stored!\n" );
+}
+
+$dumpfile = "${dumpfilebase}/$lims_db-$ID.txt";
 global $dumpfile;
-unlink( $dumpfile );
+if ( file_exists( $dumpfile ) ) {
+    unlink( $dumpfile );
+}
 
 write_logl( "Starting" );
 
@@ -186,6 +224,10 @@ chdir( $php_base );
 
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
+# person overrides
+$person->{'userlevel'} = 2;
+$person->{'email'}     = "us3-admin@biophysics.uleth.ca";
+
 # ************* queue_setup_1 ***************
 
 $php_queue_setup_1 = "${php_base}/queue_setup_1.php";
@@ -221,7 +263,6 @@ $_POST = $_REQUEST;
 
 echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
 
-
 function dump_it( $str ) {
    global $dumpfile;
    file_put_contents( $dumpfile, $str, FILE_APPEND );
@@ -232,6 +273,7 @@ function dump_it( $str ) {
 ob_start( "dump_it" );
 include( $php_queue_setup_1 );
 while (ob_get_level()) ob_end_flush();
+check_cli_errors();
 
 # ************* queue_setup_2 ***************
 # queue_setup_3 is chained by queue_setup_2
@@ -246,6 +288,7 @@ echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\
 ob_start( "dump_it" );
 include( $php_queue_setup_2 );
 while (ob_get_level()) ob_end_flush();
+check_cli_errors();
 
 echo "queue is prepared\n";
 
@@ -398,7 +441,8 @@ echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\
 ob_start( "dump_it" );
 include( $php_2dsa_1 );
 while (ob_get_level()) ob_end_flush();
-    
+check_cli_errors();
+
 # what we need to add for 2DSA
 /*
 Post:
