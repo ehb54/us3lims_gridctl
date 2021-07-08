@@ -844,7 +844,7 @@ function get_local_status( $gfacID )
    $ruser     = "us3";
 
    if ( $is_squeu )
-      $cmd    = "squeue -j $gfacID 2>&1|tail -n 1";
+      $cmd    = "squeue -t all -j $gfacID 2>&1|tail -n 1";
    else
       $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
 //write_log( "$self cmd: $cmd" );
