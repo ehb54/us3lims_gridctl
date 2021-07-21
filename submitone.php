@@ -467,7 +467,7 @@ if ( $stage == "PCSA" ) {
             if ( !in_array( $v, $pcsa_curve_types ) ) {
                 error( "pcsa curve_type $v is not supported" );
             }
-            $_REQUEST[ $ku ] = $v;
+            $_REQUEST[ $k ] = $v;
             continue;
         }
         if ( $k == 'x_type' ||
