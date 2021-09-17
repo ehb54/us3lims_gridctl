@@ -302,7 +302,7 @@ write_logld( "$me:  length contents stderr,stdout,tarfile -- "
                    "GFAC message field: $queue_msg\n";
 
    ## Delete data from GFAC DB
-   $query = "DELETE from analysis WHERE gfacID='$gfacID'";
+   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
 
@@ -341,7 +341,7 @@ write_logld( "$me:  length contents stderr,stdout,tarfile -- "
    }
 
    ## Delete data from GFAC DB
-   $query = "DELETE from analysis WHERE gfacID='$gfacID'";
+   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
 

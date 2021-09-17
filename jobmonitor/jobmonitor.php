@@ -54,7 +54,7 @@ if ( !preg_match( '/^uslims3_[A-Za-z0-9_]*$/', $us3_db ) ) {
     $errors .= "dbname has an invalid format\n";
 }
 
-if ( !preg_match( '/^[A-Za-z0-9-]*$/', $gfacID ) ) {
+if ( !preg_match( '/^[A-Za-z0-9-_]*$/', $gfacID ) ) {
     $errors .= "gfac has an invalid format\n";
 }
 

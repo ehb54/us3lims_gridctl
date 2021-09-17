@@ -290,7 +290,7 @@ write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta
 
    update_autoflow_status( $status, $queue_msg );
    ## Delete data from GFAC DB
-   $query = "DELETE from analysis WHERE gfacID='$gfacID'";
+   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
 
