@@ -1019,9 +1019,13 @@ function aira_status( $gfacID, $status_in )
 
    if ( preg_match( "/US3-A/i", $gfacID )  &&  $devmatch )
    {
-##write_logld( "status_in=$status_in status=$status gfacID=$gfacID" );
+      write_logld( "status_in=$status_in status=$status gfacID=$gfacID" );
       $status_ex = getExperimentStatus( $gfacID );
-##write_logld( "  status_ex=$status_ex" );
+      write_logld( "  status_ex=$status_ex" );
+
+      if ( $status_ex == "CANCELED" ) {
+          return $status_ex;
+      }
 
       if ( $status_ex == 'COMPLETED' )
       {  ## Experiment is COMPLETED: check for 'FINISHED' or 'DONE'
