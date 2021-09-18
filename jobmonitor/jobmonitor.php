@@ -157,6 +157,15 @@ $autoflowID = $res_analysis->{"autoflowAnalysisID"};
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
+    while ( !mysqli_ping( $db_handle ) ) {
+        write_logld( "mysql server has gone away" );
+        sleep( $poll_sleep_seconds / 2 );
+        write_logld( "attempting to reconnect" );
+        open_db();
+        if ( mysqli_ping( $db_handle ) ) {
+            write_logld( "reconnected - success" );
+        }            
+    }
     
     if ( check_job() ) {
         write_logld( "jobmonitor.php exiting" );
