@@ -841,7 +841,6 @@ function get_local_status( $gfacID )
    $is_umont  = preg_match( "/umontana/",   $cluster );
    $is_us3iab = preg_match( "/us3iab/",     $cluster );
    $is_slurm  = ( $is_jetstr  ||  $is_us3iab );
-   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab );
    $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab || $is_demel1 );
    $ruser     = "us3";
 
