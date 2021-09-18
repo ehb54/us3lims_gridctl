@@ -757,7 +757,7 @@ write_log( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
-   $headers .= "CC: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
+//   $headers .= "CC: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
    $headers .= "CC: $org_name Admin<gegorbet@gmail.com>"       . "\n";
 
    // Set the reply address
@@ -948,6 +948,11 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
       {
          $clushost = "demeler9.uleth.ca";
          $lworkdir = "/home/us3/lims/work"; 
+      }
+      if ( preg_match( "/demeler1/", $cluster ) )
+      {
+         $clushost = "demeler1.uleth.ca";
+         $lworkdir = "/home/us3/lims/work";
       }
 
       $cmd         = "ssh $ruser@$clushost 'ls -d $lworkdir' 2>/dev/null";

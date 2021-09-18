@@ -835,12 +835,14 @@ function get_local_status( $gfacID )
    global $self;
 
    $is_demel3 = preg_match( "/demeler3/",   $cluster );
+   $is_demel1 = preg_match( "/demeler1/",   $cluster );
    $is_jetstr = preg_match( "/jetstream/",  $cluster );
    $is_chino  = preg_match( "/chinook/",    $cluster );
    $is_umont  = preg_match( "/umontana/",   $cluster );
    $is_us3iab = preg_match( "/us3iab/",     $cluster );
    $is_slurm  = ( $is_jetstr  ||  $is_us3iab );
    $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab );
+   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab || $is_demel1 );
    $ruser     = "us3";
 
    if ( $is_squeu )
@@ -850,6 +852,7 @@ function get_local_status( $gfacID )
 //write_log( "$self cmd: $cmd" );
 //write_log( "$self cluster: $cluster" );
 //write_log( "$self gfacID: $gfacID" );
+   write_log( "$self gfacID $gfacID cluster $cluster" );
 
    if ( ! $is_us3iab )
    {
@@ -872,6 +875,7 @@ function get_local_status( $gfacID )
         $ruser  = "bd142854e";
       }
 
+      write_log( "$self !is_usiab system $system" );
       $cmd    = "/usr/bin/ssh -x $ruser@$system " . $cmd;
 write_log( "$self  cmd: $cmd" );
    }
@@ -1016,7 +1020,7 @@ function mail_to_admin( $type, $msg )
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
-   $headers .= "Cc: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
+   //   $headers .= "Cc: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
    $headers .= "Bcc: Gary Gorbet<gegorbet@gmail.com>"    . "\n";     // make sure
 
 
