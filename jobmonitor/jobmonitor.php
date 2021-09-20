@@ -8,6 +8,7 @@ $us3jm   = "$us3lims/bin/jobmonitor";
 include "$us3bin/listen-config.php";
 include $class_dir_p . "experiment_status.php";
 include $class_dir_p . "experiment_errors.php";
+include $class_dir_p . "job_details.php";
 
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";
@@ -113,6 +114,32 @@ $STDOUT = fopen( $logfile, 'ab' );
 $STDERR = fopen( $logfile, 'ab' );
 
 require "$us3bin/lock.php";
+
+# signal handler
+# for PHP < 7.2
+# declare(ticks = 1);
+pcntl_async_signals( true );
+
+function sig_handler($sig) {
+    switch($sig) {
+        case SIGINT:
+        write_logld( "Terminated by signal SIGINT" );
+        break;
+        case SIGHUP:
+        write_logld( "Terminated by signal SIGHUP" );
+        break;
+        case SIGTERM:
+        write_logld( "Terminated by signal SIGTERM" );
+        break;
+      default:
+        write_logld( "Terminated by unknown signal" );
+    }
+    exit(-1);
+}
+
+pcntl_signal(SIGINT,  "sig_handler");
+pcntl_signal(SIGTERM, "sig_handler");
+pcntl_signal(SIGHUP,  "sig_handler");
 
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 

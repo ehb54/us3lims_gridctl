@@ -742,6 +742,28 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
       }
    }
 
+   $aria_details = "";
+   if ( is_aira_job( $gfacID ) ) {
+       $jobDetails = getJobDetails( $gfacID );
+       if ( $jobDetails ) {
+           if ( $jobDetails === ' No Job Details ' ) {
+               $jdstdout = $jobDetails;
+               $jdstderr = $jobDetails;
+               
+           } else {
+               $jdstdout = isset( $jobDetails->stdOut ) ? trim( $jobDetails->stdOut ) : "n/a";
+               $jdstderr = isset( $jobDetails->stdErr ) ? trim( $jobDetails->stdErr ) : "n/a";
+           }
+       } else {
+           $jdstdout = "failed to get job details";
+           $jdstderr = "failed to get job details";
+       }
+       $aira_details =
+           sprintf(   "   Airavata stdout : %s\n", $jdstdout )
+           . sprintf( "   Airavata stderr : %s\n", $jdstderr )
+           ;
+   }
+
    ## Parse the editXMLFilename
    list( $runID, $editID, $dataType, $cell, $channel, $wl, $ext ) =
       explode( ".", $editXMLFilename );
@@ -782,7 +804,7 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    Job Type        : $jobtype
    GFAC Status     : $status
    GFAC Message    : $gfac_message
-   Stdout          : $stdout
+$aira_details   Stdout          : $stdout
    ";
 
    if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
