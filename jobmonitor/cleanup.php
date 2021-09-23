@@ -1083,7 +1083,9 @@ write_logld( "$me:  es-tarfile size: $lenf");
    $query = "UPDATE gfac.analysis SET " .
             "stderr='"  . $esstde . "'," .
             "stdout='"  . $esstdo . "'," .
-            "tarfile='" . $estarf . "'";
+            "tarfile='" . $estarf . "'" .
+            "WHERE gfacID='$gfacID'";
+            ;
 
    $result = mysqli_query( $db_handle, $query );
 
