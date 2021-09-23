@@ -347,10 +347,7 @@ if ( $stage != "PCSA" ) {
     $job_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{$jobkey}->{'@attributes'};
     debug_json( "job attributes", $job_attributes );
 
-    if (
-        ( isset( $job_attributes->{'interactive'} ) && !!$job_attributes->{'interactive'} )
-        || ( isset( $job_attributes->{'gui_interactive'} ) && !!$job_attributes->{'gui_interactive'} )
-        ) {
+    if ( isset( $job_attributes->{'interactive'} ) ) {
         $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='WAIT', statusMsg='Waiting for manual stage $stage to complete.' WHERE ${id_field} = ${ID}";
         $result = mysqli_query( $db_handle, $query );
         
