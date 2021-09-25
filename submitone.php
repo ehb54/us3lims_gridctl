@@ -54,6 +54,10 @@ $processing_key                    = "submitted";
 
 $cli_errors = [];
 
+function quote_fix( $str ) {
+    return str_replace( "'", "*", $str );
+}
+
 function check_cli_errors() {
     global $cli_errors;
     if ( count( $cli_errors ) ) {
@@ -70,10 +74,11 @@ function fail_job() {
     global $id_field;
     global $ID;
     global $db_handle;
+    global $self;
     
     $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
     
-    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', $use_cli_errors ) . "' WHERE ${id_field} = ${ID}";
+    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', quote_fix( $use_cli_errors ) ) . "' WHERE ${id_field} = ${ID}";
     $result = mysqli_query( $db_handle, $query );
     
     if ( !$result ) {
@@ -98,9 +103,11 @@ function error( $msg, $fail_job = true ) {
     global $id_field;
     global $ID;
     global $db_handle;
+    global $self;
     
     if ( $fail_job ) {
-        $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='Error submitting job: $msg' WHERE ${id_field} = ${ID}";
+        $qfmsg = quote_fix( $msg );
+        $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='Error submitting job: $qfmsg' WHERE ${id_field} = ${ID}";
         $result = mysqli_query( $db_handle, $query );
     
         if ( !$result ) {
