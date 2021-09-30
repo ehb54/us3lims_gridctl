@@ -194,6 +194,29 @@ while( 1 ) {
         }            
     }
     
+    if (
+        false ===
+        ( $res_analysis =
+          db_obj_result( $db_handle
+                         ,"select"
+                         . " status"
+                         . " ,queue_msg"
+                         . " ,UNIX_TIMESTAMP(time)"
+                         . " ,time"
+                         . " from gfac.analysis"
+                         . " where gfacID = \"$gfacID\""
+                         ,false
+                         ,true
+          ) ) ) {
+        mysqli_close( $db_handle );
+        error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+    }
+
+    $status     = $res_analysis->{"status"};
+    $queue_msg  = $res_analysis->{"queue_msg"};
+    $time       = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $updateTime = $res_analysis->{"time"};
+
     if ( check_job() ) {
         write_logld( "jobmonitor.php exiting" );
         mysqli_close( $db_handle );
