@@ -5,7 +5,7 @@
 $self = __FILE__;
     
 $notes = <<<__EOD
-usage: $self db investigatorId meniscusWavelength runName
+usage: $self db investigatorId rawDataID
 
 1. finds db.AnalysisRequest with a RequestID = ID
 2. finds associated db.analysisprofile
@@ -14,7 +14,7 @@ usage: $self db investigatorId meniscusWavelength runName
 
 __EOD;
 
-if ( count( $argv ) != 5 ) {
+if ( count( $argv ) != 4 ) {
     echo $notes;
     exit;
 }
@@ -60,39 +60,36 @@ function debug_json( $msg, $json ) {
     echo "\n";
 }
 
-function db_obj_result( $db_handle, $query, $expectedMultiResult = false ) {
+function db_obj_result( $db_handle, $query ) {
     $result = mysqli_query( $db_handle, $query );
 
     if ( !$result || !$result->num_rows ) {
         if ( $result ) {
             # $result->free_result();
         }
-        write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
+        write_logl( "db query failed : $query" );
         if ( $result ) {
             debug_json( "query result", $result );
         }
         exit;
     }
 
-    if ( $result->num_rows > 1 && !$expectedMultiResult ) {
+    if ( $result->num_rows > 1 ) {
         write_logl( "WARNING: db query returned " . $result->num_rows . " rows : $query" );
     }    
 
-    if ( $expectedMultiResult ) {
-        return $result;
-    } else {
-        return mysqli_fetch_object( $result );
-    }
+    return mysqli_fetch_object( $result );
 }
 
 function db_obj_insert( $db_handle, $query ) {
     $result = mysqli_query( $db_handle, $query );
 
     if ( !$result ) {
-        write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
+        write_logl( "db query failed : $query" );
         exit;
     }
 }
+
 
 # also in /srv/www/html/uslims3/uslims3_et4/lib/utility.php
 function uuid() {
@@ -114,8 +111,7 @@ function uuid() {
 
 $lims_db = $argv[ 1 ];
 $invID   = $argv[ 2 ];
-$wl      = $argv[ 3 ];
-$runName = $argv[ 4 ];
+$rawID   = $argv[ 3 ];
 
 write_logl( "Starting" );
 
@@ -135,88 +131,42 @@ $person = db_obj_result( $db_handle,
                          "SELECT * FROM ${lims_db}.people WHERE personID='$invID'" );
 
 echo "got person\n";
-
-# get rawDatas
-
-$rawDataIDs = [];
-
-$results = db_obj_result( $db_handle,
-                          "select rawDataID, filename from ${lims_db}.rawData where filename like '${runName}%'",
-                          true );
-
-$channelsFound = [];
-$targetWlFound = [];
-
-while ( $obj = mysqli_fetch_object( $results ) ) {
-    $thisid = $obj->{ 'rawDataID' };
-    # e.g. name-run123.RI.2.B.288.auc
-    list( , , , $thischannel, $thiswl ) = explode( ".", $obj->{ 'filename' } );
-    $rawDataIDs[ $thisid ] = $thiswl;
-
-    $channelsFound[ $thischannel ] = true;
-    if ( $wl == $thiswl ) {
-        $targetWlFound[ $thischannel ] = true;
-    }
-}
-
-$error = "";
-foreach ( $channelsFound as $k => $v ) {
-    if ( !array_key_exists( $k, $targetWlFound ) ) {
-        $error .= "channel $k missing meniscus wavelength $wl\n";
-    }
-}
-
-if ( strlen( $error ) ) {
-    echo $error;
-    exit(-1);
-}
-
-echo json_encode( $rawDataIDs, JSON_PRETTY_PRINT ) . "\n";
-
 # get rawDdata
-$analysisIDs    = [];
-$firstone       = true;
-$aprofileGUID   = "unset";
-$lastautoflowid = "unset";
-$autoflowID     = "unset";
-$aaIDs          = "";
 
-foreach ( $rawDataIDs as $rawID => $thiswl ) {
-    $rawData = db_obj_result( $db_handle, 
-                              "SELECT rawDataID, rawDataGUID, label, filename, comment, experimentID, solutionID, channelID FROM ${lims_db}.rawData WHERE rawDataID='$rawID'" );
+$rawData = db_obj_result( $db_handle, 
+                          "SELECT rawDataID, rawDataGUID, label, filename, comment, experimentID, solutionID, channelID FROM ${lims_db}.rawData WHERE rawDataID='$rawID'" );
 
-    $filename = $rawData->{ 'filename' };
-    $protName = $rawData->{ 'label' };
+$filename = $rawData->{ 'filename' };
+$protName = $rawData->{ 'label' };
 
-    echo "got rawData filename $filename\n";
-    $pieces = explode( ".", $filename );
-    $ufilename = $pieces[ 0 ];
-    $utriple   = "$pieces[2].$pieces[3].$pieces[4]";
-    $ucell     = $pieces[2];
+echo "got rawData filename $filename\n";
+$pieces = explode( ".", $filename );
+$ufilename = $pieces[ 0 ];
+$utriple   = "$pieces[2].$pieces[3].$pieces[4]";
+$ucell     = $pieces[2];
 
-    # echo "ufilename '$ufilename', utriple '$utriple' ucell = '$ucell'\n";
+# echo "ufilename '$ufilename', utriple '$utriple' ucell = '$ucell'\n";
 
-    # need an aprofileGUID for each wavelength, channel
-    
+# create autoflow record
 
-    if ( $firstone ) {
-        # create autoflow record
+$aprofileGUID=uuid();
 
-        $aprofileGUID=uuid();
+## add fields
 
-        db_obj_insert(
-            $db_handle,
-            "INSERT ${lims_db}.autoflow (protName,cellChNum,runName,expID,status,invID,corrRadii,expAborted,gmpRun,filename,aprofileGUID) values " .
-            "( '$protName', $ucell, '$ufilename', $rawID, 'ANALYSIS', $invID, 'YES', 'NO', 'YES', '$ufilename','$aprofileGUID' )" )
-            ;
+db_obj_insert(
+    $db_handle,
+    "INSERT ${lims_db}.autoflow (protName,cellChNum,runName,expID,status,invID,corrRadii,expAborted,gmpRun,filename,aprofileGUID) values " .
+    "( '$protName', $ucell, '$ufilename', $rawID, 'ANALYSIS', $invID, 'YES', 'NO', 'YES', '$ufilename','$aprofileGUID' )" )
+    ;
 
-        $lastautoflowid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
-        $autoflowID = $lastautoflowid->{'LAST_INSERT_ID()'};
+$lastautoflowid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
+$autoflowID = $lastautoflowid->{'LAST_INSERT_ID()'};
 
-        echo "inserted autoflowID is $autoflowID\n";
+echo "inserted autoflowID is $autoflowID\n";
 
-        # create analysisprofile record
-        $xml = <<<__EOD
+
+# create analysisprofile record
+$xml = <<<__EOD
 <?xml version="1.0"?>
 <!DOCTYPE US_AnalysisProfile>
 <AnalysisProfileData version="1.0">
@@ -230,13 +180,13 @@ foreach ( $rawDataIDs as $rawID => $thiswl ) {
 <channel_parms channel="2A:Interf.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <channel_parms channel="2B:UV/vis.:Blank/Air" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <job_2dsa run="1" noise="(TI Noise)"/>
-<job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_mb_select="1" meniscus_range="0.01" meniscus_points="11"/>
+<job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_range="0.3" grid_points="64" fit_mb_select="1" meniscus_range="0.01" meniscus_points="11"/>
 <job_fitmen run="1" interactive="1"/>
 <job_2dsa_it run="1" noise="(TI+RI Noise)" max_iterations="3"/>
 <job_2dsa_mc run="1" mc_iterations="5"/>
 </p_2dsa>
 <p_pcsa job_run="1">
-<channel_parms channel="2A:UV/vis.:BSA in PBS" curve_type="All (IS + DS + SL)" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
+<channel_parms channel="2A:UV/vis.:BSA in PBS" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
 <channel_parms channel="2A:Interf.:BSA in PBS" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
 <channel_parms channel="2B:UV/vis.:Blank/Air" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
 </p_pcsa>
@@ -244,48 +194,35 @@ foreach ( $rawDataIDs as $rawID => $thiswl ) {
 </AnalysisProfileData>
 __EOD;
 
-        db_obj_insert(
-            $db_handle,
-            "INSERT ${lims_db}.analysisprofile (aprofileGUID,name,xml) values " .
-            "( '$aprofileGUID', '$protName', '$xml' )" )
-            ;
-        
-        $lastap =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
-        $apID = $lastap->{'LAST_INSERT_ID()'};
-        
-        echo "inserted analysisprofile aprofileID is $apID\n";
-        
-        $firstone = false;
-    }
-
-    # create autoflowAnalysis record
-
-    if ( $thiswl == $wl ) {
-        $statusJson = "{\"to_process\":[\"2DSA\",\"2DSA_FM\",\"FITMEN\",\"2DSA_IT\",\"2DSA_MC\"]}";
-    } else {
-        $statusJson = "{\"to_process\":[\"2DSA\",\"FITMEN\",\"2DSA_IT\",\"2DSA_MC\"]}";
-    }        
-
-    db_obj_insert(
-        $db_handle,
-        "INSERT ${lims_db}.autoflowAnalysis (tripleName,filename,aprofileGUID,invID,statusJson) values " .
-        "( '$utriple', '$ufilename', '$aprofileGUID', $invID, '$statusJson' )" )
-        ;
-
-        
-    $lastaaid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
-    $aaID = $lastaaid->{'LAST_INSERT_ID()'};
     
-    echo "inserted autoflowAnalysis requestID is $aaID\n";
-    $aaIDs .= "$aaID,";
-}
+db_obj_insert(
+    $db_handle,
+    "INSERT ${lims_db}.analysisprofile (aprofileGUID,name,xml) values " .
+    "( '$aprofileGUID', '$protName', '$xml' )" )
+    ;
 
-$aaIDs = substr( $aaIDs, 0, -1 );
+$lastap =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
+$apID = $lastap->{'LAST_INSERT_ID()'};
 
-echo "analysisIDs are $aaIDs\n";
+echo "inserted analysisprofile aprofileID is $apID\n";
+
+
+# create autoflowAnalysis record
+
+db_obj_insert(
+    $db_handle,
+    "INSERT ${lims_db}.autoflowAnalysis (tripleName,filename,aprofileGUID,invID,statusJson) values " .
+    "( '$utriple', '$ufilename', '$aprofileGUID', $invID, '{\"to_process\":[\"PCSA\"]}' )" )
+    ;
+
+$lastaaid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );
+$aaID = $lastaaid->{'LAST_INSERT_ID()'};
+
+echo "inserted autoflowAnalysis requestID is $aaID\n";
+
 
 # Update autoflow table with the (single) autoflowAnalysisID
 
 db_obj_insert(
     $db_handle,
-    "UPDATE ${lims_db}.autoflow SET analysisIDs='$aaIDs' WHERE ID='$autoflowID'" );
+    "UPDATE ${lims_db}.autoflow SET analysisIDs='$aaID' WHERE ID='$autoflowID'" );
