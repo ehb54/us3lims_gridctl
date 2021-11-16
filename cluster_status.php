@@ -178,7 +178,7 @@ function local_status()
 	 case 'demeler1-local':
          {  // USiaB local cluster using slurm
             $host   = "us3@demeler1.uleth.ca";
-  	         $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+  	    $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
 ##echo "qstat=$qstat";
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
