@@ -89,8 +89,8 @@ function local_status()
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel" );
       else
-         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
-//         $clusters = array( "us3iab-node0" );
+##         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
+         $clusters = array( "us3iab-node0" );
    }
    else
    {
