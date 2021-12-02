@@ -20,7 +20,7 @@ include "$us3util/utility.php";
 ## some could be pushed to listen-config.php
 
 # the polling interval
-$poll_sleep_seconds = 30;
+$poll_sleep_seconds = 165 + random_int( 10, 30 );
 
 # logging_level 
 # 0 : minimal messages (expected value for production)
@@ -184,6 +184,7 @@ $autoflowID = $res_analysis->{"autoflowAnalysisID"};
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
+    open_db();
     while ( !mysqli_ping( $db_handle ) ) {
         write_logld( "mysql server has gone away" );
         sleep( $poll_sleep_seconds / 2 );
@@ -223,6 +224,7 @@ while( 1 ) {
         exit(0);
     }
 
+    mysqli_close();
     sleep( $poll_sleep_seconds );
 }
 
