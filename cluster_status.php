@@ -89,14 +89,14 @@ function local_status()
       if ( preg_match( "/attlocal/", $org_domain ) )
          $clusters = array( "us3iab-devel" );
       else
-         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
-//         $clusters = array( "us3iab-node0" );
+##         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
+         $clusters = array( "us3iab-node0" );
    }
    else
    {
-	   $clusters = array( "stampede2", "lonestar5", "comet", "jetstream",
+	   $clusters = array( "stampede2", "lonestar5-b", "jetstream",
                               "bridges2", "expanse", "expanse-gamc",
-                              "umontana-local", "demeler9-local" );
+                              "umontana-local", "demeler1-local", "us3iab-node0" );
    }
 ##                                        "expanse", "expanse-gamc",
 
@@ -111,15 +111,19 @@ function local_status()
          {  // USiaB local cluster using slurm
 //            $host   = "us3@js-169-137.jetstream-cloud.org";
 //            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
-  	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1`;
+  	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a" |tail -1`;
 ##echo "qstat=$qstat";
             $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $sparts = preg_split( '/\//', $knts );
-            $run    = $sparts[ 0 ];
-            $que    = $sparts[ 2 ];
-            $tot    = $sparts[ 3 ];
+	    $sta    = $sparts[ 0 ];
+##echo "sta=$sta";
+
+            $qstat  = `/home/us3/scripts/cstat 2>&1`;
+##echo "qstat=$qstat";
+            $sparts = preg_split( '/\s+/', $qstat );
+            $run    = $sparts[ 3 ];
+            $que    = $sparts[ 5 ];
+##echo "que=$que";
+            $tot    = $sparts[ 1 ];
             if ( $sta == "" )
                $sta    = "down";
             break;
@@ -142,7 +146,8 @@ function local_status()
          case 'demeler3-local':
          {
             $host   = "us3@demeler3.uleth.ca";
-            $qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
+            ##$qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
+            $qstat  = `ssh $host '/home/us3/scripts/qstat 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
             $que    = $sparts[ 3 ];
             $run    = $sparts[ 4 ];
@@ -161,10 +166,28 @@ function local_status()
             $sparts = preg_split( '/\s+/', $qstat );
             $sta    = $sparts[ 0 ];
             $knts   = $sparts[ 1 ];
+            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
             $sparts = preg_split( '/\//', $knts );
             $run    = $sparts[ 0 ];
             $que    = $sparts[ 2 ];
             $tot    = $sparts[ 3 ];
+            if ( $sta == "" )
+               $sta    = "down";
+            break;
+         }
+	 case 'demeler1-local':
+         {  // USiaB local cluster using slurm
+            $host   = "us3@demeler1.uleth.ca";
+  	    $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
+##echo "qstat=$qstat";
+            $sparts = preg_split( '/\s+/', $qstat );
+            $sta    = $sparts[ 0 ];
+            $knts   = $sparts[ 1 ];
+            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
+            $sparts = preg_split( '/\s+/', $qstat );
+            $run    = $sparts[ 3 ];
+            $que    = $sparts[ 5 ];
+            $tot    = $sparts[ 1 ];
             if ( $sta == "" )
                $sta    = "down";
             break;
@@ -174,10 +197,14 @@ function local_status()
             $host   = "us3@stampede2.tacc.utexas.edu";
             $qstat  = `ssh $host '~us3/scripts/clusstat skx-normal 2>/dev/null' 2>/dev/null`;
             $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 2 ];
-            $run    = $sparts[ 5 ];
-            $que    = $sparts[ 8 ];
-            $sta    = "up";
+            if ( count( $sparts ) < 8 ) {
+                $tot = 0;
+            } else {
+                $tot    = $sparts[ 2 ];
+                $run    = $sparts[ 5 ];
+                $que    = $sparts[ 8 ];
+                $sta    = "up";
+            }
             if ( $tot == ''  ||  $tot == '0' )
                $sta    = "down";
             break;
@@ -209,10 +236,14 @@ function local_status()
             //$qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
             $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
+            if ( count( $sparts ) < 6 ) {
+                $tot = '0';
+            } else {
+                $tot    = $sparts[ 1 ];
+                $run    = '0';
+                $que    = '0';
+                $sta    = "up";
+            }
             if ( $tot == ''  ||  $tot == '0' )
             {
                $sta    = "down";
@@ -255,14 +286,20 @@ function local_status()
 //            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
             $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
             $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $sparts = preg_split( '/\//', $knts );
-            $run    = $sparts[ 0 ];
-            $que    = $sparts[ 2 ];
-            $tot    = $sparts[ 3 ];
-            if ( $sta == "" )
+            if ( $sparts > 0 ) {
+                $sta    = $sparts[ 0 ];
+                $knts   = $sparts[ 1 ];
+                $sparts = preg_split( '/\//', $knts );
+                $run    = $sparts[ 0 ];
+                $que    = $sparts[ 2 ];
+                $tot    = $sparts[ 3 ];
+                if ( $sta == "" ) {
+                   $sta    = "down";
+                }
+            } else {
                $sta    = "down";
+            }
+                   
             break;
          }
          case 'bridges2':
@@ -271,7 +308,11 @@ function local_status()
 	    $partit = "RM-shared";
             $qstat  = `ssh $host '/jet/home/us3/scripts/cstat $partit 2>&1'`;
             $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
+            if ( count( $sparts ) < 6 ) {
+               $tot = '0';
+            } else {
+               $tot    = $sparts[ 1 ];
+            }
             $run    = '0';
 	    $que    = '0';
 	    $sta    = "up";
