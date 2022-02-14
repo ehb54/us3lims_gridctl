@@ -1,0 +1,29 @@
+#!/bin/bash
+# basic status for a slurm system
+#
+# takes queue name as argument
+#
+# one output per line
+#
+# line 1: up|down|warn|unknown
+# line 2: running jobs for queue
+# line 1: pending (queued) jobs for queue
+
+if [[ $# -ne 1 ]] ; then
+  >&2 echo $0: ERROR: not exactly one argument provided which should the be queue/partition name
+  exit -1
+fi
+
+QUEUE=$1
+if [[ $QUEUE -eq "ALL" ]] ; then
+  sinfo -s -a -o "%a" | tail -1 | sed 's/AVAIL/unknown/' \
+  && squeue -h -a -t running | wc -l \
+  && squeue -h -a -t pending | wc -l
+  exit 0
+fi   
+
+sinfo -s -p $QUEUE -o "%a" | tail -1 | sed 's/AVAIL/unknown/' \
+&& squeue -h -a -p $QUEUE -t running | wc -l \
+&& squeue -h -a -p $QUEUE -t pending | wc -l
+
+
