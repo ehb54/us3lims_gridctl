@@ -1,575 +1,171 @@
 <?php
 
+{};
+
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
+require "$us3bin/listen-config.php";
+require "$us3bin/cluster_config.php";
+
+$debug         = false;
+$no_db_updates = false;
+
+function debug_json( $msg, $json ) {
+    global $debug;
+    if ( !isset( $debug ) || !$debug ) {
+        return;
+    }
+
+    fwrite( STDERR,  "$msg\n" );
+    fwrite( STDERR, json_encode( $json, JSON_PRETTY_PRINT ) );
+    fwrite( STDERR, "\n" );
+}
+
+function error_exit( $msg ) {
+    global $self;
+    fwrite( STDERR, "$self: $msg\nTerminating due to errors.\n" );
+    exit(-1);
+}
+
+function run_cmd( $cmd, $die_if_exit = true, $array_result = false ) {
+    global $debug;
+    if ( isset( $debug ) && $debug ) {
+        echo "$cmd\n";
+    }
+    exec( "$cmd 2>&1", $res, $res_code );
+    if ( $die_if_exit && $res_code ) {
+        error_exit( "shell command '$cmd' returned result:\n" . implode( "\n", $res ) . "\nand with exit status '$res_code'" );
+    }
+    if ( !$array_result ) {
+        return implode( "\n", $res ) . "\n";
+    }
+    return $res;
+}
 
 $data = array();
 
 local_status();
 
-foreach ( $data as $item )
-{
-   if ( ! preg_match( "/error/", $item[ 'running' ] ) )
-      update( $item[ 'cluster' ], $item[ 'queued' ], $item[ 'status' ], $item[ 'running' ] );
+if ( $no_db_updates ) {
+    error_exit( "no db updates set, so exiting now" );
 }
 
-//exit();
+$gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+
+if ( ! $gfac_link ) {
+    error_exit( "Could not connect to DB $gDB" );
+}
+
+foreach ( $data as $item ) {
+    update( $item[ 'cluster' ], $item[ 'queued' ], $item[ 'status' ], $item[ 'running' ] );
+}
+mysqli_close( $gfac_link );
+
 exit(0);
 
-// Put it in the DB
+## Put it in the DB
 
-function update( $cluster, $queued, $status, $running )
-{
-   global $dbhost;
-   global $guser;
-   global $gpasswd;
-   global $gDB;
-   global $self;
-//echo  " $cluster $queued, $status, $running\n";
+function update( $cluster, $queued, $status, $running ) {
+    global $gfac_link;
 
-   $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+## added time=CURRENT_TIMESTAMP() on updates since mariadb (10.3.28)
+##   doesn't seem to honor the gfac.cluster_status.time on update current_timestamp()
+    
 
-   if ( ! $gfac_link )
-   {
-      write_log( "$self: Could not connect to DB $gDB" );
-      echo "Could not connect to DB $gDB.\n";
-      exit();
-   }
-      
-   $query = "SELECT * FROM cluster_status WHERE cluster='$cluster'";
-   $result = mysqli_query( $gfac_link, $query );
+## if we put a primary key on gfac.cluster_status.cluster we could use this
+#    $query =
+#        "INSERT INTO cluster_status SET"
+#        . " cluster='$cluster'"
+#        . " ,queued=$queued"
+#        . " ,running=$running"
+#        . " ,status='$status'"
+#        . " ON DUPLICATE KEY UPDATE"
+#        . " queued=$queued"
+#        . " ,running=$running"
+#        . " ,status='$status'"
+#        . " ,time=CURRENT_TIMESTAMP()"
+#        ;
 
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gfac_link ) );
-      echo "$self: Query failed $query - " .  mysqli_error( $gfac_link ) . "\n";
-      exit();
-   }
+## without the primary key on gfac.cluster_status.cluster, we have to do two mysql calls
 
-   $rows = mysqli_num_rows( $result );
+    $query = "SELECT * FROM cluster_status WHERE cluster='$cluster'";
+    $result = mysqli_query( $gfac_link, $query );
 
-   if ( $rows == 0 )  // INSERT
-   {
-      $query = "INSERT INTO cluster_status SET " .
-               "cluster='$cluster', " .
-               "queued=$queued, "     .
-               "running=$running, "   .
-               "status='$status'";
-   }
-   else               // UPDATE
-   {
-      $query = "UPDATE cluster_status SET " .
-               "queued=$queued, "     .
-               "running=$running, "   .
-               "status='$status' "    .
-               "WHERE cluster='$cluster'";
-   }
-
-   $result = mysqli_query( $gfac_link, $query );
-
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gfac_link ) );
-      echo "$self: Query failed $query - " .  mysqli_error( $gfac_link ) . "\n";
-   }
-}
-
-// Get local cluster status
-
-function local_status()
-{
-   global $self;
-   global $data;
-   global $dbhost;
-   global $org_domain;
-   global $class_dir;
-
-   if ( preg_match( "/_local/", $class_dir ) )
-   {
-      if ( preg_match( "/attlocal/", $org_domain ) )
-         $clusters = array( "us3iab-devel" );
-      else
-##         $clusters = array( "us3iab-node0",  "chinook-local", "umontana-local" );
-         $clusters = array( "us3iab-node0" );
-   }
-   else
-   {
-	   $clusters = array( "stampede2", "lonestar5-b", "jetstream",
-                              "bridges2", "expanse", "expanse-gamc",
-                              "umontana-local", "demeler1-local", "us3iab-node0" );
-   }
-##                                        "expanse", "expanse-gamc",
-
-   foreach ( $clusters as $clname )
-   {
-      $a      = Array();
-//echo "$self:   clname=$clname\n";
-
-      switch( $clname )
-      {
-         case 'us3iab-node0':
-         {  // USiaB local cluster using slurm
-//            $host   = "us3@js-169-137.jetstream-cloud.org";
-//            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
-  	    $qstat  = `/usr/bin/sinfo -s -p batch -o "%a" |tail -1`;
-##echo "qstat=$qstat";
-            $sparts = preg_split( '/\s+/', $qstat );
-	    $sta    = $sparts[ 0 ];
-##echo "sta=$sta";
-
-            $qstat  = `/home/us3/scripts/cstat 2>&1`;
-##echo "qstat=$qstat";
-            $sparts = preg_split( '/\s+/', $qstat );
-            $run    = $sparts[ 3 ];
-            $que    = $sparts[ 5 ];
-##echo "que=$que";
-            $tot    = $sparts[ 1 ];
-            if ( $sta == "" )
-               $sta    = "down";
-            break;
-         }
-         case 'us3iab-node1':
-         case 'us3iab-devel':
-         {  // USiaB local cluster using pbs (torque)
-            $qstat  = `/usr/bin/qstat -B 2>&1|tail -1`;
-
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 10 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
-            else
-               $sta    = "down";
-            break;
-         }
-         case 'demeler3-local':
-         {
-            $host   = "us3@demeler3.uleth.ca";
-            ##$qstat  = `ssh $host '/usr/bin/qstat -B 2>&1|tail -1'`;
-            $qstat  = `ssh $host '/home/us3/scripts/qstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $que    = $sparts[ 3 ];
-            $run    = $sparts[ 4 ];
-            $sta    = $sparts[ 10 ];
-            if ( $sta == "Active" )
-               $sta    = "up";
-            else
-               $sta    = "down";
-            break;
-         }
-	 case 'demeler9-local':
-         {  // USiaB local cluster using slurm
-            $host   = "us3@demeler9.uleth.ca";
-  	    $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
-##echo "qstat=$qstat";
-            $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\//', $knts );
-            $run    = $sparts[ 0 ];
-            $que    = $sparts[ 2 ];
-            $tot    = $sparts[ 3 ];
-            if ( $sta == "" )
-               $sta    = "down";
-            break;
-         }
-	 case 'demeler1-local':
-         {  // USiaB local cluster using slurm
-            $host   = "us3@demeler1.uleth.ca";
-  	    $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
-##echo "qstat=$qstat";
-            $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $knts   = $sparts[ 1 ];
-            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $run    = $sparts[ 3 ];
-            $que    = $sparts[ 5 ];
-            $tot    = $sparts[ 1 ];
-            if ( $sta == "" )
-               $sta    = "down";
-            break;
-         }
-         case 'stampede2':
-         {
-            $host   = "us3@stampede2.tacc.utexas.edu";
-            $qstat  = `ssh $host '~us3/scripts/clusstat skx-normal 2>/dev/null' 2>/dev/null`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            if ( count( $sparts ) < 8 ) {
-                $tot = 0;
-            } else {
-                $tot    = $sparts[ 2 ];
-                $run    = $sparts[ 5 ];
-                $que    = $sparts[ 8 ];
-                $sta    = "up";
-            }
-            if ( $tot == ''  ||  $tot == '0' )
-               $sta    = "down";
-            break;
-         }
-         case 'lonestar5':
-         {
-            $host   = "us3@ls5.tacc.utexas.edu";
-            $qstat  = `ssh $host '/opt/apps/tacc/bin/showq 2>/dev/null|grep "Total Jobs"' 2>/dev/null`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 2 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 5 ];
-               $que    = $sparts[ 8 ];
-//               $que    = $sparts[ 11 ];
-            }
-            break;
-         }
-         case 'comet':
-         {
-            $host   = "us3@comet.sdsc.edu";
-            //$qstat  = `ssh $host '/usr/bin/sinfo -s -p compute -o "%a %F" |tail -1'`;
-            $qstat  = `ssh $host '/home/us3/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            if ( count( $sparts ) < 6 ) {
-                $tot = '0';
-            } else {
-                $tot    = $sparts[ 1 ];
-                $run    = '0';
-                $que    = '0';
-                $sta    = "up";
-            }
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 3 ];
-               $que    = $sparts[ 5 ];
-               if ( $run == '0'  &&  $que == '0' )
-               {
-                  $sta    = "down";
-               }
-            }
-            break;
-         }
-         case 'jureca':
-         {
-            $host   = "swus1@jureca.fz-juelich.de";
-            $qstat  = `ssh $host '~swus1/scripts/qstat-jureca 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $run    = $sparts[ 1 ];
-            $que    = $sparts[ 2 ];
-            break;
-         }
-         case 'juwels':
-         {
-            $host   = "gorbet1@juwels.fz-juelich.de";
-            $qstat  = `ssh $host '~gorbet1/scripts/qstat-juwels 2>null'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $sta    = $sparts[ 0 ];
-            $run    = $sparts[ 1 ];
-            $que    = $sparts[ 2 ];
-             break;
-         }
-         case 'jetstream-local':
-         case 'jetstream':
-         {
-            $host   = "us3@js-169-137.jetstream-cloud.org";
-//            $qstat  = `ssh $host '/usr/bin/sinfo -s -p batch -o "%a %F" |tail -1'`;
-            $qstat  = `ssh $host '/home/us3/bin/clusstat |tail -n 1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            if ( $sparts > 0 ) {
-                $sta    = $sparts[ 0 ];
-                $knts   = $sparts[ 1 ];
-                $sparts = preg_split( '/\//', $knts );
-                $run    = $sparts[ 0 ];
-                $que    = $sparts[ 2 ];
-                $tot    = $sparts[ 3 ];
-                if ( $sta == "" ) {
-                   $sta    = "down";
-                }
-            } else {
-               $sta    = "down";
-            }
-                   
-            break;
-         }
-         case 'bridges2':
-         {
-	    $host   = "us3@bridges2.psc.edu";
-	    $partit = "RM-shared";
-            $qstat  = `ssh $host '/jet/home/us3/scripts/cstat $partit 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            if ( count( $sparts ) < 6 ) {
-               $tot = '0';
-            } else {
-               $tot    = $sparts[ 1 ];
-            }
-            $run    = '0';
-	    $que    = '0';
-	    $sta    = "up";
-	    if ( $tot == '0' )
-	    {
-               $sta    = "down";
-	    }
-	    else
-	    {
-               $run    = $sparts[ 3 ];
-	       $que    = $sparts[ 5 ];
-	       if ( $run == '0'  &&  $que == '0' )
-	       {
-                  $sta    = "down";
-	       }
-	    }
-            break;
-         }
-         case 'expanse':
-         case 'expanse-gamc':
-         {
-	    $host   = "us3@login.expanse.sdsc.edu";
-	    $partit = "shared";
-	    if ( preg_match( "/-gamc/", $clname ) )
-	    {
-	       $partit = "compute";
-	    }
-            $qstat  = `ssh $host '/home/us3/scripts/cstat $partit 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
-            $run    = '0';
-	    $que    = '0';
-	    $sta    = "up";
-	    if ( $tot == '0' )
-	    {
-               $sta    = "down";
-	    }
-	    else
-	    {
-               $run    = $sparts[ 3 ];
-	       $que    = $sparts[ 5 ];
-	       if ( $run == '0'  &&  $que == '0' )
-	       {
-                  $sta    = "down";
-	       }
-	    }
-            break;
-         }
-         case 'chinook-local':
-         case 'chinook':
-         {
-            $host   = "us3@chinook.hs.umt.edu";
-            $qstat  = `ssh $host '/home/us3/scripts/cstat'`;
-            if ( $qstat == "" )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $sta    = "up";
-               $sparts = preg_split( '/\s+/', $qstat );
-               $tot    = $sparts[ 1 ];
-               $que    = $sparts[ 3 ];
-               $run    = $sparts[ 5 ];
-            }
-            break;
-         }
-         case 'umontana-local':
-         {
-            $host   = "bd142854e@login.gscc.umt.edu";
-            $qstat  = `ssh $host '/home/bd142854e/bin/cstat 2>&1'`;
-            if ( $qstat == "" )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $sta    = "up";
-               $sparts = preg_split( '/\s+/', $qstat );
-               $tot    = $sparts[ 1 ];
-               $run    = $sparts[ 3 ];
-               $que    = $sparts[ 5 ];
-            }
-            break;
-         }
-         case 'taito-local':
-         {
-            $host   = "rb_2001068_taito01@taito.csc.fi";
-            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_taito_robot $host '/homeappl/home/rb_2001068_taito01/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 3 ];
-               $que    = $sparts[ 5 ];
-            }
-            break;
-         }
-         case 'puhti-local':
-         {
-            $host   = "rb_2001068_puhti01@puhti.csc.fi";
-            $qstat  = `ssh -i /home/us3/.ssh/id_rsa_puhti_robot $host '/homeappl/home/rb_2001068_puhti01/scripts/cstat 2>&1'`;
-            $sparts = preg_split( '/\s+/', $qstat );
-            $tot    = $sparts[ 1 ];
-            $run    = '0';
-            $que    = '0';
-            $sta    = "up";
-            if ( $tot == ''  ||  $tot == '0' )
-            {
-               $sta    = "down";
-            }
-            else
-            {
-               $run    = $sparts[ 3 ];
-               $que    = $sparts[ 5 ];
-            }
-            break;
-         }
-
-      }
-
-      if ( $sta == "" )
-         $sta    = "down";
-
-      if ( $sta == "down" )
-      {
-         $que    = "0";
-         $run    = "0";
-      }
-
-      // Insure queued,running counts are numeric
-      $que_s          = $que;
-      $run_s          = $run;
-      $que_e          = preg_replace( '/=/', "", $que_s );
-      $run_e          = preg_replace( '/=/', "", $run_s );
-      $que            = intval( $que_e );
-      $run            = intval( $run_e );
-if($que!=$que_s ||  $run!=$run_s)
- echo "$self:   *** que s,e,i $que_s $que_e $que  run s,e,i $run_s $run_e $run\n";
-
-      // Save cluster status values
-      $a[ 'cluster' ] = $clname;
-      $a[ 'queued'  ] = $que;
-      $a[ 'running' ] = $run;
-      $a[ 'status'  ] = $sta;
-echo "$self:  $clname  $que $run $sta\n";
-
-      $data[] = $a;
-
-      if ( $clname == 'alamo'  ||
-           $clname == 'jacinto'  ||
-           $clname == 'jetstream' )
-      {
-         $a[ 'cluster' ] = $clname . "-local";
-         $data[] = $a;
-      }
-   }
-}
-
-class XML_Array 
-{
-    var $_data   = Array();
-    var $_name   = Array();
-    var $_rep    = Array();
-    var $_parser = 0;
-    var $_level  = 0;
-    var $_index  = 0;
-
-    function XML_Array( &$data )
-    {
-        $this->_parser = xml_parser_create();
-
-        xml_set_object                ( $this->_parser, $this );
-        xml_parser_set_option         ( $this->_parser, XML_OPTION_CASE_FOLDING, false );
-        xml_set_element_handler       ( $this->_parser, "_startElement", "_endElement" );
-        xml_set_character_data_handler( $this->_parser, "_cdata" );
-
-        $this->_data  = array();
-        $this->_level = 0;
-
-        if ( ! xml_parse( $this->_parser, $data, true ) )
-           return false;
-
-        xml_parser_free( $this->_parser );
+    if ( ! $result ) {
+        error_exit( "Query failed $query - " .  mysqli_error( $gfac_link ) );
     }
 
-    function & ReturnArray() 
-    {
-        return $this->_data[ 0 ];
-    }
+    $rows = mysqli_num_rows( $result );
 
-    function _startElement( $parser, $name, $attrs )
-    {
-        if ( $name == "resourceHealth" ) 
-        {
-##           $name .= $this->_index;
-           $this->_index++;
-        }
-
-        if ( ! isset( $this->_rep[ $name ] ) ) $this->_rep[ $name ] = 0;
-        
-        $this->_addElement( $name, $this->_data[ $this->_level ], $attrs );
-        $this->_name[ $this->_level ] = $name;
-        $this->_level++;
+    if ( $rows == 0 ) { ## INSERT
+        $query =
+            "INSERT INTO cluster_status SET"
+            . " cluster='$cluster'"
+            . " ,queued=$queued"
+            . " ,running=$running"
+            . " ,status='$status'"
+            ;
+    } else {            ## UPDATE
+        $query = 
+            "UPDATE cluster_status SET"
+            . " queued=$queued"
+            . " ,running=$running"
+            . " ,status='$status'"
+            . " ,time=CURRENT_TIMESTAMP()"
+            . " WHERE cluster='$cluster'"
+            ;
     }
     
-    function _endElement( $parser, $name ) 
-    {
-       if ( isset( $this->_data[ $this->_level ] ) )
-       {
-          $this->_addElement( $this->_name[ $this->_level - 1 ],
-                              $this->_data[ $this->_level - 1 ],
-                              $this->_data[ $this->_level ]
-                            );
-       }
+    $result = mysqli_query( $gfac_link, $query );
 
-       unset( $this->_data[ $this->_level ] );
-       $this->_level--; 
-       $this->_rep[ $name ]++; 
-    }
-
-    function _cdata( $parser, $data ) 
-    {
-        if ( $this->_name[ $this->_level - 1 ] ) 
-        {
-           $this->_addElement( $this->_name[ $this->_level - 1 ],
-                               $this->_data[ $this->_level - 1 ],
-                               str_replace( array( "&gt;", "&lt;","&quot;", "&amp;" ), 
-                                            array( ">"   , "<"   , '"'    , "&" ), 
-                                            $data 
-                                          ) 
-                             );
-        }
-    }
-
-    function _addElement( &$name, &$start, $add = array() ) 
-    {
-        if ( ( sizeof( $add ) == 0 && is_array( $add ) ) || ! $add ) 
-        {
-           if ( ! isset( $start[ $name ] ) ) $start[ $name ] = '';
-           $add = '';
-        }
-
-        $update = &$start[ $name ];
-
-        if     ( is_array( $add) && 
-                 is_array( $update ) ) $update += $add;
-        elseif ( is_array( $update ) ) return;
-        elseif ( is_array( $add    ) ) $update  = $add;
-        elseif ( $add              )   $update .= $add;
+    if ( ! $result ) {
+        error_exit( "Query failed $query - " .  mysqli_error( $gfac_link ) );
     }
 }
-?>
+
+## Get local cluster status
+
+function local_status() {
+    global $data;
+    global $cluster_configuration;
+    global $self;
+
+    foreach ( $cluster_configuration as $clname => $v ) {
+        if ( !isset( $v["active"] ) || $v["active"] != true ) {
+            continue;
+        }
+
+        if ( !isset( $v["status"] ) ) {
+            error_exit( "cluster $clname does not contain a status command" );
+        }
+
+        $results = run_cmd( $v["status"], false, true );
+
+        debug_json( "status for $clname", $results );
+
+        if ( count( $results ) != 3 ) {
+            $sta = "unknown";
+            $run = 0;
+            $que = 0;
+        } else {
+            $sta = $results[ 0 ];
+            $run = $results[ 1 ];
+            $que = $results[ 2 ];
+        }            
+
+        if ( $run != intval( $run ) || $que != intval( $que ) ) {
+            $sta = 'unknown';
+            $run = 0;
+            $que = 0;
+        }
+        
+        ## Save cluster status values
+        $a[ 'cluster' ] = $clname;
+        $a[ 'status'  ] = $sta;
+        $a[ 'running' ] = $run;
+        $a[ 'queued'  ] = $que;
+
+        $data[] = $a;
+
+        echo "$self:  $clname  $que $run $sta\n";
+    }
+}

@@ -1,0 +1,63 @@
+<?php
+# cluster configuration
+
+$cluster_configuration =
+    [
+     'us3iab-node0' => [
+         'active'   => true
+         ,'status'  => '/home/us3/lims/us3lims_gridctl/status/slurm batch'
+     ]
+     ,'us3iab-node1' => [
+         'active'   => false
+         ,'status'  => 'ssh us3iab-node1 /home/us3/bin/status/slurm batch'
+     ]
+     ,'us3iab-devel' => [
+         'active'   => false
+         ,'status'  => 'ssh us3iab-devel /home/us3/bin/status/slurm batch'
+     ]
+     ,'lonestar5' => [
+         'active'   => false
+         ,'status'  => 'exit'
+     ]
+     ,'stampede2' => [
+         'active'   => false
+         ,'status'  => '(ssh stampede2.tacc.utexas.edu us3lims_gridctl/status/slurm skx-normal 2>/dev/null)'
+     ]
+     ,'jetstream' => [
+         'active'   => false
+         ,'status'  => 'ssh js-169-137.jetstream-cloud.org us3lims_gridctl/status/slurm batch'
+     ]
+     ,'jetstream-local' => [
+         'active'   => false
+         ,'status'  => 'ssh js-169-137.jetstream-cloud.org us3lims_gridctl/status/slurm batch'
+     ]
+     ,'juwels' => [
+         'active'   => false
+         ,'status'  => 'exit'
+     ]
+     ,'bridges2' => [
+         'active'   => false
+         ,'status'  => 'ssh bridges2.psc.edu us3lims_gridctl/status/slurm RM-shared'
+     ]
+     ,'expanse' => [
+         'active'   => false
+         ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm shared'
+     ]
+     ,'expanse-gamc' => [
+         'active'   => false
+         ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm compute'
+     ]
+     ,'umontana-local' => [
+         'active'   => false
+         ,'status'  => 'ssh bd142854e@login.gscc.umt.edu us3lims_gridctl/status/slurm ALL'
+     ]
+     ,'demeler1-local' => [
+         'active'   => false
+         ,'status'  => 'ssh demeler1.uleth.ca us3lims_gridctl/status/slurm batch'
+     ]
+     ,'demeler9-local' => [
+         'active'   => false
+         ,'status'  => 'ssh demeler9.uleth.ca us3lims_gridctl/status/slurm batch'
+     ]
+    ]
+    ;
