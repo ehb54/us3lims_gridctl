@@ -2,3 +2,6 @@
 .#*
 *#
 nohup.out
+*config.php
+*config.php
+*.bak
