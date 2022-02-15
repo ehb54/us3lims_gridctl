@@ -5,7 +5,7 @@ $cluster_configuration =
     [
      'us3iab-node0' => [
          'active'   => true
-         ,'status'  => '/home/us3/lims/us3lims_gridctl/status/slurm batch'
+         ,'status'  => '/home/us3/lims/bin/status/slurm batch'
      ]
      ,'us3iab-node1' => [
          'active'   => false
