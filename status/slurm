@@ -7,7 +7,7 @@
 #
 # line 1: up|down|warn|unknown
 # line 2: running jobs for queue
-# line 1: pending (queued) jobs for queue
+# line 3: pending (queued) jobs for queue
 
 if [[ $# -ne 1 ]] ; then
   >&2 echo $0: ERROR: not exactly one argument provided which should the be queue/partition name
