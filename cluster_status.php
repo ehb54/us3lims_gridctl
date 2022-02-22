@@ -143,7 +143,7 @@ function local_status() {
         debug_json( "status for $clname", $results );
 
         if ( count( $results ) != 3 ) {
-            $sta = "unknown";
+            $sta = "down";
             $run = 0;
             $que = 0;
         } else {
@@ -153,7 +153,7 @@ function local_status() {
         }            
 
         if ( $run != intval( $run ) || $que != intval( $que ) ) {
-            $sta = 'unknown';
+            $sta = 'down';
             $run = 0;
             $que = 0;
         }
