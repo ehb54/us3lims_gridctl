@@ -16,13 +16,13 @@ fi
 
 QUEUE=$1
 if [[ $QUEUE -eq "ALL" ]] ; then
-  sinfo -s -a -o "%a" | tail -1 | sed 's/AVAIL/unknown/' \
+  sinfo -s -a -o "%a" | tail -1 | sed 's/AVAIL/down/' \
   && squeue -h -a -t running | wc -l \
   && squeue -h -a -t pending | wc -l
   exit 0
 fi   
 
-sinfo -s -p $QUEUE -o "%a" | tail -1 | sed 's/AVAIL/unknown/' \
+sinfo -s -p $QUEUE -o "%a" | tail -1 | sed 's/AVAIL/down/' \
 && squeue -h -a -p $QUEUE -t running | wc -l \
 && squeue -h -a -p $QUEUE -t pending | wc -l
 
