@@ -9,13 +9,14 @@
 # line 2: running jobs for queue
 # line 3: pending (queued) jobs for queue
 
-if [[ $# -ne 1 ]] ; then
+if [[ $# != 1 ]] ; then
   >&2 echo $0: ERROR: not exactly one argument provided which should the be queue/partition name
   exit -1
 fi
 
 QUEUE=$1
-if [[ $QUEUE -eq "ALL" ]] ; then
+
+if [[ $QUEUE == "ALL" ]] ; then
   sinfo -s -a -o "%a" | tail -1 | sed 's/AVAIL/down/' \
   && squeue -h -a -t running | wc -l \
   && squeue -h -a -t pending | wc -l
