@@ -19,6 +19,14 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => 'exit'
      ]
+     ,'lonestar6' => [
+         'active'   => false
+         ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm normal 2>/dev/null)'
+     ]
+     ,'lonestar6-gmac' => [
+         'active'   => false
+         ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm large 2>/dev/null)'
+     ]
      ,'stampede2' => [
          'active'   => false
          ,'status'  => '(ssh stampede2.tacc.utexas.edu us3lims_gridctl/status/slurm skx-normal 2>/dev/null)'
