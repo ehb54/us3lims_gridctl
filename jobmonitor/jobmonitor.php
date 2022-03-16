@@ -21,6 +21,7 @@ include "$us3util/utility.php";
 
 # the polling interval
 $poll_sleep_seconds = 165 + random_int( 10, 30 );
+$poll_sleep_seconds = 30;
 
 # logging_level 
 # 0 : minimal messages (expected value for production)
@@ -76,42 +77,48 @@ echo "lock main script $lock_main_script_name\n";
 
 $logfile = "$lock_dir/log.txt";
 
-# 1st daemonize
+## set nofork to 1 to test without daemonizing
+$nofork = 0;
 
-if ($pid = pcntl_fork()) {
-    return;     ## Parent
-}
+if ( !$nofork ) {
 
-## ob_end_clean(); ## Discard the output buffer and close
+    # 1st daemonize
 
-fclose(STDIN);  ## Close all of the standard
-fclose(STDOUT); ## file descriptors as we
-fclose(STDERR); ## are running as a daemon.
-
-## need to force the forked parent to die
-function shutdown() {
-    global $cancel_shutdown_kill;
-    if ( !isset( $cancel_shutdown_kill ) ) {
-        posix_kill(posix_getpid(), SIGHUP);
-        sleep(1);
-        posix_kill(posix_getpid(), SIGTERM);
+    if ($pid = pcntl_fork()) {
+        return;     ## Parent
     }
+
+    ## ob_end_clean(); ## Discard the output buffer and close
+
+    fclose(STDIN);  ## Close all of the standard
+    fclose(STDOUT); ## file descriptors as we
+    fclose(STDERR); ## are running as a daemon.
+
+    ## need to force the forked parent to die
+    function shutdown() {
+        global $cancel_shutdown_kill;
+        if ( !isset( $cancel_shutdown_kill ) ) {
+            posix_kill(posix_getpid(), SIGHUP);
+            sleep(1);
+            posix_kill(posix_getpid(), SIGTERM);
+        }
+    }
+
+    register_shutdown_function('shutdown');
+
+    if (posix_setsid() < 0) {
+        return;
+    }
+
+    if ($pid = pcntl_fork()) {
+        return;     ## Parent 
+    }
+
+    $cancel_shutdown_kill = true;
+
+    $STDOUT = fopen( $logfile, 'ab' );
+    $STDERR = fopen( $logfile, 'ab' );
 }
-
-register_shutdown_function('shutdown');
-
-if (posix_setsid() < 0) {
-    return;
-}
-
-if ($pid = pcntl_fork()) {
-    return;     ## Parent 
-}
-
-$cancel_shutdown_kill = true;
-
-$STDOUT = fopen( $logfile, 'ab' );
-$STDERR = fopen( $logfile, 'ab' );
 
 require "$us3bin/lock.php";
 
@@ -174,13 +181,24 @@ if (
     error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
 }
 
-$cluster    = $res_analysis->{"cluster"};
-$status     = $res_analysis->{"status"};
-$queue_msg  = $res_analysis->{"queue_msg"};
-$time       = $res_analysis->{"UNIX_TIMESTAMP(time)"};
-$updateTime = $res_analysis->{"time"};
-$autoflowID = $res_analysis->{"autoflowAnalysisID"};
+$cluster            = $res_analysis->{"cluster"};
+$status             = $res_analysis->{"status"};
+$queue_msg          = $res_analysis->{"queue_msg"};
+$time               = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+$updateTime         = $res_analysis->{"time"};
+$autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
+
+$type_id_obj        = get_autoflow_type_id();
+$autoflowType       = $type_id_obj->type;
+$autoflowID         = $type_id_obj->autoflowID;
+write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
+
+## debugging
+## 
 ## debug_json( timestamp("analysis"), $res_analysis );
+## update_autoflow_models(1,2,"00000000-0000-0000-0000-000000000000");
+## update_autoflow_models(3,4,"a71cda5a-a8cb-41a5-9858-10c9296a3e6e");
+## exit(-1);
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );

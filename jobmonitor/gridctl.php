@@ -14,7 +14,7 @@ function check_job() {
     global $queue_msg;
     global $time;
     global $updateTime;
-    global $autoflowID;
+    global $autoflowAnalysisID;
     global $db_handle;
 
     $gfacLabl  = $gfacID;
@@ -133,7 +133,7 @@ function submitted( $updatetime ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     $now = time();
 
@@ -180,7 +180,7 @@ function submit_timeout( $updatetime ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
         $job_status = get_local_status( $gfacID );
@@ -220,7 +220,7 @@ function running( $updatetime, $queue_msg ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     $now = time();
 
@@ -269,7 +269,7 @@ function run_timeout( $updatetime ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
         $job_status = get_local_status( $gfacID );
@@ -312,7 +312,7 @@ function wait_data( $updatetime ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     $now = time();
 
@@ -366,7 +366,7 @@ function data_timeout( $updatetime ) {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
 
     if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
         $job_status = get_local_status( $gfacID );
@@ -430,7 +430,7 @@ function cleanup() {
     global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
     global $us3_db;
     global $class_dir;
 
@@ -572,7 +572,7 @@ function get_us3_data() {
     write_logld( "get_us3_data()" );
     global $self;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
     global $dbhost;
     global $user;
     global $passwd;
@@ -1087,13 +1087,13 @@ write_logld( "status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
 function update_autoflow_status( $status, $message ) {
     global $db_handle;
     global $gfacID;
-    global $autoflowID;
+    global $autoflowAnalysisID;
     global $us3_db;
     global $self;
 
-    write_logld( "update_autoflow_status() id $autoflowID status $status message $message" );
+    write_logld( "update_autoflow_status() id $autoflowAnalysisID status $status message $message" );
         
-    if ( $autoflowID <= 0 ) {
+    if ( $autoflowAnalysisID <= 0 ) {
         write_logld( "update_autoflow_status() ignored, no id" );
         return;
     }
@@ -1102,7 +1102,7 @@ function update_autoflow_status( $status, $message ) {
     $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
         "status='$status', " . 
         "statusMsg='$sqlmessage' " . 
-        "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
+        "WHERE requestID = '$autoflowAnalysisID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
     
     $result = mysqli_query( $db_handle, $query );
     if ( ! $result ) {

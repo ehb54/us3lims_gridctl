@@ -268,7 +268,7 @@ write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta
    try
    {
       ## What if this is too large?
-      list( $stdout, $stderr, $status, $queue_msg, $autoflowID ) = mysqli_fetch_array( $result );
+      list( $stdout, $stderr, $status, $queue_msg, $autoflowAnalysisID ) = mysqli_fetch_array( $result );
    }
    catch ( Exception $e )
    {
@@ -531,6 +531,8 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $file_type  = "mrecs";
          $mrecsIDs[] = $id;
 
+         update_autoflow_models( $id, $modelGUID, $editGUID );
+
          ## Keep track of modelGUIDs for later, when we replace them
          $rmodlGUIDs[ $id ] = $modelGUID;
 ##write_logld( "$me:   mrecs file inserted into DB : id=$id" );
@@ -577,6 +579,8 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
          $modelID   = mysqli_insert_id( $db_handle );
          $id        = $modelID;
          $file_type = "model";
+
+         update_autoflow_models( $modelID, $modelGUID, $editGUID );
 
          $query = "INSERT INTO ${us3_db}.modelPerson SET " .
                   "modelID=$modelID, personID=$personID";
@@ -682,4 +686,134 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
    mail_to_user( "success", "" );
 }
-?>
+
+function get_autoflow_type_id() {
+    global $db_handle;
+    global $gfacID;
+    global $autoflowAnalysisID;
+    global $us3_db;
+    global $self;
+
+    write_logld( "get_autoflow_type() id $autoflowAnalysisID" );
+        
+    if ( $autoflowAnalysisID <= 0 ) {
+        write_logld( "update_autoflow_links() ignored, no id" );
+        return;
+    }
+
+    ## get autoflow running submission type
+
+    $query = "SELECT statusJson,autoflowID from ${us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
+    echo "query : $query\n";
+
+    $result = mysqli_query( $db_handle, $query );
+
+    if ( ! $result ) {
+        ## Just log it and continue
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        return;
+    }
+
+    $obj = mysqli_fetch_object( $result );
+    $statusJson = json_decode( $obj->statusJson );
+    debug_json( "statusJson", $statusJson );
+    $tag = $statusJson->submitted;
+    debug_json( "tag", $tag );
+    return
+        (object) [
+         "type" => $tag
+         ,"autoflowID" => $obj->autoflowID
+        ];
+}
+
+function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
+    global $db_handle;
+    global $gfacID;
+    global $autoflowAnalysisID;
+    global $us3_db;
+    global $self;
+    global $autoflowType;
+    global $autoflowID;
+
+    write_logld( "update_autoflow_models() id $autoflowAnalysisID model $modelID modelGUID $modelGUID editGUID $editGUID" );
+        
+    if ( $autoflowAnalysisID <= 0 ) {
+        write_logld( "update_autoflow_models() ignored, no id" );
+        return;
+    }
+
+    ## get editeddataID for editGUID
+
+    $query = "SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID'";
+
+    $result = mysqli_query( $db_handle, $query );
+
+    if ( ! $result ) {
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        return;
+    }
+
+    if ( $result->num_rows != 1 ) {
+        write_logld( "unexpected $result->num_rows results returned for $query\n" );
+        return;
+    }
+        
+    $obj = mysqli_fetch_object( $result );
+    debug_json( "edited data", $obj );
+    $editedDataID = $obj->editedDataID;
+
+    ## get current autoflowModelsLink
+
+    $query = "SELECT modelsDesc from ${us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+    echo "query : $query\n";
+
+    $result = mysqli_query( $db_handle, $query );
+
+    if ( ! $result ) {
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        return;
+    }
+
+    # debug_json( "result", $result );
+
+    $descJson = (object)[];
+
+    if ( $result->num_rows ) {
+        $obj = mysqli_fetch_object( $result );
+        $descJson = json_decode( $obj->modelsDesc );
+    }
+
+    debug_json( "starting descJson", $descJson );
+    if ( !isset( $descJson->{$autoflowType} ) ) {
+        $descJson->{$autoflowType} = [];
+    }
+    $descJson->{$autoflowType}[] =
+        [
+         "modelID"       => "$modelID"
+         ,"modelGUID"    => "$modelGUID"
+         ,"editeddataID" => "$editedDataID"
+        ];
+         
+    debug_json( "ending descJson", $descJson );
+    $descenc = json_encode( $descJson );
+
+    if ( $result->num_rows ) {
+        ## update
+        $query = "UPDATE ${us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
+    } else {
+        ## insert
+        $query = "INSERT INTO ${us3_db}.autoflowModelsLink"
+            . " set autoflowAnalysisID=$autoflowAnalysisID"
+            . " ,modelsDesc='$descenc'"
+            . " ,autoflowID=$autoflowID"
+            ;
+    }
+
+    $result = mysqli_query( $db_handle, $query );
+
+    if ( ! $result ) {
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        return;
+    }
+
+}
