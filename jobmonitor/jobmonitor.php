@@ -189,8 +189,9 @@ $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
 
 $type_id_obj        = get_autoflow_type_id();
-$autoflowType       = $type_id_obj->type;
-$autoflowID         = $type_id_obj->autoflowID;
+$autoflowType       = is_object( $type_id_obj ) && isset( $type_id_obj->type ) ? $type_id_obj->type : "unknown";
+$autoflowID         = is_object( $type_id_obj ) && isset( $type_id_obj->autoflowID ) ? $type_id_obj->autoflowID : 0;
+
 write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
 
 ## debugging
