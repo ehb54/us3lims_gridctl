@@ -531,7 +531,7 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $file_type  = "mrecs";
          $mrecsIDs[] = $id;
 
-         update_autoflow_models( $id, $modelGUID, $editGUID );
+         ## update_autoflow_models( $id, $modelGUID, $editGUID );
 
          ## Keep track of modelGUIDs for later, when we replace them
          $rmodlGUIDs[ $id ] = $modelGUID;
