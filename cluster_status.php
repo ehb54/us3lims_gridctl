@@ -142,7 +142,10 @@ function local_status() {
 
         debug_json( "status for $clname", $results );
 
-        if ( count( $results ) != 3 ) {
+        if ( count( $results ) != 3
+             || !is_numeric( $results[1] )
+             || !is_numeric( $results[2] )
+           ) {
             $sta = "down";
             $run = 0;
             $que = 0;
