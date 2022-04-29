@@ -19,7 +19,7 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm shared'
      ]
-     ,'anvil-gmac' => [
+     ,'anvil-gamc' => [
          'active'   => false
          ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm standard'
      ]
@@ -31,7 +31,7 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm normal 2>/dev/null)'
      ]
-     ,'lonestar6-gmac' => [
+     ,'lonestar6-gamc' => [
          'active'   => false
          ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm large 2>/dev/null)'
      ]
