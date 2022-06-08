@@ -94,7 +94,7 @@ function db_obj_result( $db_handle, $query ) {
         if ( $result ) {
             # $result->free_result();
         }
-        write_logl( "db query failed : $query" );
+        write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
         exit;
     }
 
@@ -108,7 +108,7 @@ function db_obj_result( $db_handle, $query ) {
 function db_result( $db_handle, $query ) {
     $result = mysqli_query( $db_handle, $query );
     if ( !$result ) {
-        write_logl( "db query failed : $query" );
+        write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
         exit;
     }
     return $result;

@@ -211,8 +211,8 @@ echo "inserted analysisprofile aprofileID is $apID\n";
 
 db_obj_insert(
     $db_handle,
-    "INSERT ${lims_db}.autoflowAnalysis (tripleName,filename,aprofileGUID,invID,statusJson) values " .
-    "( '$utriple', '$ufilename', '$aprofileGUID', $invID, '{\"to_process\":[\"2DSA\",\"2DSA_FM\",\"FITMEN\",\"2DSA_IT\",\"2DSA_MC\"]}' )" )
+    "INSERT ${lims_db}.autoflowAnalysis (tripleName,filename,aprofileGUID,invID,statusJson,autoflowID) values " .
+    "( '$utriple', '$ufilename', '$aprofileGUID', $invID, '{\"to_process\":[\"2DSA\",\"2DSA_FM\",\"FITMEN\",\"2DSA_IT\",\"2DSA_MC\"]}', $autoflowID )" )
     ;
 
 $lastaaid =  db_obj_result( $db_handle, "SELECT LAST_INSERT_ID()" );

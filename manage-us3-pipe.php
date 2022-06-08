@@ -171,7 +171,7 @@ function update_db( $db, $requestID, $action, $message )
      return;
    }
 
-   $query = "SELECT HPCAnalysisResultID FROM HPCAnalysisResult " .
+   $query = "SELECT HPCAnalysisResultID,queueStatus FROM HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID "             .
             "ORDER BY HPCAnalysisResultID DESC "                 .
             "LIMIT 1";
@@ -184,7 +184,7 @@ function update_db( $db, $requestID, $action, $message )
      return;
    }
 
-   list( $resultID ) = mysqli_fetch_row( $result );
+   list( $resultID, $queueStatus ) = mysqli_fetch_row( $result );
 
    $query = "UPDATE HPCAnalysisResult SET ";
 
@@ -208,6 +208,14 @@ function update_db( $db, $requestID, $action, $message )
 
       case "update":
 //write_log( "$self process(): $requestID : dbupd : update" );
+          if ( $queueStatus == 'queued' ) {
+             ## catch missed Starting UDP
+             ## start time is not perfect, but is the time of first UDP update received
+             $query .=
+                 "queueStatus='running'," 
+                 . "startTime=now(), "
+                 ;
+          }
       default:
          break;
    }
