@@ -8,7 +8,9 @@ $us3jm   = "$us3lims/bin/jobmonitor";
 include "$us3bin/listen-config.php";
 include $class_dir_p . "experiment_status.php";
 include $class_dir_p . "experiment_errors.php";
+include $class_dir_p . "experiment_cancel.php";
 include $class_dir_p . "job_details.php";
+include $class_dir_p . "../global_config.php";
 
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";
