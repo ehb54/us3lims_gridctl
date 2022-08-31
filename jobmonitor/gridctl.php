@@ -138,6 +138,13 @@ function submitted( $updatetime ) {
     global $db_handle;
     global $gfacID;
     global $autoflowAnalysisID;
+    global $global_max_queue_time_hours;
+    global $timeout_email_sent;
+
+    ## set default if not defined in global_config.php
+    if ( !isset( $global_max_queue_time_hours ) ) {
+        $global_max_queue_time_hours = 24;
+    }
 
     $now = time();
 
@@ -145,8 +152,12 @@ function submitted( $updatetime ) {
         return;
     }
 
-    if ( $updatetime + 86400 > $now ) {
-        ## Within the first 24 hours 
+    if ( $global_max_queue_time_hours <= 0 ) {
+        return;
+    }
+
+    if ( $updatetime + ( $global_max_queue_time_hours * 60 * 60 ) > $now ) {
+        ## Within the first $global_max_queue_time_hours hours 
         
         if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
             $job_status = get_local_status( $gfacID );
@@ -164,9 +175,12 @@ function submitted( $updatetime ) {
         return;
     }
 
-    $message = "Job listed submitted longer than 24 hours";
+    $message = "Job listed submitted longer than $global_max_queue_time_hours hours";
     write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
+    if ( !isset( $timeout_email_sent ) ) {
+        mail_to_admin( "hang", "$message - id: $gfacID" );
+        $timeout_email_sent = true;
+    }
     $query = "UPDATE gfac.analysis SET status='SUBMIT_TIMEOUT' WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
     
@@ -177,6 +191,8 @@ function submitted( $updatetime ) {
     update_queue_messages( $message );
     update_db( $message );
     update_autoflow_status( 'SUBMIT_TIMEOUT', $message );
+
+    cancel_job( $gfacID );
 }
 
 function submit_timeout( $updatetime ) {
@@ -185,6 +201,13 @@ function submit_timeout( $updatetime ) {
     global $db_handle;
     global $gfacID;
     global $autoflowAnalysisID;
+    global $global_max_queue_time_hours;
+    global $timeout_email_sent;
+
+    ## set default if not defined in global_config.php
+    if ( !isset( $global_max_queue_time_hours ) ) {
+        $global_max_queue_time_hours = 24;
+    }
 
     if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
         $job_status = get_local_status( $gfacID );
@@ -201,13 +224,21 @@ function submit_timeout( $updatetime ) {
 
     $now = time();
 
-    if ( $updatetime + 86400 > $now ) {
-        return; ## < 24 hours ago ( 48 total submitted )
+    if ( $global_max_queue_time_hours <= 0 ) {
+        return;
     }
 
-    $message = "Job listed submitted longer than 48 hours";
+    if ( $updatetime + ( $global_max_queue_time_hours * 60 * 60 ) > $now ) {
+        return; ## < $global_max_queue_time_hours hours since last status update ( typically double since submitted )
+    }
+
+    $message = "Job listed submitted longer than $global_max_queue_time_hours hours";
     write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
+
+    if ( !isset( $timeout_email_sent ) ) {
+        mail_to_admin( "hang", "$message - id: $gfacID" );
+        $timeout_email_sent = true;
+    }
     $query = "UPDATE gfac.analysis SET status='FAILED' WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
 
@@ -218,6 +249,8 @@ function submit_timeout( $updatetime ) {
     update_queue_messages( $message );
     update_db( $message );
     update_autoflow_status( 'FAILED', $message );
+
+    cancel_job( $gfacID );
 }
 
 function running( $updatetime, $queue_msg ) {
@@ -225,8 +258,15 @@ function running( $updatetime, $queue_msg ) {
     global $db_handle;
     global $gfacID;
     global $autoflowAnalysisID;
+    global $global_max_run_time_hours;
+    global $timeout_email_sent;
 
     $now = time();
+
+    ## set default if not defined in global_config.php
+    if ( !isset( $global_max_run_time_hours ) ) {
+        $global_max_run_time_hours = 24;
+    }
 
     get_us3_data();
 
@@ -236,8 +276,12 @@ function running( $updatetime, $queue_msg ) {
         return;   ## message received < 10 minutes ago
     }
 
-    if ( $updatetime + 86400 > $now ) {
-        ## Within the first 24 hours
+    if ( $global_max_run_time_hours <= 0 ) {
+        return;
+    }
+
+    if ( $updatetime + ( $global_max_run_time_hours * 60 * 60 ) > $now ) {
+        ## Within the first $global_max_run_time_hours hours 
 
         if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
             $job_status = get_local_status( $gfacID );
@@ -253,9 +297,12 @@ function running( $updatetime, $queue_msg ) {
         return;
     }
 
-    $message = "Job listed running longer than 24 hours";
+    $message = "Job listed running longer than $global_max_run_time_hours hours";
     write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
+    if ( !isset( $timeout_email_sent ) ) {
+        mail_to_admin( "hang", "$message - id: $gfacID" );
+        $timeout_email_sent = true;
+    }
     $query = "UPDATE gfac.analysis SET status='RUN_TIMEOUT' WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
 
@@ -266,6 +313,8 @@ function running( $updatetime, $queue_msg ) {
     update_queue_messages( $message );
     update_db( $message );
     update_autoflow_status( 'RUN_TIMEOUT', $message );
+
+    cancel_job( $gfacID );
 }
 
 function run_timeout( $updatetime ) {
@@ -274,6 +323,13 @@ function run_timeout( $updatetime ) {
     global $db_handle;
     global $gfacID;
     global $autoflowAnalysisID;
+    global $global_max_run_time_hours;
+    global $timeout_email_sent;
+
+    ## set default if not defined in global_config.php
+    if ( !isset( $global_max_run_time_hours ) ) {
+        $global_max_run_time_hours = 24;
+    }
 
     if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
         $job_status = get_local_status( $gfacID );
@@ -292,13 +348,20 @@ function run_timeout( $updatetime ) {
 
     get_us3_data();
 
-    if ( $updatetime + 172800 > $now ) {
-        return; ## < 48 hours ago
+    if ( $global_max_run_time_hours <= 0 ) {
+        return;
+    }
+
+    if ( $updatetime + ( $global_max_run_time_hours * 60 * 60 ) > $now ) {
+        return; ## < last status update < $global_max_run_time_hours
     }
 
     $message = "Job listed running longer than 48 hours";
     write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
+    if ( !isset( $timeout_email_sent ) ) {
+        mail_to_admin( "hang", "$message - id: $gfacID" );
+        $timeout_email_sent = true;
+    }
     $query = "UPDATE gfac.analysis SET status='FAILED' WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
 
@@ -309,6 +372,8 @@ function run_timeout( $updatetime ) {
     update_queue_messages( $message );
     update_db( $message );
     update_autoflow_status( 'FAILED', $message );
+
+    cancel_job( $gfacID );
 }
 
 function wait_data( $updatetime ) {
@@ -725,51 +790,44 @@ function get_local_status( $gfacID )
    write_logld( "get_local_status( $gfacID )" );
    global $cluster;
    global $self;
+   global $cluster_details;
 
-   $is_demel3 = preg_match( "/demeler3/",   $cluster );
-   $is_demel1 = preg_match( "/demeler1/",   $cluster );
-   $is_jetstr = preg_match( "/jetstream/",  $cluster );
-   $is_chino  = preg_match( "/chinook/",    $cluster );
-   $is_umont  = preg_match( "/umontana/",   $cluster );
-   $is_us3iab = preg_match( "/us3iab/",     $cluster );
-   $is_slurm  = ( $is_jetstr  ||  $is_us3iab );
-   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab || $is_demel1 );
-   $ruser     = "us3";
+   $ruser     = "us3"; 
 
-   if ( $is_squeu )
-      $cmd    = "squeue -t all -j $gfacID 2>&1|tail -n 1";
-   else
-      $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
+   if ( !array_key_exists( $cluster, $cluster_details ) ) {
+       write_logld( "$self cluster $cluster missing from global_config.php \$cluster_details" );
+       $status = 'UNKNOWN';      
+       write_logld( "get_local_status: status = $status");
+       return $status;
+   }
+       
+   if ( !array_key_exists( 'name', $cluster_details[$cluster] ) ) {
+       write_logld( "$self 'name' key missing from global_config.php \$cluster_details[$cluster]" );
+       $status = 'UNKNOWN';      
+       write_logld( "get_local_status: status = $status");
+       return $status;
+   }
+
+   $login = $cluster_details[$cluster]['name'];
+
+   if ( array_key_exists( 'login', $cluster_details[$cluster] ) ) {
+       $login = $cluster_details[$cluster]['login'];
+   }
+
+   $cmd_prefix = "ssh -x $login ";
+
+   if ( array_key_exists( 'localhost', $cluster_details[$cluster] ) 
+        && $cluster_details[$cluster]['localhost'] ) {
+       $cmd_prefix = "";
+   }
+
+   $cmd    = "$cmd_prefix squeue -t all -j $gfacID 2>&1|tail -n 1";
 ##write_logld( "$self cmd: $cmd" );
+
 ##write_logld( "$self cluster: $cluster" );
 ##write_logld( "$self gfacID: $gfacID" );
 
    write_log( "$self gfacID $gfacID cluster $cluster" );
-   if ( ! $is_us3iab )
-   {
-      $system = "$cluster.uleth.ca";
-      if ( $is_slurm )
-         $system = "$cluster";
-      $system = preg_replace( "/\-local/", "", $system );
-
-      if ( $is_demel3 )
-      {
-        $system = "demeler3.uleth.ca";
-      }
-      if ( $is_chino )
-      {
-        $system = "chinook.hs.umt.edu";
-      }
-      if ( $is_umont )
-      {
-        $system = "login.gscc.umt.edu";
-        $ruser  = "bd142854e";
-      }
-
-      write_log( "$self !is_usiab system $system" );
-      $cmd    = "/usr/bin/ssh -x $ruser@$system " . $cmd;
-write_logld( "$self  cmd: $cmd" );
-   }
 
    $result = exec( $cmd );
    ##write_logld( "$self  result: $result" );
@@ -795,7 +853,8 @@ write_logld( "$me:   num_try=$num_try  secwait=$secwait" );
    }
 
    $values = preg_split( "/\s+/", $result );
-   $jstat   = ( $is_squeu == 0 ) ? $values[ 9 ] : $values[ 5 ];
+   $jstat   = count( $values ) > 5 ? $values[ 5 ] : "unknown";
+
 write_logld( "get_local_status: job status = /$jstat/");
    switch ( $jstat )
    {
@@ -839,6 +898,67 @@ write_logld( "get_local_status: job status = /$jstat/");
 write_logld( "get_local_status: status = $status");
   
    return $status;
+}
+
+function cancel_job( $gfacID ) {
+   is_aira_job( $gfacID ) ? cancelAiravataJob( $gfacID ) : cancel_local_job( $gfacID );
+}
+
+## Function to cancel "local" job (i.e. not airavata)
+function cancel_local_job( $gfacID )
+{
+   write_logld( "cancel_local_job( $gfacID )" );
+   global $cluster;
+   global $self;
+   global $cluster_details;
+
+   $ruser     = "us3"; 
+
+   if ( !array_key_exists( $cluster, $cluster_details ) ) {
+       write_logld( "$self cluster $cluster missing from global_config.php \$cluster_details" );
+       return false;
+   }
+       
+   if ( !array_key_exists( 'name', $cluster_details[$cluster] ) ) {
+       write_logld( "$self 'name' key missing from global_config.php \$cluster_details[$cluster]" );
+       return false;
+   }
+
+   $login = $cluster_details[$cluster]['name'];
+
+   if ( array_key_exists( 'login', $cluster_details[$cluster] ) ) {
+       $login = $cluster_details[$cluster]['login'];
+   }
+
+   $cmd_prefix = "ssh -x $login ";
+
+   if ( array_key_exists( 'localhost', $cluster_details[$cluster] ) 
+        && $cluster_details[$cluster]['localhost'] ) {
+       $cmd_prefix = "";
+   }
+
+   $cmd    = "$cmd_prefix scancel $gfacID 2>&1";
+
+   write_log( "$self gfacID $gfacID cluster $cluster" );
+
+   $result = exec( $cmd );
+   ##write_logld( "$self  result: $result" );
+echo "locstat: cmd=$cmd  result=$result\n";
+write_logld( "$self  locstat: cmd=$cmd  result=$result" );
+
+   $secwait    = 2;
+   $num_try    = 0;
+   ## Sleep and retry up to 3 times if ssh has "ssh_exchange_identification" error
+   while ( preg_match( "/ssh_exchange_id/", $result )  &&  $num_try < 3 )
+   {
+      sleep( $secwait );
+      $num_try++;
+      $secwait   *= 2;
+write_logld( "$me:   num_try=$num_try  secwait=$secwait" );
+   }
+
+   ## should likely verify if canceled, perhaps via a call to get_local_status()
+   return true;
 }
 
 function update_queue_messages( $message )
