@@ -223,12 +223,12 @@ write_logl( "analysisprofile filename $aaname triplename $triple" );
 #                           "SELECT * FROM ${lims_db}.autoflow WHERE aprofileGUID='${aprofileguid}'" );
 
 $rawdata = db_obj_result( $db_handle,
-                          "select rawDataID, filename from ${lims_db}.rawData where filename like '${aaname}%${triple}%'" );
+                          "select rawDataID, filename from ${lims_db}.rawData where filename like '${aaname}.%.${triple}%'" );
 
 echo json_encode( $rawdata, JSON_PRETTY_PRINT ) . "\n";
 
 $editdata = db_obj_result( $db_handle,
-                          "select editedDataID, filename from ${lims_db}.editedData where filename like '${aaname}%${triple}%'" );
+                          "select editedDataID, filename from ${lims_db}.editedData where filename like '${aaname}.%.${triple}%'" );
 
 echo json_encode( $editdata, JSON_PRETTY_PRINT ) . "\n";
 
