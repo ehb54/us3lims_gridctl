@@ -81,12 +81,29 @@ function process( $msg )
    {
      write_log( "$self process(): Bad query: $query" );
      write_log( "$self process(): original msg - $msg" );
+     mysqli_close( $resource );
      return;
    }
 
    // Set flags for Airavata/Thrift and "Finished..."
    list( $gfacID ) = mysqli_fetch_row( $result );
-   mysqli_close( $resource );
+
+   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'";
+   $result2 = mysqli_query( $resource, $query2 );
+   
+   if ( ! $result2 )
+   {
+     write_log( "$self process(): Bad query: $query2" );
+     mysqli_close( $resource );
+     return;
+   }
+   
+   list( $gfacStatus ) = mysqli_fetch_row( $result2 );
+
+   if ( !strncmp( $gfacStatus, "CANCEL", 6 ) ) {
+     write_log( "$self process(): state CANCELED, no updates done" );
+     return;
+   }   
 
    $is_athrift  = preg_match( "/^US3-A/i", $gfacID );
    $is_finished = preg_match( "/^Finished/i", $message );
