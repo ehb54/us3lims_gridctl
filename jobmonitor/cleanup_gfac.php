@@ -154,7 +154,11 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 ##      $clushost = preg_replace( "/\-local/", "", $clushost );
       $parts    = explode( "-", $cluster );
       $clushost = $parts[ 0 ];
-      get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
+      if ( $cluster == "us3iab-node1" ) {
+          get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
+      } else {
+          get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
+      }
 write_logld( "$me:     clushost=$clushost  reqID=$requestID get_local_files() gfacID=$gfacID" );
    }
 else

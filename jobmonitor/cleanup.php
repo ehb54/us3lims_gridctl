@@ -899,6 +899,8 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
    global $org_domain;
    global $status;
    
+   write_logld( "$me get_local_files(): $cluster, $requestID, $id, $gfacID" );
+
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_jetstr  = preg_match( "/jetstream/", $cluster );
 
@@ -935,8 +937,10 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
    ## Get stdout, stderr, output/analysis-results.tar
    $output = array();
 
-   if ( $is_us3iab == 0 )
+   if ( $is_us3iab == 0 || $cluster == "us3iab-node1" )
    {
+       write_logld( "$me get_local_files(): scp to get files" );
+
       ## For "-local", recompute remote work directory
       $clushost = "$cluster.hs.umt.edu";
       $lworkdir = "~us3/lims/work/local";
@@ -965,6 +969,12 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
       if ( preg_match( "/demeler1/", $cluster ) )
       {
          $clushost = "demeler1.uleth.ca";
+         $lworkdir = "/home/us3/lims/work";
+      }
+
+      if ( preg_match( "/us3iab-node1/", $cluster ) )
+      {
+         $clushost = "lims2.zentriforce.com";
          $lworkdir = "/home/us3/lims/work";
       }
 
