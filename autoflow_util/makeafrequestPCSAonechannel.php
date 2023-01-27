@@ -172,13 +172,8 @@ $xml = <<<__EOD
 <AnalysisProfileData version="1.0">
 <analysis_profile name="$protName" guid="$aprofileGUID">
 <channel_parms channel="2A" chandesc="2A:UV/vis.:BSA in PBS" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
-<channel_parms channel="2A" chandesc="2A:Interf.:BSA in PBS" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
-<channel_parms channel="2B" chandesc="2B:UV/vis.:Blank/Air" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
-<channel_parms channel="2B" chandesc="2B:Interf.:Blank/Air" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
 <p_2dsa>
 <channel_parms channel="2A:UV/vis.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
-<channel_parms channel="2A:Interf.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
-<channel_parms channel="2B:UV/vis.:Blank/Air" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <job_2dsa run="1" noise="(TI Noise)"/>
 <job_2dsa_fm run="1" noise="(TI+RI Noise)" fit_range="0.3" grid_points="64" fit_mb_select="1" meniscus_range="0.01" meniscus_points="11"/>
 <job_fitmen run="1" interactive="1"/>
@@ -187,8 +182,6 @@ $xml = <<<__EOD
 </p_2dsa>
 <p_pcsa job_run="1">
 <channel_parms channel="2A:UV/vis.:BSA in PBS" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
-<channel_parms channel="2A:Interf.:BSA in PBS" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
-<channel_parms channel="2B:UV/vis.:Blank/Air" curve_type="All" x_type="s" y_type="f/f0" z_type="vbar" x_min="1" x_max="10" y_min="1" y_max="4" z_value="0.72" variations_count="3" gridfit_iterations="6" curve_reso_points="100" noise="none" regularization="none" reg_alpha="0" mc_iterations="0"/>
 </p_pcsa>
 </analysis_profile>
 </AnalysisProfileData>
