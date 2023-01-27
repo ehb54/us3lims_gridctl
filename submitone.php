@@ -332,17 +332,28 @@ if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup} ) ) {
     error( "analysis profile's xml does not contain an 'analysis_profile'->'$paramgroup' key" );
 }
 
-if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ||
+if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
+    error( "analysis profile's xml does not contain 'analysis_profile'->'channel_parms'" );
+}    
+
+if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) &&
      !count( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
     error( "analysis profile's xml does not contain an 'analysis_profile'->'channel_parms' key with a nonzero size" );
 }    
 
-if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'} ) ) {
-    error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'channel_parms' first entry does not contain '\@attributes'" );
-}    
-
-$channel_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'};
-debug_json( "channel attributes", $channel_attributes );
+if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'channel_parms' first entry does not contain '\@attributes'" );
+    }
+    $channel_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'};
+    debug_json( "channel attributes", $channel_attributes );
+} else {
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}->{'@attributes'} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'channel_parms'  does not contain '\@attributes'" );
+    }
+    $channel_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}->{'@attributes'};
+    debug_json( "channel attributes", $channel_attributes );
+}
 
 if ( $stage != "PCSA" ) {
     if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{$jobkey} ) ) {
