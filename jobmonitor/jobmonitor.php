@@ -9,6 +9,7 @@ include "$us3bin/listen-config.php";
 include $class_dir_p . "experiment_status.php";
 include $class_dir_p . "experiment_errors.php";
 include $class_dir_p . "experiment_cancel.php";
+include $class_dir_p . "experiment_resource.php";
 include $class_dir_p . "job_details.php";
 include $class_dir_p . "../global_config.php";
 
@@ -223,6 +224,7 @@ while( 1 ) {
                          ,"select"
                          . " status"
                          . " ,queue_msg"
+                         . " ,metaschedulerClusterExecuting"
                          . " ,UNIX_TIMESTAMP(time)"
                          . " ,time"
                          . " from gfac.analysis"
@@ -234,10 +236,11 @@ while( 1 ) {
         error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
     }
 
-    $status     = $res_analysis->{"status"};
-    $queue_msg  = $res_analysis->{"queue_msg"};
-    $time       = $res_analysis->{"UNIX_TIMESTAMP(time)"};
-    $updateTime = $res_analysis->{"time"};
+    $status                         = $res_analysis->{"status"};
+    $queue_msg                      = $res_analysis->{"queue_msg"};
+    $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $updateTime                     = $res_analysis->{"time"};
+    $metascheduler_cluser_executing = $res_analysis->{"metaschedulerClusterExecuting"};
 
     if ( check_job() ) {
         write_logld( "jobmonitor.php exiting" );
@@ -245,7 +248,7 @@ while( 1 ) {
         exit(0);
     }
 
-    mysqli_close();
+    mysqli_close( $db_handle );
     sleep( $poll_sleep_seconds );
 }
 

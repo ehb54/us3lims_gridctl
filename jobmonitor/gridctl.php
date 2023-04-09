@@ -16,6 +16,7 @@ function check_job() {
     global $updateTime;
     global $autoflowAnalysisID;
     global $db_handle;
+    global $metascheduler_cluster_executing;
 
     $gfacLabl  = $gfacID;
     $status_ex = $status;
@@ -23,7 +24,6 @@ function check_job() {
     ## If entry is for Airvata/Thrift, get the true current status
 
     if ( is_aira_job( $gfacID ) ) {
-
         $status_in  = $status;
         $status     = aira_status( $gfacID, $status_in );
         if ( $status == "UNKNOWN" ) {
@@ -33,6 +33,24 @@ function check_job() {
         if($status != $status_in ) {
             write_logld( "Set to $status from $status_in" );
         }
+        try {
+            write_logld( "check_job() trying to getComputeResource( $gfacID )\n" );
+            $new_metascheduler_cluster_executing = getComputeResource( $gfacID );
+            if ( $new_metascheduler_cluster_executing == "UNKNOWN" ) {
+                $new_metascheduler_cluster_executing = "";
+            }
+            if ( $metascheduler_cluster_executing != $new_metascheduler_cluster_executing ) {
+                $metascheduler_cluster_executing = $new_metascheduler_cluster_executing;
+                $query3  = "UPDATE gfac.analysis SET metaschedulerClusterExecuting='$metascheduler_cluster_executing' WHERE gfacID='$gfacID'";
+                write_logld( "check_job() updating $query3\n" );
+                $result3 = mysqli_query( $db_handle, $query3 );
+                if ( ! $result3 ) {
+                    write_logld( "Query failed $query3 - " .  mysqli_error( $db_handle ) );
+                }
+            }
+        } catch (Exception $e) {
+            write_logld( "check_job() trying to getComputeResource( $gfacID ) caught exception\n" );
+        }
     } else {
         $status_gw  = $status;
         $status     = get_local_status( $gfacID );
@@ -41,7 +59,7 @@ function check_job() {
         }
         write_logld( "Local status=$status status_gw=$status_gw" );
     }
-
+    
     # Sometimes during testing, the us3_db entry is not set
     # If $status == 'ERROR' then the condition has been processed before
     if ( strlen( $us3_db ) == 0 && $status != 'ERROR' )  {
