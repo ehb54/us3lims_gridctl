@@ -292,7 +292,10 @@ write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta
                    "\n\n\nGFAC Status: $status\n" .
                    "GFAC message field: $queue_msg\n";
 
-   update_autoflow_status( $status, $queue_msg );
+   ## only update status after all model records etc are written
+   ## move to end (where we email the user)
+   ## update_autoflow_status( $status, $queue_msg );
+
    ## Delete data from GFAC DB
    $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
@@ -688,6 +691,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ########/
    ## Send email 
 
+   update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
 }
 
