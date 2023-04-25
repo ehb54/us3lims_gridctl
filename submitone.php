@@ -378,10 +378,29 @@ if ( $stage != "PCSA" ) {
     }
 }
 
+$queue = "batch";
+
 if ( $cluster == "localhost" ) {
     $cluster = "us3iab-node0";
+} else {
+    $global_config_file  = "$class_dir/../global_config.php";
+    try {
+        include( $global_config_file );
+    } catch ( Exception $e ) {
+        echo "ERROR: including $global_config_file " . $e->getMessage() . "\n";
+    }
+
+    if ( isset( $cluster_details )
+         && is_array( $cluster_details )
+         && array_key_exists( $cluster, $cluster_details ) 
+         && array_key_exists( 'name', $cluster_details[ $cluster ] ) ) {
+        $host_name = $cluster_details[ $cluster ][ 'name' ];
+        if ( array_key_exists( 'queue', $cluster_details[ $cluster ] ) ) {
+            $queue = $cluster_details[ $cluster ][ 'queue' ];
+        }
+    }
+    echo "cluster $cluster host_name $host_name queue $queue\n";
 }
-$queue = "batch";
 
 if ( $stage == "PCSA" ) {
     $conv_pcsa_keys = [
