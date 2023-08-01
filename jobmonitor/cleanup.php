@@ -769,9 +769,10 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
       explode( ".", $editXMLFilename );
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
-   $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
+### not RFC5322 compliant to have multiple duplicate headers
+   $headers .= "Cc: $org_name Admin<$admin_email>, $org_name Admin<gegorbet@gmail.com>\n";
 #   $headers .= "CC: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
-   $headers .= "CC: $org_name Admin<gegorbet@gmail.com>"       . "\n";
+#   $headers .= "CC: $org_name Admin<gegorbet@gmail.com>"       . "\n";
 
    ## Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
