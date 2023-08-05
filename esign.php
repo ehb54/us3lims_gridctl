@@ -197,7 +197,7 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
-        $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson FROM ${lims_db}.autoflowGMPReportEsign";
+        $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson FROM ${lims_db}.autoflowGMPReportEsign where eSignStatusJson RLIKE '{\"to_sign\":\\\\[\"\\\\d.*'";
         
         $outer_result = mysqli_query( $db_handle, $query );
         if ( mysqli_error( $db_handle ) != "" ) {
