@@ -23,6 +23,7 @@ $lock = array();
 $lock[ "listen"    ]  = "$lock_dir/listen.php.lock";
 $lock[ "manage"    ]  = "$lock_dir/manage-us3-pipe.php.lock";
 $lock[ "submit"    ]  = "$lock_dir/submitctl.php.lock";
+$lock[ "esign"     ]  = "$lock_dir/esign.php.lock";
 
 global $cmd;
 $cmd = array();
@@ -30,6 +31,7 @@ $cmd = array();
 $cmd[ "listen"    ] = "$us3bin/listen.php";
 $cmd[ "manage"    ] = "$us3bin/manage-us3-pipe.php";
 $cmd[ "submit"    ] = "$us3bin/submitctl.php";
+$cmd[ "esign"     ] = "$us3bin/esign.php";
 
 function stop() {
     global $lock;
