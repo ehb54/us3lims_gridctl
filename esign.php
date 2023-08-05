@@ -285,12 +285,12 @@ while( 1 ) {
 
             ## build up message
 
-            $subject = "[$lims_db@$host_name] : GMP Report signature requested ($autoflowID)";
+            $subject = "[$lims_db@$host_name] : GMP Report e-signature requested ($autoflowID)";
 
             $body    =
                 "$person_obj->fname $person_obj->lname,\n"
                 . "\n"
-                . "Your signature is requested for -\n"
+                . "Your e-signature is requested for -\n"
                 . "\n"
                 . "Host          : $host_name\n"
                 . "Database      : $lims_db\n"
@@ -303,7 +303,7 @@ while( 1 ) {
             $mailto = "emre.brookes@umt.edu";
 
             $headers  = 
-                "From: GMP Esignature request $host_name<noreply@$host_name>\n"
+                "From: GMP e-signature request $host_name<noreply@$host_name>\n"
                 ;
 
             if ( 1 ) {
