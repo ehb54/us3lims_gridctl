@@ -7,7 +7,7 @@ include "$class_dir/experiment_status.php";
 # ********* start user defines *************
 
 # the polling interval
-$poll_sleep_seconds = 60;
+$poll_sleep_seconds = 120;
 
 # define admin_email to override listen-config.php's default
 $admin_email = "emre.brookes@umt.edu";
@@ -304,7 +304,7 @@ while( 1 ) {
                         ## send SME email
 
                         $mailto = implode( ",", $smeEmails );
-                        $mailto = "emre.brookes@umt.edu";
+                        # $mailto = "emre.brookes@umt.edu";
 
                         $headers  = 
                             "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
@@ -446,10 +446,12 @@ while( 1 ) {
                 . "Autoflow ID   : $autoflowID\n"
                 . "Autoflow Name : $autoflowName\n"
                 . "\n"
+                . "To sign - Use the 'us_esigner_gmp' program via the Terminal or the Icon (if available)"
+                . "\n"
                 ;
 
             $mailto = $person_obj->email;
-            $mailto = "emre.brookes@umt.edu";
+            # $mailto = "emre.brookes@umt.edu";
 
             $headers  = 
                 "From: GMP e-signature request $host_name<noreply@$host_name>\n"
