@@ -197,8 +197,11 @@ while( 1 ) {
         write_logls( "checking mysql db ${lims_db}", 2 );
         
         # read from mysql - $submit_request_table_name
+        # 
+        # can't do the following two this since SME now also needs checking
         # $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson FROM ${lims_db}.autoflowGMPReportEsign where eSignStatusJson RLIKE '{\"to_sign\":\\\\[\"\\\\d.*'";
-        $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson FROM ${lims_db}.autoflowGMPReportEsign where eSignStatusAll != 'YES'";
+        # $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson, smeListJson FROM ${lims_db}.autoflowGMPReportEsign where eSignStatusAll != 'YES'";
+        $query        = "SELECT ID, autoflowID, autoflowName, eSignStatusJson, smeListJson FROM ${lims_db}.autoflowGMPReportEsign";
         
         $outer_result = mysqli_query( $db_handle, $query );
         if ( mysqli_error( $db_handle ) != "" ) {
@@ -228,12 +231,156 @@ while( 1 ) {
             $ID                 = $obj->ID;
             $autoflowID         = $obj->autoflowID;
             $autoflowName       = $obj->autoflowName;
+            write_logls( "found record to process : ID $ID autoflowName $autoflowName", 3 );
+
+            try {
+                $smeListJson        = json_decode( $obj->smeListJson );
+            } catch ( Exception $e ) {
+                $smeListJson        = NULL;
+            }
 
             try {
                 $eSignStatusJson    = json_decode( $obj->eSignStatusJson );
             } catch ( Exception $e ) {
                 write_logls( "JSON decode error db $lims_db autoflowGMPReportEsign.ID $ID", 0 );
                 continue;
+            }
+
+            ## process all smeEmails if needed
+
+            if ( !is_null( $smeListJson ) && count( $smeListJson ) ) {
+                ## anything already signed without an sme_notified_datetime
+                if ( isset( $eSignStatusJson->signed ) && count( $eSignStatusJson->signed ) ) {
+                    write_logls( "ID $ID sme processing needs checking", 3 );
+
+                    ## do any signed not have the smeNotifiedDateTime
+
+                    $smebody = 
+                        "New e-signature(s) registered for -\n"
+                        . "\n"
+                        . "Host          : $host_name\n"
+                        . "Database      : $lims_db\n"
+                        . "Autoflow ID   : $autoflowID\n"
+                        . "Autoflow Name : $autoflowName\n"
+                        . "\n"
+                        ;
+
+                    $any_sme_todo         = false;
+                    $esigner_now_notified = [];
+                    foreach ( $eSignStatusJson->signed as $k => $v ) {
+                        foreach ( $v as $k2 => $v2 ) {
+                            $esigner_now_notified[ $k2 ] = true;
+                            if ( !isset( $v2->smeNotifiedDateTime ) ) {
+                                $smebody .=
+                                    "----------------------------------------\n"
+                                    . "e-Signer      : $k2\n"
+                                    . "Comment       : $v2->Comment\n"
+                                    . "Date & Time   : $v2->timeDate\n"
+                                    ;
+                                $any_sme_todo = true;
+                                $v2->smeNotifiedDateTime = "test";
+                            }
+                        }
+                    }
+                    $smebody .= "----------------------------------------\n";
+                    
+                    write_logls( "sme body:\n$smebody", 3 );
+
+                    if ( $any_sme_todo ) {
+                        $smeEmails = [];
+                        foreach ( $smeListJson as $k => $v ) {
+                            $smeID       = explode( ".", $v )[0];
+                            $query       = "SELECT email FROM ${lims_db}.people where personID = $smeID";
+                            $sme_result  = mysqli_query( $db_handle, $query );
+                            if ( !$sme_result ) {
+                                write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
+                                continue;
+                            }
+                            $sme_obj     = mysqli_fetch_object( $sme_result );
+                            $smeEmails[] = $sme_obj->email;
+                        }
+                        write_logls( "smeEmails : " . implode( " , ", $smeEmails ), 3 );
+
+                        ## send SME email
+
+                        $mailto = implode( ",", $smeEmails );
+                        $mailto = "emre.brookes@umt.edu";
+
+                        $headers  = 
+                            "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
+                            ;
+
+                        $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($autoflowID)";
+
+                        $now = date("m-d-Y H:i:m");
+
+                        if ( 1 ) {
+                            if (
+                                !mail(
+                                     $mailto
+                                     ,$subject
+                                     ,$smebody
+                                     ,$headers )
+                                ) {
+                                write_logls( "mail to $mailto failed : subject $subject", 0 );
+                                if ( !mail(
+                                          $admin_email
+                                          ,"ERROR: ESig Mail failure : $subject"
+                                          ,"$mailto\n--------mail body follows------\n$body"
+                                          ,$headers )
+                                    ) {
+                                    write_logls( "ERROR admin mail to $admin_mail failed : subject $subject", 0 );
+                                }
+                            }
+                        } else {
+                            echo "mailing skipped for testing - $mailto - $subject\n";
+                        }
+                        
+                        ## now update the db with lock
+
+                        if ( mysqli_begin_transaction( $db_handle ) ) {
+                            $query = "SELECT eSignStatusJson FROM ${lims_db}.autoflowGMPReportEsign where ID = $ID for UPDATE";
+                            $sme_update_result = mysqli_query( $db_handle, $query );
+                            if ( !$sme_update_result ) {
+                                write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
+                            } else {
+                                $sme_update_obj = mysqli_fetch_object( $sme_update_result );
+
+                                $failed = false;
+                                try {
+                                    $update_eSignStatusJson    = json_decode( $sme_update_obj->eSignStatusJson );
+                                } catch ( Exception $e ) {
+                                    write_logls( "JSON decode error db $lims_db autoflowGMPReportEsign.ID $ID", 0 );
+                                    $failed = true;
+                                }
+
+                                if ( !$failed ) {
+                                    foreach ( $update_eSignStatusJson->signed as $k => $v ) {
+                                        foreach ( $v as $k2 => $v2 ) {
+                                            if ( array_key_exists( $k2, $esigner_now_notified ) ) {
+                                                $v2->smeNotifiedDateTime = $now;
+                                            }
+                                        }
+                                    }
+
+                                    $query =
+                                        "UPDATE ${lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
+                                        . json_encode( $update_eSignStatusJson )
+                                        . "' where ID = $ID"
+                                        ;
+                                    
+                                    $sme_commit_result = mysqli_query( $db_handle, $query );
+                                    
+                                    if ( !$sme_commit_result ) {
+                                        write_logl( "db query failed : $query\ndb query error: " . mysqli_error($db_handle) . "\n" );
+                                    }
+                                }
+                            }
+                            mysqli_commit( $db_handle );
+                        }
+                        
+                    } ## $any_sme_todo
+                }
             }
 
             # debug_json( "after fetch, decode", $eSignStatusJson );
@@ -260,7 +407,7 @@ while( 1 ) {
                 continue;
             }
 
-            write_logls( "personID is $personID", 3 );
+            write_logls( "ID is $ID personID is $personID", 3 );
 
             ## key for checking if message was already sent and how long ago
 
@@ -274,6 +421,7 @@ while( 1 ) {
                 }
             }
 
+            ## ok, we are going to send a notification email
             $query         = "SELECT email, fname, lname FROM ${lims_db}.people where personID = $personID";
             $person_result = mysqli_query( $db_handle, $query );
             if ( !$person_result ) {
