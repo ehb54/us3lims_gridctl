@@ -260,8 +260,8 @@ while( 1 ) {
                         . "\n"
                         . "Host          : $host_name\n"
                         . "Database      : $lims_db\n"
-                        . "Autoflow ID   : $autoflowID\n"
-                        . "Autoflow Name : $autoflowName\n"
+                        . "ID            : $ID\n"
+                        . "Run Name      : $autoflowName\n"
                         . "\n"
                         ;
 
@@ -310,7 +310,7 @@ while( 1 ) {
                             "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
                             ;
 
-                        $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($autoflowID)";
+                        $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($ID)";
 
                         $now = date("m-d-Y H:i:m");
 
@@ -434,7 +434,7 @@ while( 1 ) {
 
             ## build up message
 
-            $subject = "[$lims_db@$host_name] : GMP Report e-signature requested ($autoflowID)";
+            $subject = "[$lims_db@$host_name] : GMP Report e-signature requested ($ID)";
 
             $body    =
                 "$person_obj->fname $person_obj->lname,\n"
@@ -443,8 +443,8 @@ while( 1 ) {
                 . "\n"
                 . "Host          : $host_name\n"
                 . "Database      : $lims_db\n"
-                . "Autoflow ID   : $autoflowID\n"
-                . "Autoflow Name : $autoflowName\n"
+                . "ID            : $ID\n"
+                . "Run Name      : $autoflowName\n"
                 . "\n"
                 . "To sign - Use the 'us_esigner_gmp' program via the Terminal or the Icon (if available)"
                 . "\n"
