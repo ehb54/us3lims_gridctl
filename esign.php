@@ -32,6 +32,8 @@ $logging_level      = 2;
 # these should only be changed by developers
 $db                                = "gfac";
 $processing_key                    = "submitted";
+$do_send_emails                    = true;
+# $do_send_emails                    = false;
 # ********* end admin defines ***************
 
 # add locking
@@ -239,6 +241,19 @@ while( 1 ) {
                 $smeListJson        = NULL;
             }
 
+            if ( !is_null( $smeListJson ) && !is_array( $smeListJson ) ) {
+                $smeListJson        = NULL;
+                write_logls( "Warning: db $lims_db autoflowGMPReportEsign.ID $ID smeListJson is not NULL and not an array", 0 );
+            }
+
+            if ( !is_null( $smeListJson ) && count( $smeListJson ) ) {
+                $smeListJson_cleaned  = preg_grep ('/^\s*\d+\s*\./', $smeListJson);
+                if ( count( $smeListJson_cleaned ) != count( $smeListJson ) ) {
+                    write_logls( "Warning: db $lims_db autoflowGMPReportEsign.ID $ID smeListJson stripped of non-conformant elements ", 0 );
+                    $smeListJson = $smeListJson_cleaned;
+                }
+            }
+
             try {
                 $eSignStatusJson    = json_decode( $obj->eSignStatusJson );
             } catch ( Exception $e ) {
@@ -314,7 +329,7 @@ while( 1 ) {
 
                         $now = date("m-d-Y H:i:m");
 
-                        if ( 1 ) {
+                        if ( $do_send_emails ) {
                             if (
                                 !mail(
                                      $mailto
@@ -325,8 +340,8 @@ while( 1 ) {
                                 write_logls( "mail to $mailto failed : subject $subject", 0 );
                                 if ( !mail(
                                           $admin_email
-                                          ,"ERROR: ESig Mail failure : $subject"
-                                          ,"$mailto\n--------mail body follows------\n$body"
+                                          ,"ERROR: ESig SME Mail failure : $subject"
+                                          ,"SME mail failure\nMail To: '$mailto'\n--------mail body follows------\n$smebody"
                                           ,$headers )
                                     ) {
                                     write_logls( "ERROR admin mail to $admin_mail failed : subject $subject", 0 );
@@ -457,7 +472,7 @@ while( 1 ) {
                 "From: GMP e-signature request $host_name<noreply@$host_name>\n"
                 ;
 
-            if ( 1 ) {
+            if ( $do_send_emails ) {
                 if (
                     !mail(
                          $mailto
@@ -469,7 +484,7 @@ while( 1 ) {
                     if ( !mail(
                               $admin_email
                               ,"ERROR: ESig Mail failure : $subject"
-                              ,"$mailto\n--------mail body follows------\n$body"
+                              ,"Esig reminder mail failure\nMail To: '$mailto'\n--------mail body follows------\n$body"
                               ,$headers )
                         ) {
                         write_logls( "ERROR admin mail to $admin_mail failed : subject $subject", 0 );
