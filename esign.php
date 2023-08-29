@@ -170,6 +170,13 @@ foreach ( $trylimsdbs as $v ) {
             $success = false;
             $error  = "table autoflowGMPReportEsign can not be queried";
         }
+        $query  = "select count(*) from ${v}.autoflowGMPReport";
+        $result = mysqli_query( $db_handle, $query );
+        $error  = '';
+        if ( !$result ) {
+            $success = false;
+            $error  = "table autoflowGMPReport can not be queried";
+        }
     }
 
     if ( $success ) {
@@ -235,6 +242,8 @@ while( 1 ) {
             $autoflowName       = $obj->autoflowName;
             write_logls( "found record to process : ID $ID autoflowName $autoflowName", 3 );
 
+            $GMPReportID        = NULL;
+            
             try {
                 $smeListJson        = json_decode( $obj->smeListJson );
             } catch ( Exception $e ) {
@@ -266,6 +275,25 @@ while( 1 ) {
             if ( !is_null( $smeListJson ) && count( $smeListJson ) ) {
                 ## anything already signed without an sme_notified_datetime
                 if ( isset( $eSignStatusJson->signed ) && count( $eSignStatusJson->signed ) ) {
+                    if ( $GMPReportID === NULL ) {
+                        $query = "select ID from ${lims_db}.autoflowGMPReport where autoflowHistoryID=$autoflowID";
+                        write_logls( "query: '$query'", 4 );
+                        $id_result = mysqli_query( $db_handle, $query );
+                        if ( !$id_result ) {
+                            write_logls( "read from mysql query='$query'. " . mysqli_error( $db_handle ) );
+                            $GMPReportID = "autoflowID $autoflowID";
+                        } else {
+                            $id_obj =  mysqli_fetch_object( $id_result );
+                            if ( !$id_obj ) {
+                                $GMPReportID = "autoflowID $autoflowID";
+                                write_logls( "ID $ID no GMPReportID found, using $GMPReportID", 3 );
+                            } else {
+                                $GMPReportID = $id_obj->ID;
+                                write_logls( "ID $ID got GMPReportID $GMPReportID", 3 );
+                            }
+                        }
+                    }
+                                         
                     write_logls( "ID $ID sme processing needs checking", 3 );
 
                     ## do any signed not have the smeNotifiedDateTime
@@ -275,7 +303,7 @@ while( 1 ) {
                         . "\n"
                         . "Host          : $host_name\n"
                         . "Database      : $lims_db\n"
-                        . "ID            : $ID\n"
+                        . "ID            : $GMPReportID\n"
                         . "Run Name      : $autoflowName\n"
                         . "\n"
                         ;
@@ -325,7 +353,7 @@ while( 1 ) {
                             "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
                             ;
 
-                        $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($ID)";
+                        $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($GMPReportID)";
 
                         $now = date("m-d-Y H:i:m");
 
@@ -449,7 +477,25 @@ while( 1 ) {
 
             ## build up message
 
-            $subject = "[$lims_db@$host_name] : GMP Report e-signature requested ($ID)";
+            if ( $GMPReportID === NULL ) {
+                $query = "select ID from ${lims_db}.autoflowGMPReport where autoflowHistoryID=$autoflowID";
+                $id_result = mysqli_query( $db_handle, $query );
+                if ( !$id_result ) {
+                    write_logls( "read from mysql query='$query'. " . mysqli_error( $db_handle ) );
+                    $GMPReportID = "autoflowID $autoflowID";
+                } else {
+                    $id_obj =  mysqli_fetch_object( $id_result );
+                    if ( !$id_obj ) {
+                        $GMPReportID = "autoflowID $autoflowID";
+                        write_logls( "ID $ID no GMPReportID found, using $GMPReportID", 3 );
+                    } else {
+                        $GMPReportID = $id_obj->ID;
+                        write_logls( "ID $ID got GMPReportID $GMPReportID", 3 );
+                    }
+                }
+            }
+
+            $subject = "[$lims_db@$host_name] : GMP Report e-signature requested ($GMPReportID)";
 
             $body    =
                 "$person_obj->fname $person_obj->lname,\n"
@@ -458,7 +504,7 @@ while( 1 ) {
                 . "\n"
                 . "Host          : $host_name\n"
                 . "Database      : $lims_db\n"
-                . "ID            : $ID\n"
+                . "ID            : $GMPReportID\n"
                 . "Run Name      : $autoflowName\n"
                 . "\n"
                 . "To sign - Use the 'us_esigner_gmp' program via the Terminal or the Icon (if available)"
