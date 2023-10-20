@@ -433,7 +433,7 @@ while( 1 ) {
                 continue;
             }
 
-            if ( $eSignStatusJson->to_sign === NULL ) {
+            if ( is_null( $eSignStatusJson->to_sign ) ) {
                 # initialized default not ready for signatures
                 continue;
             }
