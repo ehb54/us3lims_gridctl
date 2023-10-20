@@ -433,6 +433,11 @@ while( 1 ) {
                 continue;
             }
 
+            if ( $eSignStatusJson->to_sign === NULL ) {
+                # initialized default not ready for signatures
+                continue;
+            }
+
             if ( !is_array( $eSignStatusJson->to_sign ) ) {
                 write_logls( "db $lims_db autoflowGMPReportEsign.ID $ID eSignStatusJson->to_sign not an array", 0 );
                 continue;
