@@ -106,7 +106,7 @@ function check_job() {
         case "COMPLETED":
             case "COMPLETE":
             write_logld( "  COMPLETE gfacID=$gfacID" );
-            complete();
+            complete( $gfacID );
             return true;
             break;
 
@@ -120,7 +120,7 @@ function check_job() {
         case "FINISHED":
             case "DONE":
             if ( ! is_aira_job( $gfacID ) ) {
-                complete();
+                complete( $gfacID );
                 return true;
             }
             write_logld( "  FINISHED gfacID=$gfacID" );
@@ -484,8 +484,9 @@ function data_timeout( $updatetime ) {
     update_autoflow_status( 'FAILED', $message );
 }
 
-function complete() {
+function complete( $gfacID ) {
     ## Just cleanup
+    update_job_status( "COMPLETE", $gfacID );
     cleanup();
 }
 
@@ -540,6 +541,8 @@ function cleanup() {
 
 ## Function to update status of job
 function update_job_status( $job_status, $gfacID ) {
+    write_logld( "gridctl.php: update_job_status( '$job_status', '$gfacID' )" );
+
     global $db_handle;
     global $query;
     global $self;
