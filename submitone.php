@@ -518,6 +518,14 @@ if ( $stage == "PCSA" ) {
                 $_REQUEST[ 'tikreg_option' ] = 0;
                 continue;
             }
+            if ( $v == "specified_alpha" ) {
+                $_REQUEST[ 'tikreg_option' ] = 1;
+                continue;
+            }
+            if ( $v == "auto_computed_alpha" ) {
+                $_REQUEST[ 'tikreg_option' ] = 2;
+                continue;
+            }
             error( "pcsa: unknown/unsupported regularization option $v" );
         }
         error( "internal error: no special handling code for attribute '$k'" );
