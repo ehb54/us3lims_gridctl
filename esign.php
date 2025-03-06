@@ -408,7 +408,7 @@ while( 1 ) {
 
                                     $query =
                                         "UPDATE ${lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
-                                        . json_encode( $update_eSignStatusJson )
+                                        . str_replace( "'", "\'", json_encode( $update_eSignStatusJson ) )
                                         . "' where ID = $ID"
                                         ;
                                     
