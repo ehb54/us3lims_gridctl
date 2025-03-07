@@ -113,7 +113,7 @@ function aira_cleanup( $us3_db, $reqID, $db_handle )
    }
  */
 
-   $query = "SELECT status, cluster, id FROM gfac.analysis " .
+   $query = "SELECT status, cluster, id, autoflowAnalysisID, metaschedulerClusterExecuting FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
@@ -124,7 +124,7 @@ function aira_cleanup( $us3_db, $reqID, $db_handle )
       return( -1 );
    }
    
-   list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
+   list( $status, $cluster, $id, $autoflowAnalysisID, $metaschedulerClusterExecuting ) = mysqli_fetch_array( $result );
 
    $is_us3iab  = preg_match( "/us3iab/", $cluster );
    $is_local   = preg_match( "/-local/", $cluster );
@@ -632,6 +632,20 @@ write_logld( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
    ## Copy results to LIMS submit directory (files there are deleted after 7 days)
    global $submit_dir; ## LIMS submit files dir
    
+   ## conditionally update HPCAnalysisRequest
+   if ( strlen( $metaschedulerClusterExecuting ) ) {
+       $query  =
+           "UPDATE ${us3_db}.HPCAnalysisRequest"
+           . " SET clusterName='$metaschedulerClusterExecuting'"
+           . " WHERE HPCAnalysisRequestID = $requestID ";
+       $result = mysqli_query( $db_handle, $query );
+       
+       if ( ! $result )
+       {
+           write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+       }
+   }
+       
    ## Get the request guid (LIMS submit dir name)
    $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
