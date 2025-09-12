@@ -135,9 +135,11 @@ echo "got person\n";
 
 # get customgridmodel
 
-$model = db_obj_result( $db_handle, "SELECT modelGUID FROM ${lims_db}.model WHERE description='$customgridname' ORDER BY lastUpdated DESC LIMIT 1" );
+$model = db_obj_result( $db_handle, "SELECT modelID, modelGUID FROM ${lims_db}.model WHERE description='$customgridname' ORDER BY lastUpdated DESC LIMIT 1" );
 $customgridguid = $model->{ 'modelGUID' };
+$customgridmodelid = $model->{ 'modelID' };
 echo "got customgridguid is $customgridguid\n";
+echo "got customgridmodelid is $customgridmodelid\n";
 
 # get rawDdata
 
@@ -184,7 +186,7 @@ $xml = <<<__EOD
 <channel_parms channel="2B" chandesc="2B:UV/vis.:Blank/Air" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
 <channel_parms channel="2B" chandesc="2B:Interf.:Blank/Air" load_concen_ratio="1" lcr_tolerance="5" load_volume="460" lv_tolerance="10" data_end="7"/>
 <p_2dsa>
-<channel_parms channel="2A:UV/vis.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid="$customgridguid" custom_grid_name="$customgridname"/>
+<channel_parms channel="2A:UV/vis.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid="$customgridguid" custom_grid_name="$customgridname" CG_modelID="$customgridmodelid"/>
 <channel_parms channel="2A:Interf.:BSA in PBS" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <channel_parms channel="2B:UV/vis.:Blank/Air" s_min="1" s_max="10" s_gridpoints="64" k_min="1" k_max="5" k_gridpoints="64" vary_vbar="0" constant_ff0="0.72" custom_grid_guid=""/>
 <job_2dsa run="1" noise="(TI Noise)"/>

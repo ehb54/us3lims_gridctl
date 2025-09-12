@@ -565,6 +565,8 @@ if ( $stage == "PCSA" ) {
     check_cli_errors();
 
 } else {
+    $use_custom_grid = false; # set if recognized as a custom grid
+
     # all 2dsa methods
     
     $conv_2dsa_keys = [
@@ -582,6 +584,7 @@ if ( $stage == "PCSA" ) {
         ,"fit_mb_select"     => "fit_mb_select"
         ,"meniscus_range"    => "meniscus_range"
         ,"meniscus_points"   => "meniscus_points"
+        ,"custom_grid_guid"  => "_special_handling_"
         ];
 
     $defaults_2dsa = [
@@ -649,14 +652,32 @@ if ( $stage == "PCSA" ) {
             $_REQUEST[ 'iterations_option' ] = "1";
             continue;
         }
+        if ( $k == 'custom_grid_guid' ) {
+            if ( empty( $v ) ) {
+                # empty custom_grid_guid disables custom grid
+                continue;
+            }
+            # require CG_modelID
+            if ( isset( $all_attributes->CG_modelID )
+                 && !empty( $all_attributes->CG_modelID ) ) {
+                $_REQUEST[ 'CG_modelID' ] = $all_attributes->CG_modelID;
+                $use_custom_grid = true;
+                continue;
+            }
+            error( "non empty '$k' is defined, but CG_modelID is not defined or is empty" );
+        }
         error( "internal error: no special handling code for attribute '$k'" );
     }
 
     $_POST = $_REQUEST;
 
-    $php_2dsa_1 = "${php_base}/2DSA_1.php";
-    $php_2dsa_2 = "${php_base}/2DSA_2.php";
-
+    if ( $use_custom_grid ) {
+        $php_2dsa_1 = "${php_base}/2DSA-CG_1.php";
+        $php_2dsa_2 = "${php_base}/2DSA-CG_2.php";
+    } else {
+        $php_2dsa_1 = "${php_base}/2DSA_1.php";
+        $php_2dsa_2 = "${php_base}/2DSA_2.php";
+    }
 
     echo "preparing to call $php_2dsa_1\n";
     echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
