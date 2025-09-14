@@ -609,7 +609,8 @@ if ( $stage == "PCSA" ) {
         "radial_grid"        =>  "0",
         "time_grid"          =>  "1",
         "cluster"            =>  "${host_name}:${cluster}:${queue}",
-        "TIGRE"              =>  "Submit"
+        "TIGRE"              =>  "Submit",
+        "uniform_grid"       =>  "6" # current default in 2DSA-CG_1.php
         ];    
 
 
