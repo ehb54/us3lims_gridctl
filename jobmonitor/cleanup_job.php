@@ -1,14 +1,15 @@
 <?php
 /*
- * cleanup_gfac.php
+ * cleanup_job.php
  *
- * functions relating to copying results and cleaning up the gfac DB
+ * Functions for copying results and cleaning up the job tracking DB
+ * after a Slurm job completes.
  *
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
-$me              = 'cleanup_gfac.php';
+$me              = 'cleanup_job.php';
 $email_address   = '';
 $queuestatus     = '';
 $jobtype         = '';
@@ -16,7 +17,7 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function gfac_cleanup( $us3_db, $reqID, $db_handle )
+function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
    global $user;
@@ -42,7 +43,7 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    write_logld( "$me: debug db=$db; requestID=$requestID" );
 
    ## First get basic info for email messages
-   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID=$requestID";
    $result = mysqli_query( $db_handle, $query );
 
@@ -56,20 +57,14 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
 
-   $query  = "SELECT personID FROM ${us3_db}.people " .
+   $query  = "SELECT personID FROM {$us3_db}.people " .
              "WHERE personGUID='$investigatorGUID'";
    $result = mysqli_query( $db_handle, $query );
 
    list( $personID ) = mysqli_fetch_array( $result );
 
-   /*
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
-             "FROM ${us3_db}.HPCAnalysisRequest h LEFT JOIN ${us3_db}.HPCAnalysisResult "            .
-             "ON h.HPCAnalysisRequestID=HPCAnalysisResult.HPCAnalysisRequestID " .
-             "WHERE h.HPCAnalysisRequestID=$requestID";
-   */
    $query  = "SELECT clusterName, submitTime, queueStatus, analType "            .
-             "FROM ${us3_db}.HPCAnalysisRequest h, ${us3_db}.HPCAnalysisResult r "                   .
+             "FROM {$us3_db}.HPCAnalysisRequest h, {$us3_db}.HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
 
@@ -92,7 +87,7 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
    ## Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM ${us3_db}.HPCAnalysisResult " .
+   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
    $result = mysqli_query( $db_handle, $query );
@@ -144,25 +139,16 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 ##}
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
-##write_logld( "$me:     db=$db; requestID=$requestID; status=$status; cluster=$cluster" );
 
-##   if ( $cluster == 'bcf-local'  ||  $cluster == 'alamo-local' )
-   if ( preg_match( "/\-local/", $cluster )  ||
-        preg_match( "/us3iab/",  $cluster ) )
-   {
-##      $clushost = $cluster;
-##      $clushost = preg_replace( "/\-local/", "", $clushost );
-      $parts    = explode( "-", $cluster );
-      $clushost = $parts[ 0 ];
-      if ( $cluster == "us3iab-node1" ) {
-          get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
-      } else {
-          get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
-      }
-write_logld( "$me:     clushost=$clushost  reqID=$requestID get_local_files() gfacID=$gfacID" );
+   ## Phase 3: use localhost config flag instead of cluster-name pattern matching
+   global $cluster_details;
+   $is_local = array_key_exists( $cluster, $cluster_details )
+               && array_key_exists( 'localhost', $cluster_details[$cluster] )
+               && $cluster_details[$cluster]['localhost'];
+
+   if ( $is_local ) {
+       get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
    }
-else
-write_logld( "$me:     NO get_local_files()" );
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
@@ -192,11 +178,11 @@ write_logld( "$me:     NO get_local_files()" );
       write_logld( "$me: Successful data fetch: $requestID $gfacID" );
    }
    else
-   {  ## Log failure at fetch attempt
+   {  ## Log failure and return immediately — no point continuing without results
       update_autoflow_status( 'FAILED', "Failed data fetch" );
       write_logld( "$me: Failed data fetch: $requestID $gfacID" );
-      if ( $analysisID == '' )
-         $analysisID = '0';
+      mail_to_user( "fail", "No results tarfile" );
+      return( -1 );
    }
 
    ## Save queue messages for post-mortem analysis
@@ -312,7 +298,7 @@ write_logld( "$me: GFAC DB entry deleted" );
    global $submit_dir;
    
    ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT HPCAnalysisRequestGUID FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
    $result = mysqli_query( $db_handle, $query );
    
@@ -338,7 +324,7 @@ write_logld( "$me: *messages.txt written" );
    ########/
    ## Insert data into HPCAnalysis
 
-   $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "                              .
+   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "                              .
             "stderr='" . mysqli_real_escape_string( $db_handle, $stderr ) . "', " .
             "stdout='" . mysqli_real_escape_string( $db_handle, $stdout ) . "' "  .
             "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
@@ -354,14 +340,6 @@ write_logld( "$me: *messages.txt written" );
    }
 
    ## Save the tarfile and expand it
-
-   if ( strlen( $tarfile ) == 0 )
-   {
-      write_logld( "$me: No tarfile" );
-      update_autoflow_status( 'FAILED', "Empty results tarfile" );
-      mail_to_user( "fail", "No results" );
-      return( -1 );
-   }
 
    ## Shouldn't happen
    if ( ! is_dir( "$work" ) )
@@ -436,7 +414,7 @@ write_logld( "$me: *messages.txt written" );
          $statistics  = parse_xml( $xml, 'statistics' );
          $otherdata   = parse_xml( $xml, 'id' );
 
-         $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "   .
+         $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "   .
                   "wallTime = {$statistics['walltime']}, " .
                   "CPUTime = {$statistics['cputime']}, " .
                   "CPUCount = {$statistics['cpucount']}, " .
@@ -470,11 +448,11 @@ write_logld( "$me: *messages.txt written" );
          if ( isset( $model_data[ 'editGUID' ] ) )
             $editGUID   = $model_data[ 'editGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.noise SET "  .
+         $query = "INSERT INTO {$us3_db}.noise SET "  .
                   "noiseGUID='$noiseGUID'," .
                   "modelGUID='$modelGUID'," .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=1, "             .
                   "noiseType='$type',"      .
                   "description='$desc',"    .
@@ -514,9 +492,9 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
          $modelGUID   = $mrecs_data[ 'modelGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.pcsa_modelrecs SET "  .
+         $query = "INSERT INTO {$us3_db}.pcsa_modelrecs SET "  .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=0, "             .
                   "mrecsGUID='$mrecGUID'," .
                   "description='$desc',"    .
@@ -563,10 +541,10 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
 write_logld( "$me:   MODELUpd: O:description=$description" );
          }
 
-         $query = "INSERT INTO ${us3_db}.model SET "       .
+         $query = "INSERT INTO {$us3_db}.model SET "       .
                   "modelGUID='$modelGUID',"      .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "description='$description',"  .
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
@@ -589,13 +567,13 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
          update_autoflow_models( $modelID, $modelGUID, $editGUID );
 
-         $query = "INSERT INTO ${us3_db}.modelPerson SET " .
+         $query = "INSERT INTO {$us3_db}.modelPerson SET " .
                   "modelID=$modelID, personID=$personID";
          $result = mysqli_query( $db_handle, $query );
 ##write_logld( "$me:   model file inserted into DB : id=$id" );
       }
 
-      $query = "INSERT INTO ${us3_db}.HPCAnalysisResultData SET "       .
+      $query = "INSERT INTO {$us3_db}.HPCAnalysisResultData SET "       .
                "HPCAnalysisResultID='$HPCAnalysisResultID', " .
                "HPCAnalysisResultType='$file_type', "         .
                "resultID=$id";
@@ -619,11 +597,11 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $noiseIDs as $noiseID )
    {
       $modelGUID = $modelGUIDs[ $noiseID ];
-      $query = "UPDATE ${us3_db}.noise SET "                                                 .
+      $query = "UPDATE {$us3_db}.noise SET "                                                 .
                "editedDataID="                                                     .
-               "(SELECT editedDataID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')," .
+               "(SELECT editedDataID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')," .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE noiseID=$noiseID";
 
       $result = mysqli_query( $db_handle, $query );
@@ -644,9 +622,9 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $mrecsIDs as $mrecsID )
    {
       $modelGUID = $rmodlGUIDs[ $mrecsID ];
-      $query = "UPDATE ${us3_db}.pcsa_modelrecs SET "                                                 .
+      $query = "UPDATE {$us3_db}.pcsa_modelrecs SET "                                                 .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE mrecsID=$mrecsID";
 
       $result = mysqli_query( $db_handle, $query );
@@ -665,18 +643,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## Copy results to LIMS submit directory (files there are deleted after 7 days)
    global $submit_dir; ## LIMS submit files dir
 
-  ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   list( $requestGUID ) = mysqli_fetch_array( $result );
-
+   ## $requestGUID was already fetched above; reuse it here.
    chdir( "$submit_dir/$requestGUID" );
    $f = fopen( "analysis.tar", "w" );
    fwrite( $f, $tarfile );
@@ -711,7 +678,7 @@ function get_autoflow_type_id() {
 
     ## get autoflow running submission type
 
-    $query = "SELECT statusJson,autoflowID from ${us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
+    $query = "SELECT statusJson,autoflowID from {$us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
     echo "query : $query\n";
 
     $result = mysqli_query( $db_handle, $query );
@@ -752,7 +719,7 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     ## get editeddataID for editGUID
 
-    $query = "SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID'";
+    $query = "SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID'";
 
     $result = mysqli_query( $db_handle, $query );
 
@@ -772,7 +739,7 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     ## get current autoflowModelsLink
 
-    $query = "SELECT modelsDesc from ${us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+    $query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
     echo "query : $query\n";
 
     $result = mysqli_query( $db_handle, $query );
@@ -807,10 +774,10 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     if ( $result->num_rows ) {
         ## update
-        $query = "UPDATE ${us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
+        $query = "UPDATE {$us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
     } else {
         ## insert
-        $query = "INSERT INTO ${us3_db}.autoflowModelsLink"
+        $query = "INSERT INTO {$us3_db}.autoflowModelsLink"
             . " set autoflowAnalysisID=$autoflowAnalysisID"
             . " ,modelsDesc='$descenc'"
             . " ,autoflowID=$autoflowID"

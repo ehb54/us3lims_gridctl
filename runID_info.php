@@ -19,14 +19,13 @@ if ( ($_SESSION['userlevel'] != 2) &&   // data analyst can see own runID's
 include 'config.php';
 include 'db.php';
 include 'lib/utility.php';
-include $class_dir . 'experiment_status.php';
+
 
 // Start displaying page
 $page_title = "Info by Run ID";
 $css = 'css/admin.css';
 include 'header.php';
 
-global $uses_airavata;
 global $link;
 
 ?>
@@ -724,17 +723,8 @@ HTML;
   $row = mysqli_fetch_assoc( $result );
   $row['jobfile'] = '<pre>' . htmlentities( $row['jobfile'] ) . '</pre>';
 
-  // Get GFAC job status
-  global $uses_airavata;
-
-  if ( $uses_airavata === true )
-  {
-    $row['gfacStatus'] = nl2br( getExperimentStatus( $row['gfacID'] ) );
-  }
-  else
-  {
-    $row['gfacStatus'] = nl2br( getJobstatus( $row['gfacID'] ) );
-  }
+  // GFAC/Airavata status is no longer available; use LIMS job status.
+  $row['gfacStatus'] = htmlspecialchars( $row['queueStatus'] ?? 'n/a' );
 
   // Get queue messages from disk directory, if it still exists
   global $submit_dir;

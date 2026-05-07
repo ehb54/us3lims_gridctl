@@ -6,9 +6,6 @@ $us3util = "$us3lims/database/utils";
 $us3jm   = "$us3lims/bin/jobmonitor";
 
 include "$us3bin/listen-config.php";
-include $class_dir_p . "experiment_status.php";
-include $class_dir_p . "experiment_errors.php";
-include $class_dir_p . "job_details.php";
 
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";
@@ -43,7 +40,7 @@ flush_errors_exit();
 open_db();
 
 
-$query = "SELECT modelsDesc from ${us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+$query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
 echo "query : $query\n";
 
 $result = mysqli_query( $db_handle, $query );

@@ -3,27 +3,18 @@
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/jobmonitor";
+$us3jm   = "$us3lims/bin/gridctl/jobmonitor";
 
-include "$us3bin/listen-config.php";
-include $class_dir_p . "experiment_status.php";
-include $class_dir_p . "experiment_errors.php";
-include $class_dir_p . "experiment_cancel.php";
-include $class_dir_p . "experiment_resource.php";
-include $class_dir_p . "job_details.php";
-include $class_dir_p . "../global_config.php";
+include_once "$us3bin/listen-config.php";
+include $class_dir . "../global_config.php";
 
 include "$us3jm/gridctl.php";
-include "$us3jm/cleanup.php";
-include "$us3jm/cleanup_gfac.php";
-
-include "$us3util/utility.php";
+include "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************
 ## some could be pushed to listen-config.php
 
 # the polling interval
-$poll_sleep_seconds = 165 + random_int( 10, 30 );
 $poll_sleep_seconds = 30;
 
 # logging_level 
@@ -224,7 +215,6 @@ while( 1 ) {
                          ,"select"
                          . " status"
                          . " ,queue_msg"
-                         . " ,metaschedulerClusterExecuting"
                          . " ,UNIX_TIMESTAMP(time)"
                          . " ,time"
                          . " from gfac.analysis"
@@ -240,7 +230,6 @@ while( 1 ) {
     $queue_msg                      = $res_analysis->{"queue_msg"};
     $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
     $updateTime                     = $res_analysis->{"time"};
-    $metascheduler_cluser_executing = $res_analysis->{"metaschedulerClusterExecuting"};
 
     if ( check_job() ) {
         write_logld( "jobmonitor.php exiting" );

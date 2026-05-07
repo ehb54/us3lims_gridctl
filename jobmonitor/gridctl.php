@@ -2,7 +2,6 @@
 
 # functions for jobmonitor.php
 
-## Function to determine if this is an airavata/thrift job or not
 ## returns true when job processing is done (regardless error or success)
 
 function check_job() {
@@ -16,49 +15,17 @@ function check_job() {
     global $updateTime;
     global $autoflowAnalysisID;
     global $db_handle;
-    global $metascheduler_cluster_executing;
 
     $gfacLabl  = $gfacID;
     $status_ex = $status;
 
-    ## If entry is for Airvata/Thrift, get the true current status
-
-    if ( is_aira_job( $gfacID ) ) {
-        $status_in  = $status;
-        $status     = aira_status( $gfacID, $status_in );
-        if ( $status == "UNKNOWN" ) {
-            $status = $status_in;
-            write_logld( "UNKNOWN status received (airavata connect failure?) status remains $status" );
-        }
-        if($status != $status_in ) {
-            write_logld( "Set to $status from $status_in" );
-        }
-        try {
-            write_logld( "check_job() trying to getComputeResource( $gfacID )\n" );
-            $new_metascheduler_cluster_executing = getComputeResource( $gfacID );
-            if ( $new_metascheduler_cluster_executing == "UNKNOWN" ) {
-                $new_metascheduler_cluster_executing = "";
-            }
-            if ( $metascheduler_cluster_executing != $new_metascheduler_cluster_executing ) {
-                $metascheduler_cluster_executing = $new_metascheduler_cluster_executing;
-                $query3  = "UPDATE gfac.analysis SET metaschedulerClusterExecuting='$metascheduler_cluster_executing' WHERE gfacID='$gfacID'";
-                write_logld( "check_job() updating $query3\n" );
-                $result3 = mysqli_query( $db_handle, $query3 );
-                if ( ! $result3 ) {
-                    write_logld( "Query failed $query3 - " .  mysqli_error( $db_handle ) );
-                }
-            }
-        } catch (Exception $e) {
-            write_logld( "check_job() trying to getComputeResource( $gfacID ) caught exception\n" );
-        }
-    } else {
-        $status_gw  = $status;
-        $status     = get_local_status( $gfacID );
-        if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' ) {
-            $status     = $status_gw;
-        }
-        write_logld( "Local status=$status status_gw=$status_gw" );
+    // Get local job status
+    $status_gw  = $status;
+    $status     = get_local_status( $gfacID );
+    if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' ) {
+        $status     = $status_gw;
     }
+    write_logld( "Local status=$status status_gw=$status_gw" );
     
     # Sometimes during testing, the us3_db entry is not set
     # If $status == 'ERROR' then the condition has been processed before
@@ -111,16 +78,6 @@ function check_job() {
             return true;
             break;
 
-        case "DATA":
-            case "RESULTS_GEN":
-            wait_data( $time );
-            break;
-
-        case "DATA_TIMEOUT":
-            data_timeout( $time );
-            return true;
-            break;
-
         case "COMPLETED":
             case "COMPLETE":
             write_logld( "  COMPLETE gfacID=$gfacID" );
@@ -137,12 +94,8 @@ function check_job() {
 
         case "FINISHED":
             case "DONE":
-            if ( ! is_aira_job( $gfacID ) ) {
-                complete( $gfacID );
-                return true;
-            }
-            write_logld( "  FINISHED gfacID=$gfacID" );
-            break;
+            complete( $gfacID );
+            return true;
         
         case "PROCESSING":
         default:
@@ -175,17 +128,10 @@ function submitted( $updatetime ) {
     }
 
     if ( $updatetime + ( $global_max_queue_time_hours * 60 * 60 ) > $now ) {
-        ## Within the first $global_max_queue_time_hours hours 
-        
-        if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-            $job_status = get_local_status( $gfacID );
-        }
-        
-        if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' ) {
-            return;
-        }
-        
-        if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) ) {
+        ## Within the first $global_max_queue_time_hours hours
+        $job_status = get_local_status( $gfacID );
+
+        if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN' ) ) ) {
             write_logld( "submitted:job_status=$job_status" );
             update_job_status( $job_status, $gfacID );
         }
@@ -210,7 +156,7 @@ function submitted( $updatetime ) {
     update_db( $message );
     update_autoflow_status( 'SUBMIT_TIMEOUT', $message );
 
-    cancel_job( $gfacID );
+    cancel_local_job( $gfacID );
 }
 
 function submit_timeout( $updatetime ) {
@@ -227,15 +173,9 @@ function submit_timeout( $updatetime ) {
         $global_max_queue_time_hours = 24;
     }
 
-    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-        $job_status = get_local_status( $gfacID );
-    }
+    $job_status = get_local_status( $gfacID );
 
-    if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' ) {
-        return;
-    }
-
-    if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING' ) ) ) {
+    if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN' ) ) ) {
         update_job_status( $job_status, $gfacID );
         return;
     }
@@ -247,7 +187,7 @@ function submit_timeout( $updatetime ) {
     }
 
     if ( $updatetime + ( $global_max_queue_time_hours * 60 * 60 ) > $now ) {
-        return; ## < $global_max_queue_time_hours hours since last status update ( typically double since submitted )
+        return; ## < $global_max_queue_time_hours hours since last status update
     }
 
     $message = "Job listed submitted longer than $global_max_queue_time_hours hours";
@@ -268,7 +208,7 @@ function submit_timeout( $updatetime ) {
     update_db( $message );
     update_autoflow_status( 'FAILED', $message );
 
-    cancel_job( $gfacID );
+    cancel_local_job( $gfacID );
 }
 
 function running( $updatetime, $queue_msg ) {
@@ -299,17 +239,10 @@ function running( $updatetime, $queue_msg ) {
     }
 
     if ( $updatetime + ( $global_max_run_time_hours * 60 * 60 ) > $now ) {
-        ## Within the first $global_max_run_time_hours hours 
+        ## Within the first $global_max_run_time_hours hours
+        $job_status = get_local_status( $gfacID );
 
-        if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-            $job_status = get_local_status( $gfacID );
-        }
-
-        if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' ) {
-            return;
-        }
-
-        if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) ) {
+        if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN' ) ) ) {
             update_job_status( $job_status, $gfacID );
         }
         return;
@@ -332,7 +265,7 @@ function running( $updatetime, $queue_msg ) {
     update_db( $message );
     update_autoflow_status( 'RUN_TIMEOUT', $message );
 
-    cancel_job( $gfacID );
+    cancel_local_job( $gfacID );
 }
 
 function run_timeout( $updatetime ) {
@@ -349,15 +282,9 @@ function run_timeout( $updatetime ) {
         $global_max_run_time_hours = 24;
     }
 
-    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-        $job_status = get_local_status( $gfacID );
-    }
+    $job_status = get_local_status( $gfacID );
 
-    if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' )  {
-        return;
-    }
-    
-    if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED' ) ) ) {
+    if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN' ) ) ) {
         update_job_status( $job_status, $gfacID );
         return;
     }
@@ -374,7 +301,7 @@ function run_timeout( $updatetime ) {
         return; ## < last status update < $global_max_run_time_hours
     }
 
-    $message = "Job listed running longer than 48 hours";
+    $message = "Job listed running longer than $global_max_run_time_hours hours";
     write_logld( "$message - id: $gfacID" );
     if ( !isset( $timeout_email_sent ) ) {
         mail_to_admin( "hang", "$message - id: $gfacID" );
@@ -391,115 +318,7 @@ function run_timeout( $updatetime ) {
     update_db( $message );
     update_autoflow_status( 'FAILED', $message );
 
-    cancel_job( $gfacID );
-}
-
-function wait_data( $updatetime ) {
-
-    global $self;
-    global $db_handle;
-    global $gfacID;
-    global $autoflowAnalysisID;
-
-    $now = time();
-
-    if ( $updatetime + 3600 > $now ) {
-        ## < Within the first hour
-        if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-            $job_status = get_local_status( $gfacID );
-        }
-        
-        if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' )  {
-            return;
-        }
-
-        if ( $job_status != 'DATA' ) {
-            update_job_status( $job_status, $gfacID );
-            return;
-        }
-
-        ## Request to resend data, but only request every 5 minutes
-        $minute = date( 'i' ) * 1; ## Makes it an int
-        if ( $minute % 5 ) {
-            return;
-        }
-        
-        $output_status = get_gfac_outputs( $gfacID );
-
-        if ( $output_status !== false ) {
-            mail_to_admin( "debug", "wait_data/$gfacID/$output_status" );
-        }
-
-        return;
-    }
-
-    $message = "Waiting for data longer than 1 hour";
-    write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
-    $query = "UPDATE gfac.analysis SET status='DATA_TIMEOUT' WHERE gfacID='$gfacID'";
-    $result = mysqli_query( $db_handle, $query );
-
-    if ( ! $result ) {
-        write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
-    }
-
-    update_queue_messages( $message );
-    update_db( $message );
-    update_autoflow_status( 'DATA_TIMEOUT', $message );
-}
-
-function data_timeout( $updatetime ) {
-
-    global $self;
-    global $db_handle;
-    global $gfacID;
-    global $autoflowAnalysisID;
-
-    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false ) {
-        $job_status = get_local_status( $gfacID );
-    }
-
-    if ( $job_status == 'GFAC_STATUS_UNAVAILABLE' ) {
-        return;
-    }
-
-    if ( $job_status != 'DATA' ) {
-        update_job_status( $job_status, $gfacID );
-        return;
-    }
-
-    $now = time();
-
-    if ( $updatetime + 86400 > $now ) {
-        ## < 24 hours ago
-        ## Request to resend data, but only request every 15 minutes
-        $minute = date( 'i' ) * 1; ## Makes it an int
-        if ( $minute % 15 ) {
-            return;
-        }
-        
-        $output_status = get_gfac_outputs( $gfacID );
-
-        if ( $output_status !== false ) {
-            mail_to_admin( "debug", "data_timeout/$gfacID/$output_status" );
-        }
-
-        return;
-    }
-
-    $message = "Waiting for data longer than 24 hours";
-    write_logld( "$message - id: $gfacID" );
-    mail_to_admin( "hang", "$message - id: $gfacID" );
-    $query = "UPDATE gfac.analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-    $result = mysqli_query( $db_handle, $query );
-
-    if ( ! $result ) {
-        write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
-    }
-
-    update_queue_messages( $message );
-    update_db( $message );
-    update_autoflow_status( 'FAILED', $message );
+    cancel_local_job( $gfacID );
 }
 
 function complete( $gfacID ) {
@@ -520,7 +339,6 @@ function cleanup() {
     global $gfacID;
     global $autoflowAnalysisID;
     global $us3_db;
-    global $class_dir;
 
     ## Double check that the gfacID exists
     $query  = "SELECT count(*) FROM gfac.analysis WHERE gfacID='$gfacID'";
@@ -547,14 +365,8 @@ function cleanup() {
         return;
     }
 
-    if ( preg_match( "/US3-A/i", $gfacID ) ) {
-        write_logld( "calling aria_cleanup() reqID=$requestID" );
-        aira_cleanup( $us3_db, $requestID, $db_handle );
-    } else {
-        ## Non-airavata job:  clean up in a non-aira way
-        write_logld( "calling gfac_cleanup() reqID=$requestID" );
-        gfac_cleanup( $us3_db, $requestID, $db_handle );
-    }
+    write_logld( "calling job_cleanup() reqID=$requestID" );
+    job_cleanup( $us3_db, $requestID, $db_handle );
 }
 
 ## Function to update status of job
@@ -671,7 +483,7 @@ function get_us3_data() {
     global $db_handle;
 
     $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-        "FROM ${us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID'";
+        "FROM {$us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
 
     if ( ! $result )
@@ -685,124 +497,14 @@ function get_us3_data() {
     if ( $numrows > 1 )
     {  ## Duplicate gfacIDs:  get last
         $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-            "FROM ${us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID' " .
+            "FROM {$us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID' " .
             " ORDER BY HPCAnalysisResultID DESC LIMIT 1";
         $result = mysqli_query( $db_handle, $query );
     }
 
-
     list( $requestID, $updateTime ) = mysqli_fetch_array( $result );
 
     return $requestID;
-}
-
-## Function to determine if this is an airavata/thrift job or not
-
-function is_aira_job( $gfacID ) {
-    return preg_match( "/US3-A/i", $gfacID ) ? true : false;
-}
-
-## Function to get the current job status from GFAC
-function get_gfac_status( $gfacID )
-{
-    global $serviceURL;
-    global $self;
-    global $cluster;
-    global $status_ex, $status_gw;
-
-    if ( is_aira_job( $gfacID ) )
-    {
-        $status_ex    = getExperimentStatus( $gfacID );
-
-        if ( $status_ex == 'EXECUTING' )
-        {
-            if ( $status_gw == 'RUNNING' )
-                $status_ex    = 'ACTIVE';
-            else
-                $status_ex    = 'QUEUED';
-        }
-
-        $gfac_status  = standard_status( $status_ex );
-    }
-
-    else
-    {
-        return false;
-    }
-
-    return $gfac_status;
-}
-
-## Function to request data outputs from GFAC
-function get_gfac_outputs( $gfacID )
-{
-    global $serviceURL;
-    global $self;
-
-    ## Make sure it's a GFAC job and status is appropriate for this call
-    if ( ( $job_status = get_gfac_status( $gfacID ) ) === false )
-    {
-        ## Then it's not a GFAC job
-        $job_status = get_local_status( $gfacID );
-        return $job_status;
-    }
-
-    if ( ! in_array( $job_status, array( 'DONE', 'FAILED', 'COMPLETE', 'FINISHED' ) ) )
-    {
-        ## Then it's not appropriate to request data
-        return false;
-    }
-
-    /*
-        $url = "$serviceURL/registeroutput/$gfacID";
-    try
-    {
-        $post = new HttpRequest( $url, HttpRequest::METH_GET );
-        $http = $post->send();
-        $xml  = $post->getResponseBody();      
-    }
-    catch ( HttpException $e )
-    {
-        write_logld( "Data not available - request failed -  $gfacID" );
-        return false;
-    }
-
-    mail_to_admin( "debug", "get_gfac_outputs/\n$xml/" );
-
-    $gfac_status = parse_response( $xml );
-
-    */
-        return $gfac_status;
-    }
-
-    function parse_response( $xml )
-{
-   global $gfac_message;
-
-   $status       = "";
-   $gfac_message = "";
-
-   $parser = new XMLReader();
-   $parser->xml( $xml );
-
-   while( $parser->read() )
-   {
-      $type = $parser->nodeType;
-
-      if ( $type == XMLReader::ELEMENT )
-         $name = $parser->name;
-
-      else if ( $type == XMLReader::TEXT )
-      {
-         if ( $name == "status" ) 
-            $status       = $parser->value;
-         else 
-            $gfac_message = $parser->value; 
-      }
-   }
-      
-   $parser->close();
-   return $status;
 }
 
 ## Function to get status from local cluster
@@ -843,15 +545,10 @@ function get_local_status( $gfacID )
    }
 
    $cmd    = "$cmd_prefix squeue -t all -j $gfacID 2>&1|tail -n 1";
-##write_logld( "$self cmd: $cmd" );
-
-##write_logld( "$self cluster: $cluster" );
-##write_logld( "$self gfacID: $gfacID" );
 
    write_log( "$self gfacID $gfacID cluster $cluster" );
 
    $result = exec( $cmd );
-   ##write_logld( "$self  result: $result" );
 echo "locstat: cmd=$cmd  result=$result\n";
 write_logld( "$self  locstat: cmd=$cmd  result=$result" );
 
@@ -921,19 +618,13 @@ write_logld( "get_local_status: status = $status");
    return $status;
 }
 
-function cancel_job( $gfacID ) {
-   is_aira_job( $gfacID ) ? cancelAiravataJob( $gfacID ) : cancel_local_job( $gfacID );
-}
-
-## Function to cancel "local" job (i.e. not airavata)
+## Function to cancel a local (non-Airavata) job
 function cancel_local_job( $gfacID )
 {
    write_logld( "cancel_local_job( $gfacID )" );
    global $cluster;
    global $self;
    global $cluster_details;
-
-   $ruser     = "us3"; 
 
    if ( !array_key_exists( $cluster, $cluster_details ) ) {
        write_logld( "$self cluster $cluster missing from global_config.php \$cluster_details" );
@@ -963,7 +654,6 @@ function cancel_local_job( $gfacID )
    write_log( "$self gfacID $gfacID cluster $cluster" );
 
    $result = exec( $cmd );
-   ##write_logld( "$self  result: $result" );
 echo "locstat: cmd=$cmd  result=$result\n";
 write_logld( "$self  locstat: cmd=$cmd  result=$result" );
 
@@ -1024,7 +714,7 @@ function update_db( $message ) {
 
    $requestID = get_us3_data();
 
-   $query = "UPDATE ${us3_db}.HPCAnalysisResult SET " .
+   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET " .
             "lastMessage='" . mysqli_real_escape_string( $db_handle, $message ) . "'" .
             "WHERE gfacID = '$gfacID' AND HPCAnalysisRequestID = '$requestID' ";
 
@@ -1045,7 +735,6 @@ function mail_to_admin( $type, $msg ) {
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
 #   $headers .= "Cc: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
    $headers .= "Bcc: Gary Gorbet<gegorbet@gmail.com>"    . "\n";     ## make sure
-
 
    ## Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
@@ -1073,166 +762,6 @@ function mail_to_admin( $type, $msg ) {
    mail( $admin_email, $subject, $message, $headers );
 }
 
-## Convert a status string to one of the standard DB status strings
-function standard_status( $status_in )
-{
-   switch ( $status_in )
-   {  ## Map variations to standard gateway status values
-      case 'QUEUED' :
-      case 'LAUNCHED' :
-      case 'CREATED' :
-      case 'VALIDATED' :
-      case 'SCHEDULED' :
-      case 'submitted' :
-      case 'SUBMITTED' :
-      case '' :
-         $status      = 'SUBMITTED';
-         break;
-
-      case 'EXECUTING' :
-      case 'ACTIVE' :
-      case 'running' :
-      case 'executing' :
-         $status      = 'RUNNING';
-         break;
-
-      case 'PENDING' :
-      case 'CANCELING' :
-         $status      = 'UPDATING';
-         break;
-
-      case 'CANCELLED' :
-      case 'canceled' :
-         $status      = 'CANCELED';
-         break;
-
-##         $status      = 'DATA';
-##         break;
-
-      case 'COMPLETED' :
-      case 'completed' :
-         $status      = 'COMPLETE';
-         break;
-
-      case 'FAILED_DATA' :
-      case 'SUBMIT_TIMEOUT' :
-      case 'RUN_TIMEOUT' :
-      case 'DATA_TIMEOUT' :
-         $status      = 'FAILED';
-         break;
-
-      case 'COMPLETE' :
-         $status      = 'DONE';
-         break;
-
-      case 'UNKNOWN' :
-         $status      = 'ERROR';
-         break;
-
-      ## Where already standard value, retain value
-      case 'ERROR' :
-      case 'RUNNING' :
-      case 'SUBMITTED' :
-      case 'UPDATING' :
-      case 'CANCELED' :
-      case 'DATA' :
-      case 'FAILED' :
-      case 'DONE' :
-      case 'FINISHED' :
-      default :
-         $status   = $status_in;
-         break;
-   }
-
-   return $status;
-}
-
-function aira_status( $gfacID, $status_in )
-{
-   write_logld( "aira_status( $gfacID )" );
-   global $self;
-   global $class_dir;
-    ##echo "a_st: st_in$status_in : $gfacID\n";
-   ##$status_gw = standard_status( $status_in );
-   $status_gw = $status_in;
-##echo "a_st:  st_db=$status_gw\n";
-   $status    = $status_gw;
-   $me_devel  = preg_match( "/class_devel/", $class_dir );
-   $job_devel = preg_match( "/US3-ADEV/i", $gfacID );
-   $devmatch  = ( ( !$me_devel  &&  !$job_devel )  ||
-                  (  $me_devel  &&   $job_devel ) );
-
-   if ( preg_match( "/US3-A/i", $gfacID )  &&  $devmatch )
-   {
-      write_logld( "status_in=$status_in status=$status gfacID=$gfacID" );
-      $status_ex = getExperimentStatus( $gfacID );
-      write_logld( "  status_ex=$status_ex" );
-      if ( $status_ex == "UNKNOWN" ) {
-          $status_ex = $status_in;
-          write_logld( "UNKNOWN status received (airavata connect failure?) keeping $status_in" );
-      }
-
-      if ( $status_ex == "CANCELED" ) {
-          return $status_ex;
-      }
-
-      if ( $status_ex == 'COMPLETED' )
-      {  ## Experiment is COMPLETED: check for 'FINISHED' or 'DONE'
-         if ( $status_gw == 'FINISHED'  ||  $status_gw == 'DONE' )
-         {  ## COMPLETED + FINISHED/DONE : gateway status is now COMPLETE
-            $status    = 'COMPLETE';
-         }
-
-         else
-         {  ## COMPLETED + NOT-FINISHED/DONE:  gw status now DONE
-            $status    = 'DONE';
-         }
-      }
-
-      else if ( $status_gw == 'FINISHED'  ||  $status_gw == 'DONE' )
-      {  ## Gfac status == FINISHED/DONE:  leave as is (unless FAILED)
-         $status    = $status_gw;
-         if ( $status_ex == 'FAILED' )
-         {
-            sleep( 10 );
-            $status_ex = getExperimentStatus( $gfacID );
-            if ( $status_ex == 'FAILED' )
-            {
-               write_logld( "status still 'FAILED' after 10-second delay" );
-               sleep( 10 );
-               $status_ex = getExperimentStatus( $gfacID );
-               if ( $status_ex == 'FAILED' )
-                  write_logld( "status still 'FAILED' after 20-second delay" );
-               else
-                  write_logld( "status is $status_ex after 20-second delayed retry" );
-            }
-            write_logld( "status reset to 'COMPLETE'" );
-            $status    = 'COMPLETE';
-         }
-      }
-
-      else if ( $status_ex == 'EXECUTING' )
-      {
-         $status    = standard_status( $status_gw );
-write_logld( "status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
-      }
-
-      else
-      {  ## Experiment not COMPLETED/FINISHED/DONE: use experiment status
-         $status    = standard_status( $status_ex );
-      }
-
-##if ( $status != 'SUBMITTED' )
-##write_logld( "status/_in/_gw/_ex=$status/$status_in/$status_gw/$status_ex" );
-      if ( $status != $status_gw )
-      {
-         update_job_status( $status, $gfacID );
-      }
-   }
-
-   return $status;
-}
-
 function update_autoflow_status( $status, $message ) {
     global $db_handle;
     global $gfacID;
@@ -1248,7 +777,7 @@ function update_autoflow_status( $status, $message ) {
     }
     # escape quotes in message
     $sqlmessage = str_replace( "'", "\'", $message );
-    $query = "UPDATE ${us3_db}.autoflowAnalysis SET " .
+    $query = "UPDATE {$us3_db}.autoflowAnalysis SET " .
         "status='$status', " . 
         "statusMsg='$sqlmessage' " . 
         "WHERE requestID = '$autoflowAnalysisID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
