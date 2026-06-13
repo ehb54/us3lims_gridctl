@@ -402,11 +402,12 @@ write_logld( "$me: *messages.txt written" );
    $modelGUIDs = array();
    $mrecsIDs   = array();
    $rmodlGUIDs = array();
+   
 
    foreach ( $files as $file )
    {
       $split = explode( ";", $file );
-
+      $stats = array();
       if ( count( $split ) > 1 )
       {
          list( $fn, $meniscus, $mc_iteration, $variance ) = explode( ";", $file );
@@ -414,6 +415,15 @@ write_logld( "$me: *messages.txt written" );
          list( $other, $mc_iteration ) = explode( "=", $mc_iteration );
          list( $other, $variance     ) = explode( "=", $variance );
          list( $other, $meniscus     ) = explode( "=", $meniscus );
+         // REGEX EXTRACT HMETRIC DW KS EXCKURT if present and build a json to store in model table
+         $json_keys = array( 'HMETRIC', 'DW', 'KS', 'EXCKURT' );
+         foreach ( $json_keys as $key )
+         {
+             if ( preg_match( "/$key=([0-9]+.?[0-9eE\-+]*)/", $file, $matches ) )
+             {
+                 $stats[$key] = $matches[1];
+             }
+         }
       }
       else
          $fn = $file;
@@ -553,6 +563,25 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $modelGUID   = $model_data[ 'modelGUID' ];
          $editGUID    = $model_data[ 'editGUID' ];
 
+         // Extract from model dataDescrip
+         // REGEX EXTRACT HMETRIC DW KS EXCKURT if present and build a json to store in model table
+         $json_keys = array( 'HMETRIC', 'DW', 'KS', 'EXCKURT' );
+         foreach ( $json_keys as $key )
+         {
+            if ( array_key_exists($key, $stats) && isset($stats[ $key ]) )
+            {
+                continue;
+            }
+            elseif ( preg_match( "/$key=([0-9]+.?[0-9eE\-+]*)/", $model_data[ 'dataDescrip' ], $matches ) )
+            {
+                $stats[$key] = $matches[1];
+            }
+            else
+            {
+                $stats[$key] = null;
+            }
+         }
+         
          if ( $mc_iteration > 1 )
          {
 ##write_logld( "$me:   MODELUpd: mc_iteration=$mc_iteration" );
@@ -563,6 +592,7 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
 write_logld( "$me:   MODELUpd: O:description=$description" );
          }
 
+         $enc_stats = mysqli_real_escape_string( $db_handle, json_encode( $stats ) );
          $query = "INSERT INTO ${us3_db}.model SET "       .
                   "modelGUID='$modelGUID',"      .
                   "editedDataID="                .
@@ -571,7 +601,8 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
                   "variance='$variance'," .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
+                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'," .
+                  "stats='$enc_stats'";
 
          $result = mysqli_query( $db_handle, $query );
 
