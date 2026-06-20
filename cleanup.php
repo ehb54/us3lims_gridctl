@@ -922,7 +922,9 @@ function get_local_files( $gfac_link, $cluster, $requestID, $id, $gfacID )
    // Get stdout, stderr, output/analysis-results.tar
    $output = array();
 
-   if ( $is_us3iab == 0 )
+   $used_scp = ( $is_us3iab == 0 );
+
+   if ( $used_scp )
    {
       // For "-local", recompute remote work directory
       $clushost = "$cluster.hs.umt.edu";
@@ -965,11 +967,18 @@ write_log( "$me:  -LOCAL: remoteDir=$remoteDir" );
       if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
       $pwd = chdir( "$work/$gfacID" );
 
-      $cmd = "scp $ruser@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
+      $tarcmd = "scp $ruser@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
 
-      exec( $cmd, $output, $stat );
+      exec( $tarcmd, $output, $stat );
       if ( $stat != 0 )
-         write_log( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
+      {
+         write_log( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
+         sleep( 10 );
+         write_log( "$me: RETRY" );
+         exec( $tarcmd, $output, $stat );
+         if ( $stat != 0 )
+            write_log( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
+      }
 
       $cmd = "scp $ruser@$clushost:$remoteDir/stdout . 2>&1";
 
@@ -1038,6 +1047,27 @@ write_log( "$me:  not-exist-stderr: num_try=$num_try" );
 
    $fn1_tarfile = "analysis-results.tar";
    $fn2_tarfile = "output/" . $fn1_tarfile;
+
+   // The remote job may finish writing stdout/stderr before it finishes
+   // writing/closing analysis-results.tar, so the earlier scp of the tar
+   // can race ahead of the result being ready.  Retry with backoff before
+   // giving up, separately from the stderr wait above.
+   $secwait = 10;
+   $num_try = 0;
+   while ( ! file_exists( $fn1_tarfile )  &&  ! file_exists( $fn2_tarfile )  &&  $num_try < 3 )
+   {
+      sleep( $secwait );
+      if ( $used_scp )
+      {
+         exec( $tarcmd, $output, $stat );
+         if ( $stat != 0 )
+            write_log( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
+      }
+      $num_try++;
+      $secwait *= 2;
+write_log( "$me:  not-exist-tarfile: num_try=$num_try" );
+   }
+
    if ( file_exists( $fn1_tarfile ) )
       $tarfile = file_get_contents( $fn1_tarfile );
    else if ( file_exists( $fn2_tarfile ) )
