@@ -1061,7 +1061,9 @@ write_log( "$me:  not-exist-stderr: num_try=$num_try" );
       {
          exec( $tarcmd, $output, $stat );
          if ( $stat != 0 )
+         {
             write_log( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
+         }
       }
       $num_try++;
       $secwait *= 2;
