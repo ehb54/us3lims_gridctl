@@ -67,6 +67,26 @@ function check_cli_errors() {
     }
 }
 
+## The included web pages (e.g. 2DSA_2.php) don't push job submission
+## failures into $cli_errors themselves - they only echo an ERROR:
+## line into the dumped output. Scan the dump for that and fold any
+## such lines into $cli_errors so check_cli_errors() catches them too.
+function check_cli_errors_in_dump() {
+    global $dumpfile;
+    global $cli_errors;
+
+    if ( ! file_exists( $dumpfile ) ) {
+        return;
+    }
+
+    $dump = file_get_contents( $dumpfile );
+    if ( preg_match_all( '/^.*ERROR:.*$/m', $dump, $matches ) ) {
+        foreach ( $matches[ 0 ] as $line ) {
+            $cli_errors[] = $line;
+        }
+    }
+}
+
 function fail_job() {
     global $lims_db;
     global $cli_errors;
@@ -562,6 +582,7 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_pcsa_1 );
     while (ob_get_level()) ob_end_flush();
+    check_cli_errors_in_dump();
     check_cli_errors();
 
 } else {
@@ -686,6 +707,7 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_2dsa_1 );
     while (ob_get_level()) ob_end_flush();
+    check_cli_errors_in_dump();
     check_cli_errors();
 }
 
