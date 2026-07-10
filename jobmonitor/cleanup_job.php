@@ -87,7 +87,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
    ## Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, backend_job_id AS gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
+   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
    $result = mysqli_query( $db_handle, $query );

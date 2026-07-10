@@ -483,7 +483,7 @@ function get_us3_data() {
     global $db_handle;
 
     $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-        "FROM {$us3_db}.HPCAnalysisResult WHERE backend_job_id='$gfacID'";
+        "FROM {$us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID'";
     $result = mysqli_query( $db_handle, $query );
 
     if ( ! $result )
@@ -497,7 +497,7 @@ function get_us3_data() {
     if ( $numrows > 1 )
     {  ## Duplicate gfacIDs:  get last
         $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-            "FROM {$us3_db}.HPCAnalysisResult WHERE backend_job_id='$gfacID' " .
+            "FROM {$us3_db}.HPCAnalysisResult WHERE gfacID='$gfacID' " .
             " ORDER BY HPCAnalysisResultID DESC LIMIT 1";
         $result = mysqli_query( $db_handle, $query );
     }
