@@ -158,7 +158,7 @@ $loop      = 0;
 if (
     false ===
     ( $res_analysis =
-      db_obj_result( $db_handle
+      listen_db_obj_result( $db_handle
                      ,"select"
                      . " cluster"
                      . " ,status"
@@ -211,7 +211,7 @@ while( 1 ) {
     if (
         false ===
         ( $res_analysis =
-          db_obj_result( $db_handle
+          listen_db_obj_result( $db_handle
                          ,"select"
                          . " status"
                          . " ,queue_msg"

@@ -69,7 +69,7 @@ function process( $msg )
       return;
    }
 
-   $query = "SELECT gfacID FROM HPCAnalysisResult " .
+   $query = "SELECT backend_job_id AS gfacID FROM HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID "             .
             "ORDER BY HPCAnalysisResultID DESC "                 .
             "LIMIT 1";

@@ -576,7 +576,7 @@ HTML;
            "</table>\n";
 
   $requestIDs_csv = implode( ", ", $requestIDs );
-  $query  = "SELECT HPCAnalysisResultID, HPCAnalysisRequestID, gfacID, queueStatus, updateTime " .
+  $query  = "SELECT HPCAnalysisResultID, HPCAnalysisRequestID, backend_job_id AS gfacID, queueStatus, updateTime " .
             "FROM HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID IN ( $requestIDs_csv ) " .
             "ORDER BY HPCAnalysisResultID ";
