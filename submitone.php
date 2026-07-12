@@ -341,6 +341,68 @@ echo "queue is prepared\n";
 # ************* process xml and determine job type and parameters ***************
 
 if ( $stage == "PCSA" ) {
+    $paramgroup = "p_pcsa";
+} else {
+    $paramgroup = "p_2dsa";
+}
+
+$jobkey = "job_" . strtolower( $stage );
+
+if ( !isset( $xmljson->{'analysis_profile'} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile' key" );
+}
+
+if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile'->'$paramgroup' key" );
+}
+
+if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
+    error( "analysis profile's xml does not contain 'analysis_profile'->'channel_parms'" );
+}
+
+if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) &&
+     !count( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
+    error( "analysis profile's xml does not contain an 'analysis_profile'->'channel_parms' key with a nonzero size" );
+}
+
+if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'channel_parms' first entry does not contain '\@attributes'" );
+    }
+    $channel_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'};
+    debug_json( "channel attributes", $channel_attributes );
+} else {
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}->{'@attributes'} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'channel_parms'  does not contain '\@attributes'" );
+    }
+    $channel_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}->{'@attributes'};
+    debug_json( "channel attributes", $channel_attributes );
+}
+
+if ( $stage != "PCSA" ) {
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{$jobkey} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'$jobkey' is missing" );
+    }
+    if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{$jobkey}->{'@attributes'} ) ) {
+        error( "analysis profile's xml's 'analysis_profile'->'$paramgroup'->'$jobkey'->'\@attributes' is missing" );
+    }
+    $job_attributes = $xmljson->{'analysis_profile'}->{$paramgroup}->{$jobkey}->{'@attributes'};
+    debug_json( "job attributes", $job_attributes );
+
+    if ( isset( $job_attributes->{'interactive'} ) ) {
+        $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='WAIT', statusMsg='Waiting for manual stage $stage to complete.' WHERE {$id_field} = {$ID}";
+        $result = mysqli_query( $db_handle, $query );
+
+        if ( !$result ) {
+            write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} statusJson. query $query", 0 );
+        } else {
+            write_logl( "$self: {$submit_request_table_name} now interactive {$id_field} $ID stage " . json_encode( $stage ), 1 );
+        }
+        exit();
+    }
+}
+
+if ( $stage == "PCSA" ) {
     $conv_pcsa_keys = [
         "channel"              => "_ignore_"
         ,"curve_type"          => "_special_handling_"
