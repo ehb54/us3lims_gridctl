@@ -536,7 +536,7 @@ function cleanup() {
     if ( ! $result ) {
         write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
         mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $db_handle ) );
-        return( -1 );
+        return -1;
     }
 
     list( $count ) = mysqli_fetch_array( $result );
@@ -544,14 +544,14 @@ function cleanup() {
     ##if ($count==0)
     ##write_logld( "count = $count  gfacID = $gfacID" );
     if ( $count == 0 ) {
-        return( 1 );          ## gfacID no longer in gfac.analysis: nothing to do
+        return 1;          ## gfacID no longer in gfac.analysis: nothing to do
     }
 
     ## Now check the us3 instance
     $requestID = get_us3_data();
     ##write_logld( "requestID = $requestID  gfacID = $gfacID" );
     if ( $requestID == 0 ) {
-        return( -1 );
+        return -1;
     }
 
     ## Return the cleanup result to the caller:

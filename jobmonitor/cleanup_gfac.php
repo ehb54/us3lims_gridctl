@@ -255,7 +255,9 @@ write_logld( "$me:     NO get_local_files()" );
          $elapsed = time() - $seen;
          write_logld( "$me: complete-since: seen=$seen now=" . time() . " elapsed=$elapsed grace=$grace ceil=$ceil" );
          if ( $elapsed > $grace )
+         {
             $need_finish = false;
+         }
          if ( $elapsed > $ceil )
          {
             write_logld( "$me: complete ceiling ($ceil s) exceeded for $gfacID - forcing finalize" );
@@ -277,7 +279,9 @@ write_logld( "$me:     NO get_local_files()" );
 
    ## Finalizing this job: drop the complete-seen marker.
    if ( is_file( $seen_file ) )
+   {
       @unlink( $seen_file );
+   }
 
    $query = "DELETE FROM gfac.queue_messages " .
             "WHERE analysisID = $analysisID ";
@@ -719,7 +723,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
 
-   return( 1 );
+   return 1;
 }
 
 function get_autoflow_type_id() {
