@@ -124,7 +124,14 @@ function check_job() {
         case "COMPLETED":
             case "COMPLETE":
             write_logld( "  COMPLETE gfacID=$gfacID" );
-            complete( $gfacID );
+            ## complete() returns 0 when cleanup could not yet finalize the job
+            ## (e.g. the cluster's UDP 'Finished' message has not arrived and the
+            ## grace period has not elapsed).  Keep monitoring and retry on the
+            ## next poll rather than exiting and orphaning the job.
+            if ( complete( $gfacID ) === 0 ) {
+                write_logld( "  COMPLETE not yet finalized gfacID=$gfacID - will retry" );
+                return false;
+            }
             return true;
             break;
 
@@ -505,7 +512,7 @@ function data_timeout( $updatetime ) {
 function complete( $gfacID ) {
     ## Just cleanup
     update_job_status( "COMPLETE", $gfacID );
-    cleanup();
+    return cleanup();
 }
 
 function failed() {
@@ -529,7 +536,7 @@ function cleanup() {
     if ( ! $result ) {
         write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
         mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $db_handle ) );
-        return;
+        return( -1 );
     }
 
     list( $count ) = mysqli_fetch_array( $result );
@@ -537,23 +544,26 @@ function cleanup() {
     ##if ($count==0)
     ##write_logld( "count = $count  gfacID = $gfacID" );
     if ( $count == 0 ) {
-        return;
+        return( 1 );          ## gfacID no longer in gfac.analysis: nothing to do
     }
 
     ## Now check the us3 instance
     $requestID = get_us3_data();
     ##write_logld( "requestID = $requestID  gfacID = $gfacID" );
     if ( $requestID == 0 ) {
-        return;
+        return( -1 );
     }
 
+    ## Return the cleanup result to the caller:
+    ##   -1 = terminal (user/admin already notified), 0 = not yet finalizable
+    ##   (retry on the next poll), 1 = finalized successfully.
     if ( preg_match( "/US3-A/i", $gfacID ) ) {
         write_logld( "calling aria_cleanup() reqID=$requestID" );
-        aira_cleanup( $us3_db, $requestID, $db_handle );
+        return aira_cleanup( $us3_db, $requestID, $db_handle );
     } else {
         ## Non-airavata job:  clean up in a non-aira way
         write_logld( "calling gfac_cleanup() reqID=$requestID" );
-        gfac_cleanup( $us3_db, $requestID, $db_handle );
+        return gfac_cleanup( $us3_db, $requestID, $db_handle );
     }
 }
 
