@@ -670,9 +670,11 @@ write_logld( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
 ##   mysqli_close( $db_handle );
 
    ########/
-   ## Send email 
+   ## Send email
 
    mail_to_user( "success", "" );
+
+   return 1;
 }
 
 function mail_to_user( $type, $msg )
