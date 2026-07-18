@@ -2,6 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
+include_once $class_dir . "../global_config.php";   ## $cluster_details, used by get_local_status()
 include_once "$us3bin/gridctl/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include_once "$us3bin/gridctl/jobmonitor/cleanup_job.php";
 
@@ -310,37 +311,11 @@ function failed()
 
 function cleanup()
 {
-   global $self;
    global $gLink;
    global $gfacID;
-   global $autoflowID;
    global $us3_db;
-   global $loghdr;
 
-   // Double check that the gfacID exists
-   $query  = "SELECT count(*) FROM analysis WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-  
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-      mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $gLink ) );
-      return;
-   }
-
-   list( $count ) = mysqli_fetch_array( $result );
-
-//if ($count==0)
-//write_log( "$loghdr count = $count  gfacID = $gfacID" );
-   if ( $count == 0 ) return;
-
-   // Now check the us3 instance
-   $requestID = get_us3_data();
-//write_log( "$loghdr requestID = $requestID  gfacID = $gfacID" );
-   if ( $requestID == 0 ) return;
-
-write_log( "$loghdr calling job_cleanup() reqID=$requestID" );
-   job_cleanup( $us3_db, $requestID, $gLink );
+   return resolve_and_cleanup_job( $gLink, $gfacID, $us3_db, 'analysis', 'write_log' );
 }
 
 // Function to update status of job
@@ -498,57 +473,40 @@ function get_local_status( $gfacID )
 {
    global $cluster;
    global $self;
+   global $cluster_details;
 
-   $is_demel3 = preg_match( "/demeler3/",   $cluster );
-   $is_demel1 = preg_match( "/demeler1/",   $cluster );
-   $is_jetstr = preg_match( "/jetstream/",  $cluster );
-   $is_chino  = preg_match( "/chinook/",    $cluster );
-   $is_umont  = preg_match( "/umontana/",   $cluster );
-   $is_us3iab = preg_match( "/us3iab/",     $cluster );
-   ## slurm-head: containerized Slurm head node (dev and USiaB production)
-   $is_slurm_head = preg_match( "/slurm-head/", $cluster );
-   $is_slurm  = ( $is_jetstr  ||  $is_us3iab  ||  $is_slurm_head );
-   $is_squeu  = ( $is_jetstr  ||  $is_chino  ||  $is_umont  ||  $is_us3iab || $is_demel1 || $is_slurm_head );
    $ruser     = "us3";
 
-   if ( $is_squeu )
-      $cmd    = "squeue -t all -j $gfacID 2>&1|tail -n 1";
-   else
-      $cmd    = "/usr/bin/qstat -a $gfacID 2>&1|tail -n 1";
-   write_log( "$self gfacID $gfacID cluster $cluster" );
-
-   if ( ! $is_us3iab )
-   {
-      if ( $is_slurm_head )
-      {  ## containerized slurm-head: SSH config handles User/host, no domain needed
-         $system = "slurm-head";
-      }
-      else
-      {
-         $system = "$cluster.uleth.ca";
-         if ( $is_slurm )
-            $system = "$cluster";
-         $system = preg_replace( "/\-local/", "", $system );
-
-         if ( $is_demel3 )
-         {
-           $system = "demeler3.uleth.ca";
-         }
-         if ( $is_chino )
-         {
-           $system = "chinook.hs.umt.edu";
-         }
-         if ( $is_umont )
-         {
-           $system = "login.gscc.umt.edu";
-           $ruser  = "bd142854e";
-         }
-      }
-
-      write_log( "$self !is_usiab system $system" );
-      $cmd    = "/usr/bin/ssh -x $ruser@$system " . $cmd;
-write_log( "$self  cmd: $cmd" );
+   if ( !array_key_exists( $cluster, $cluster_details ) ) {
+       write_log( "$self cluster $cluster missing from global_config.php \$cluster_details" );
+       $status = 'UNKNOWN';
+       write_log( "get_local_status: status = $status");
+       return $status;
    }
+
+   if ( !array_key_exists( 'name', $cluster_details[$cluster] ) ) {
+       write_log( "$self 'name' key missing from global_config.php \$cluster_details[$cluster]" );
+       $status = 'UNKNOWN';
+       write_log( "get_local_status: status = $status");
+       return $status;
+   }
+
+   $login = $cluster_details[$cluster]['name'];
+
+   if ( array_key_exists( 'login', $cluster_details[$cluster] ) ) {
+       $login = $cluster_details[$cluster]['login'];
+   }
+
+   $cmd_prefix = "ssh -x $login ";
+
+   if ( array_key_exists( 'localhost', $cluster_details[$cluster] )
+        && $cluster_details[$cluster]['localhost'] ) {
+       $cmd_prefix = "";
+   }
+
+   $cmd    = "$cmd_prefix squeue -t all -j $gfacID 2>&1|tail -n 1";
+
+   write_log( "$self gfacID $gfacID cluster $cluster" );
 
    $result = exec( $cmd );
 echo "locstat: cmd=$cmd  result=$result\n";
@@ -573,7 +531,7 @@ write_log( "$self:   num_try=$num_try  secwait=$secwait" );
    }
 
    $values = preg_split( "/\s+/", $result );
-   $jstat   = ( $is_squeu == 0 ) ? $values[ 9 ] : $values[ 5 ];
+   $jstat   = count( $values ) > 5 ? $values[ 5 ] : "unknown";
 write_log( "$self: get_local_status: job status = /$jstat/");
    switch ( $jstat )
    {

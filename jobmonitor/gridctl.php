@@ -341,42 +341,15 @@ function failed() {
 
 function cleanup() {
     write_logld( "cleanup called" );
-    global $self;
     global $db_handle;
     global $gfacID;
-    global $autoflowAnalysisID;
     global $us3_db;
 
-    ## Double check that the gfacID exists
-    $query  = "SELECT count(*) FROM gfac.analysis WHERE gfacID='$gfacID'";
-    $result = mysqli_query( $db_handle, $query );
-    
-    if ( ! $result ) {
-        write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
-        mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $db_handle ) );
-        return -1;
-    }
-
-    list( $count ) = mysqli_fetch_array( $result );
-
-    ##if ($count==0)
-    ##write_logld( "count = $count  gfacID = $gfacID" );
-    if ( $count == 0 ) {
-        return 1;          ## gfacID no longer in gfac.analysis: nothing to do
-    }
-
-    ## Now check the us3 instance
-    $requestID = get_us3_data();
-    ##write_logld( "requestID = $requestID  gfacID = $gfacID" );
-    if ( $requestID == 0 ) {
-        return -1;
-    }
-
-    write_logld( "calling job_cleanup() reqID=$requestID" );
-    ## Propagate job_cleanup()'s result to complete()/check_job(): -1 terminal,
-    ## 0 retry (not yet finalizable), 1 finalized. Without this, complete()
-    ## always returns null and the COMPLETE-retry check in check_job() never fires.
-    return job_cleanup( $us3_db, $requestID, $db_handle );
+    ## Propagate resolve_and_cleanup_job()'s result to complete()/check_job():
+    ## -1 terminal, 0 retry (not yet finalizable), 1 finalized. Without this,
+    ## complete() always returns null and the COMPLETE-retry check in
+    ## check_job() never fires.
+    return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld' );
 }
 
 ## Function to update status of job
