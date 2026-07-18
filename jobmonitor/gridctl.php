@@ -81,7 +81,14 @@ function check_job() {
         case "COMPLETED":
             case "COMPLETE":
             write_logld( "  COMPLETE gfacID=$gfacID" );
-            complete( $gfacID );
+            ## complete() returns 0 when cleanup could not yet finalize the job
+            ## (e.g. the cluster's UDP 'Finished' message has not arrived and the
+            ## grace period has not elapsed).  Keep monitoring and retry on the
+            ## next poll rather than exiting and orphaning the job.
+            if ( complete( $gfacID ) === 0 ) {
+                write_logld( "  COMPLETE not yet finalized gfacID=$gfacID - will retry" );
+                return false;
+            }
             return true;
             break;
 
@@ -324,7 +331,7 @@ function run_timeout( $updatetime ) {
 function complete( $gfacID ) {
     ## Just cleanup
     update_job_status( "COMPLETE", $gfacID );
-    cleanup();
+    return cleanup();
 }
 
 function failed() {
@@ -347,7 +354,7 @@ function cleanup() {
     if ( ! $result ) {
         write_logld( "Query failed $query - " .  mysqli_error( $db_handle ) );
         mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $db_handle ) );
-        return;
+        return -1;
     }
 
     list( $count ) = mysqli_fetch_array( $result );
@@ -355,18 +362,21 @@ function cleanup() {
     ##if ($count==0)
     ##write_logld( "count = $count  gfacID = $gfacID" );
     if ( $count == 0 ) {
-        return;
+        return 1;          ## gfacID no longer in gfac.analysis: nothing to do
     }
 
     ## Now check the us3 instance
     $requestID = get_us3_data();
     ##write_logld( "requestID = $requestID  gfacID = $gfacID" );
     if ( $requestID == 0 ) {
-        return;
+        return -1;
     }
 
     write_logld( "calling job_cleanup() reqID=$requestID" );
-    job_cleanup( $us3_db, $requestID, $db_handle );
+    ## Propagate job_cleanup()'s result to complete()/check_job(): -1 terminal,
+    ## 0 retry (not yet finalizable), 1 finalized. Without this, complete()
+    ## always returns null and the COMPLETE-retry check in check_job() never fires.
+    return job_cleanup( $us3_db, $requestID, $db_handle );
 }
 
 ## Function to update status of job

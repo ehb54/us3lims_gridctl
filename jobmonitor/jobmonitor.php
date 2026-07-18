@@ -9,6 +9,7 @@ include_once "$us3bin/listen-config.php";
 include $class_dir . "../global_config.php";
 
 include "$us3jm/gridctl.php";
+include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************

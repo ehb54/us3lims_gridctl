@@ -2,6 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
+include_once "$us3bin/gridctl/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include_once "$us3bin/gridctl/jobmonitor/cleanup_job.php";
 
 // Global variables
@@ -298,7 +299,7 @@ function run_timeout( $updatetime )
 function complete()
 {
    // Just cleanup
-   cleanup();
+   return cleanup();
 }
 
 function failed()

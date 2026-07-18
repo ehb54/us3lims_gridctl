@@ -131,7 +131,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    {
       write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
       update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( 0 );
+      return( -1 );
    }
 ##else
 ##{
@@ -168,7 +168,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    {
       write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
       update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( 0 );
+      return( -1 );
    }
 
    list( $analysisID, $stderr, $stdout, $tarfile ) = mysqli_fetch_array( $result );
@@ -204,29 +204,52 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
                   "Processed: $now\n\n" .
                   "Queue Messages\n\n" ;
 
+   global $lock_dir;
+   global $ll_base_dir;
+   global $global_complete_grace_seconds;
+   global $global_complete_max_seconds;
+
+   $seen_dir  = ( isset( $lock_dir ) && $lock_dir != "" ) ? $lock_dir : "$ll_base_dir/$db/$gfacID";
+   $seen_file = "$seen_dir/complete_seen";
+
    $need_finish = ( $status == 'COMPLETE' );
 
    if ( mysqli_num_rows( $result ) > 0 )
    {
-      $time_msg = time();
       while ( list( $message, $time ) = mysqli_fetch_array( $result ) )
       {
 ##write_logld( "$me: message=$message" );
          $message_log .= "$time $message\n";
          if ( preg_match( "/^Finished/i", $message ) )
             $need_finish = false;
-         $time_msg = strtotime( $time );
       }
 
       if ( $need_finish )
-      {  ## No 'Finished' yet:  forget if too much time has passed
-         $time_now = time();
-         $tdelta   = $time_now - $time_msg;
-write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" );
-         if ( $tdelta > 600 )
+      {  ## No UDP 'Finished' message yet.  UDP is unreliable, so finalize
+         ## anyway once enough time has passed since the job was first seen
+         ## COMPLETE.  Timing uses the jobmonitor's own clock (epoch seconds),
+         ## so it is immune to any timezone/clock skew between the LIMS host,
+         ## the cluster, and the DB (which broke the old strtotime() check).
+         $grace = isset( $global_complete_grace_seconds ) ? (int) $global_complete_grace_seconds : 600;
+         $ceil  = isset( $global_complete_max_seconds )   ? (int) $global_complete_max_seconds   : 21600;
+         $seen  = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
+         if ( $seen <= 0 )
+         {
+            $seen = time();
+            @file_put_contents( $seen_file, $seen );
+         }
+         $elapsed = time() - $seen;
+         write_logld( "$me: complete-since: seen=$seen now=" . time() . " elapsed=$elapsed grace=$grace ceil=$ceil" );
+         if ( $elapsed > $grace )
+         {
             $need_finish = false;
+         }
+         if ( $elapsed > $ceil )
+         {
+            write_logld( "$me: complete ceiling ($ceil s) exceeded for $gfacID - forcing finalize" );
+            $need_finish = false;
+         }
       }
-##write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta" );
    }
    else
    {
@@ -238,6 +261,12 @@ write_logld( "$me: no-Finish time: tnow=$time_now, tmsg=$time_msg, tdelt=$tdelta
    {
       write_logld( "$me: Cleanup has not yet found 'Finished' for $gfacID" );
       return( 0 );
+   }
+
+   ## Finalizing this job: drop the complete-seen marker.
+   if ( is_file( $seen_file ) )
+   {
+      @unlink( $seen_file );
    }
 
    $query = "DELETE FROM gfac.queue_messages " .
@@ -660,6 +689,8 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
    update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
+
+   return 1;
 }
 
 function get_autoflow_type_id() {
