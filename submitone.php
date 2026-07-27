@@ -158,6 +158,26 @@ function truestr( $val ) {
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
 
+## The web pages this script includes further down (queue_setup_1/2/3.php and
+## everything they pull in) resolve their per-instance config through
+## uslims3/config.php, which reads LIMS_INSTANCE and exits(1) when it is
+## missing. Nothing in the environment supplies it here: submitctl.php serves
+## every uslims3_* database from one long-lived process, so it cannot carry a
+## single instance in its own environment for children to inherit, and Apache's
+## SetEnv only covers web requests. $lims_db is that instance name and is
+## already authoritative for every query this script makes, so publish it for
+## the includes rather than requiring callers to repeat it as an env var.
+##
+## Without this, a submitctl-launched submitone.php dies inside
+## queue_setup_1.php with "FATAL: LIMS_INSTANCE missing or invalid ('')" after
+## the row has already been set to READY, leaving the request parked at READY
+## forever with no Slurm job and no error status -- the whole autoflow pipeline
+## stalls on its first stage.
+if ( getenv( 'LIMS_INSTANCE' ) !== $lims_db ) {
+    putenv( "LIMS_INSTANCE=$lims_db" );
+}
+$_SERVER[ 'LIMS_INSTANCE' ] = $lims_db;
+
 if ( !is_dir( $dumpfilebase ) ) {
     write_logl( "ERROR $dumpfilebase is not a directory, logs will not be stored!\n" );
 }
@@ -179,6 +199,44 @@ do {
 } while ( !$db_handle );
 
 write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
+
+## Safety net for exits this script never sees coming. error()/fail_job()
+## cover the failures submitone.php detects itself, but the web pages included
+## below are ordinary page code: any of them can hit a PHP fatal or call
+## exit() directly (uslims3/config.php does exactly that on a bad
+## LIMS_INSTANCE), and neither path runs our error handlers. submitctl.php has
+## already set the row to READY before launching us and has no timeout on that
+## state, so an unhandled exit leaves the request parked at READY forever --
+## no Slurm job, no failure, no further stages, nothing in the UI to indicate
+## anything is wrong. Fail loud instead: if we are shutting down and the row
+## is still READY, the submission did not happen.
+register_shutdown_function( function () {
+    global $db_handle, $lims_db, $submit_request_table_name, $id_field, $ID, $self;
+
+    if ( ! $db_handle ) {
+        return;
+    }
+
+    $result = mysqli_query( $db_handle,
+        "SELECT status FROM {$lims_db}.{$submit_request_table_name} WHERE {$id_field}=$ID" );
+    if ( ! $result || ! ( $row = mysqli_fetch_object( $result ) ) ) {
+        return;
+    }
+    if ( strtoupper( $row->{'status'} ) !== 'READY' ) {
+        return;
+    }
+
+    $last = error_get_last();
+    $msg  = $last === null
+            ? "submitone.php exited without submitting the job"
+            : "submitone.php aborted: " . $last[ 'message' ];
+
+    write_logl( "$self: {$id_field} {$ID} still READY at shutdown, marking FAILED: $msg", 0 );
+
+    mysqli_query( $db_handle,
+        "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='"
+        . quote_fix( $msg ) . "' WHERE {$id_field} = {$ID}" );
+} );
 
 $autoflowanalysis = db_obj_result( $db_handle,
     "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM {$lims_db}.{$submit_request_table_name} WHERE {$id_field}=$ID" );
@@ -271,8 +329,13 @@ try {
 }
 
 if ( $cluster == "localhost" ) {
+    ## Prefer an explicit $default_local_cluster from global_config.php; fall
+    ## back to scanning for an active cluster that runs on the LIMS host.
     $cluster = null;
-    if ( isset( $cluster_details ) && is_array( $cluster_details ) ) {
+    if ( isset( $default_local_cluster )
+         && isset( $cluster_details[ $default_local_cluster ] ) ) {
+        $cluster = $default_local_cluster;
+    } else if ( isset( $cluster_details ) && is_array( $cluster_details ) ) {
         foreach ( $cluster_details as $k => $v ) {
             if ( !empty( $v['active'] ) && !empty( $v['localhost'] ) ) {
                 $cluster = $k;

@@ -299,7 +299,26 @@ function run_timeout( $updatetime )
 
 function complete()
 {
-   // Just cleanup
+   global $gfacID;
+
+   // Record the completion in gfac.analysis BEFORE cleaning up, exactly as
+   // jobmonitor/gridctl.php's complete() does.
+   //
+   // cleanup_job.php reads gfac.analysis.status and feeds it to
+   // update_autoflow_status(), and submitctl.php only advances a stage whose
+   // status is in $completed_status ("complete"/"done") or $failed_status.
+   // Without this write the row is still 'SUBMITTED' when cleanup reads it,
+   // so the autoflow request is stamped 'submitted' -- which matches neither
+   // list -- and the whole multi-stage pipeline stalls there permanently.
+   //
+   // This only surfaced once jobs actually started completing: whichever
+   // worker won the cleanup race decided the outcome, so a job finished
+   // normally when jobmonitor.php got there first and hung forever when the
+   // cron sweep did. Slurm's "CD" arrives here as COMPLETED and
+   // update_job_status() maps both COMPLETED and COMPLETE onto the
+   // gfac.analysis enum value 'COMPLETE'.
+   update_job_status( "COMPLETE", $gfacID );
+
    return cleanup();
 }
 
@@ -497,14 +516,15 @@ function get_local_status( $gfacID )
        $login = $cluster_details[$cluster]['login'];
    }
 
-   $cmd_prefix = "ssh -x $login ";
+   ## Always go through ssh, co-located clusters included. Whether a Slurm
+   ## client command can be run directly is a property of the calling
+   ## process's unix user (us3 can, www-data cannot), not of the cluster, so
+   ## a per-cluster config flag is the wrong place to decide it. Co-located
+   ## deployments point 'login' at the local host (e.g. 'us3@localhost') and
+   ## rely on a loopback authorized_keys entry.
+   $port   = $cluster_details[$cluster]['sshport'] ?? 22;
 
-   if ( array_key_exists( 'localhost', $cluster_details[$cluster] )
-        && $cluster_details[$cluster]['localhost'] ) {
-       $cmd_prefix = "";
-   }
-
-   $cmd    = "$cmd_prefix squeue -t all -j $gfacID 2>&1|tail -n 1";
+   $cmd    = "ssh -p $port -x $login squeue -t all -j $gfacID 2>&1|tail -n 1";
 
    write_log( "$self gfacID $gfacID cluster $cluster" );
 
@@ -684,7 +704,14 @@ function update_autoflow_status( $status, $message ) {
     global $self;
 
     write_log( "$self: update_autoflow_status() id $autoflowID status $status message $message" );
-        
+
+    // Independent of autoflow linkage below -- this is the only status update
+    // a non-autoflow (HPCAnalysisRequest-only, e.g. DMGA/GA) submission ever
+    // gets when a job fails before it can self-report via
+    // manage-us3-pipe.php's UDP listener. Without it, HPCAnalysisResult.
+    // queueStatus stays 'queued' forever on failure for those submissions.
+    update_hpc_analysis_result_status( $status );
+
     if ( $autoflowID <= 0 ) {
         write_log( "$self: update_autoflow_status() ignored, no id" );
         return;
@@ -692,13 +719,48 @@ function update_autoflow_status( $status, $message ) {
     # escape quotes in message
     $sqlmessage = str_replace( "'", "\'", $message );
     $query = "UPDATE {$us3_db}.autoflowAnalysis SET " .
-        "status='$status', " . 
-        "statusMsg='$sqlmessage' " . 
+        "status='$status', " .
+        "statusMsg='$sqlmessage' " .
         "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
-    
+
     $result = mysqli_query( $gLink, $query );
     if ( ! $result ) {
         // Just log it and continue
+        write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );
+    }
+}
+
+// Map a jobmonitor status string to HPCAnalysisResult.queueStatus's enum
+// ('queued','failed','running','aborted','completed') and record it against
+// this job's gfacID. Statuses with no clear queueStatus equivalent are left
+// untouched rather than guessed at.
+function update_hpc_analysis_result_status( $status ) {
+    global $gLink;
+    global $gfacID;
+    global $us3_db;
+
+    $queue_status_map = [
+        'RUNNING'        => 'running',
+        'FAILED'         => 'failed',
+        'ERROR'          => 'failed',
+        'SUBMIT_TIMEOUT' => 'aborted',
+        'RUN_TIMEOUT'    => 'aborted',
+        'COMPLETE'       => 'completed',
+        'COMPLETED'      => 'completed',
+    ];
+
+    if ( ! array_key_exists( $status, $queue_status_map ) ) {
+        return;
+    }
+
+    $queueStatus = $queue_status_map[ $status ];
+
+    $query = "UPDATE {$us3_db}.HPCAnalysisResult SET " .
+        "queueStatus='$queueStatus' " .
+        "WHERE gfacID = '$gfacID'";
+
+    $result = mysqli_query( $gLink, $query );
+    if ( ! $result ) {
         write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );
     }
 }

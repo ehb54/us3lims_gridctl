@@ -520,14 +520,15 @@ function get_local_status( $gfacID )
        $login = $cluster_details[$cluster]['login'];
    }
 
-   $cmd_prefix = "ssh -x $login ";
+   ## Always go through ssh, co-located clusters included. Whether a Slurm
+   ## client command can be run directly is a property of the calling
+   ## process's unix user (us3 can, www-data cannot), not of the cluster, so
+   ## a per-cluster config flag is the wrong place to decide it. Co-located
+   ## deployments point 'login' at the local host (e.g. 'us3@localhost') and
+   ## rely on a loopback authorized_keys entry.
+   $port   = $cluster_details[$cluster]['sshport'] ?? 22;
 
-   if ( array_key_exists( 'localhost', $cluster_details[$cluster] ) 
-        && $cluster_details[$cluster]['localhost'] ) {
-       $cmd_prefix = "";
-   }
-
-   $cmd    = "$cmd_prefix squeue -t all -j $gfacID 2>&1|tail -n 1";
+   $cmd    = "ssh -p $port -x $login squeue -t all -j $gfacID 2>&1|tail -n 1";
 
    write_log( "$self gfacID $gfacID cluster $cluster" );
 
@@ -625,14 +626,10 @@ function cancel_local_job( $gfacID )
        $login = $cluster_details[$cluster]['login'];
    }
 
-   $cmd_prefix = "ssh -x $login ";
+   ## Always go through ssh -- see the note in get_local_status().
+   $port   = $cluster_details[$cluster]['sshport'] ?? 22;
 
-   if ( array_key_exists( 'localhost', $cluster_details[$cluster] ) 
-        && $cluster_details[$cluster]['localhost'] ) {
-       $cmd_prefix = "";
-   }
-
-   $cmd    = "$cmd_prefix scancel $gfacID 2>&1";
+   $cmd    = "ssh -p $port -x $login scancel $gfacID 2>&1";
 
    write_log( "$self gfacID $gfacID cluster $cluster" );
 
@@ -753,7 +750,14 @@ function update_autoflow_status( $status, $message ) {
     global $self;
 
     write_logld( "update_autoflow_status() id $autoflowAnalysisID status $status message $message" );
-        
+
+    // Independent of autoflow linkage below -- this is the only status update
+    // a non-autoflow (HPCAnalysisRequest-only, e.g. DMGA/GA) submission ever
+    // gets when a job fails before it can self-report via
+    // manage-us3-pipe.php's UDP listener. Without it, HPCAnalysisResult.
+    // queueStatus stays 'queued' forever on failure for those submissions.
+    update_hpc_analysis_result_status( $status );
+
     if ( $autoflowAnalysisID <= 0 ) {
         write_logld( "update_autoflow_status() ignored, no id" );
         return;
@@ -761,13 +765,48 @@ function update_autoflow_status( $status, $message ) {
     # escape quotes in message
     $sqlmessage = str_replace( "'", "\'", $message );
     $query = "UPDATE {$us3_db}.autoflowAnalysis SET " .
-        "status='$status', " . 
-        "statusMsg='$sqlmessage' " . 
+        "status='$status', " .
+        "statusMsg='$sqlmessage' " .
         "WHERE requestID = '$autoflowAnalysisID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
-    
+
     $result = mysqli_query( $db_handle, $query );
     if ( ! $result ) {
         ## Just log it and continue
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+    }
+}
+
+// Map a jobmonitor status string to HPCAnalysisResult.queueStatus's enum
+// ('queued','failed','running','aborted','completed') and record it against
+// this job's gfacID. Statuses with no clear queueStatus equivalent are left
+// untouched rather than guessed at.
+function update_hpc_analysis_result_status( $status ) {
+    global $db_handle;
+    global $gfacID;
+    global $us3_db;
+
+    $queue_status_map = [
+        'RUNNING'        => 'running',
+        'FAILED'         => 'failed',
+        'ERROR'          => 'failed',
+        'SUBMIT_TIMEOUT' => 'aborted',
+        'RUN_TIMEOUT'    => 'aborted',
+        'COMPLETE'       => 'completed',
+        'COMPLETED'      => 'completed',
+    ];
+
+    if ( ! array_key_exists( $status, $queue_status_map ) ) {
+        return;
+    }
+
+    $queueStatus = $queue_status_map[ $status ];
+
+    $query = "UPDATE {$us3_db}.HPCAnalysisResult SET " .
+        "queueStatus='$queueStatus' " .
+        "WHERE gfacID = '$gfacID'";
+
+    $result = mysqli_query( $db_handle, $query );
+    if ( ! $result ) {
         write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
     }
 }

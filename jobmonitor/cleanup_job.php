@@ -129,9 +129,22 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## The row vanishing mid-cleanup means ANOTHER worker finished this job
+      ## and deleted it (see the DELETE at the end of this function, which is
+      ## how a completed cleanup marks itself done). Two workers race for
+      ## every job: the per-minute gridctl.php cron sweep (/etc/cron.d/uslims,
+      ## which takes no lock at all) and the per-job jobmonitor.php daemon
+      ## (whose lock only excludes other jobmonitors). resolve_and_cleanup_job()
+      ## pre-checks this same count and returns 1, so by the time we get here
+      ## the row definitely existed moments ago -- absence can only mean the
+      ## other worker won.
+      ##
+      ## Reporting FAILED here overwrote the winner's successful result, so a
+      ## fully imported analysis was mailed to the user as a failure. Follow
+      ## the contract resolve_and_cleanup_job() already uses (1 = finalized /
+      ## nothing to do) and leave the status alone.
+      write_logld( "$me: analysis row for $gfacID already removed by a concurrent cleanup; nothing to do" );
+      return( 1 );
    }
 ##else
 ##{
@@ -140,15 +153,19 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
 
-   ## Phase 3: use localhost config flag instead of cluster-name pattern matching
-   global $cluster_details;
-   $is_local = array_key_exists( $cluster, $cluster_details )
-               && array_key_exists( 'localhost', $cluster_details[$cluster] )
-               && $cluster_details[$cluster]['localhost'];
-
-   if ( $is_local ) {
-       get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
-   }
+   ## Stage the job's stderr/stdout/results tar into gfac.analysis for EVERY
+   ## cluster, not just co-located ones.
+   ##
+   ## get_local_files() is the only writer of gfac.analysis's stderr/stdout/
+   ## tarfile columns, and the SELECT immediately below reads them back and
+   ## fails the job outright when tarfile is empty ("Failed data fetch").
+   ## Remote clusters used to have those columns populated by the Airavata/
+   ## GFAC service instead; removing Airavata deleted the depositor but left
+   ## this call gated on the cluster being local, so a remote cluster's
+   ## results were never fetched and every completed job there finalized as
+   ## FAILED. get_local_files() stages over scp for co-located and remote
+   ## clusters alike, so there is nothing left for the gate to select on.
+   get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
@@ -166,9 +183,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## Same concurrent-cleanup race as above -- the competing worker
+      ## deleted the row between our two SELECTs. Not a failure.
+      write_logld( "$me: analysis row for $gfacID removed by a concurrent cleanup mid-run; nothing to do" );
+      return( 1 );
    }
 
    list( $analysisID, $stderr, $stdout, $tarfile ) = mysqli_fetch_array( $result );
