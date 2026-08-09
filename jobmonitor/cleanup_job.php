@@ -9,6 +9,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
+
 $me              = 'cleanup_job.php';
 $email_address   = '';
 $queuestatus     = '';
@@ -16,6 +17,18 @@ $jobtype         = '';
 $db              = '';
 $editXMLFilename = '';
 $status          = '';
+
+## Guarded fallback in case listen-config.php didn't already define this.
+## Must run before job_cleanup() below makes its first call.
+if ( ! function_exists( 'write_logld' ) ) {
+   function write_logld( $msg, $this_level = 0 ) {
+      global $logging_level;
+      global $self;
+      if ( ! isset( $logging_level ) || $logging_level >= $this_level ) {
+         write_log( ( isset( $self ) ? "$self: " : '' ) . $msg );
+      }
+   }
+}
 
 function job_cleanup( $us3_db, $reqID, $db_handle )
 {
@@ -102,8 +115,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
-   ########
-   ## Get data from global GFAC DB and insert it into US3 DB
+   ## Reconnect, this time to the global gfac DB.
    $db_handle = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $db_handle )
@@ -129,20 +141,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      ## The row vanishing mid-cleanup means ANOTHER worker finished this job
-      ## and deleted it (see the DELETE at the end of this function, which is
-      ## how a completed cleanup marks itself done). Two workers race for
-      ## every job: the per-minute gridctl.php cron sweep (/etc/cron.d/uslims,
-      ## which takes no lock at all) and the per-job jobmonitor.php daemon
-      ## (whose lock only excludes other jobmonitors). resolve_and_cleanup_job()
-      ## pre-checks this same count and returns 1, so by the time we get here
-      ## the row definitely existed moments ago -- absence can only mean the
-      ## other worker won.
-      ##
-      ## Reporting FAILED here overwrote the winner's successful result, so a
-      ## fully imported analysis was mailed to the user as a failure. Follow
-      ## the contract resolve_and_cleanup_job() already uses (1 = finalized /
-      ## nothing to do) and leave the status alone.
+      ## Row vanished: another worker (the per-minute gridctl.php cron sweep
+      ## and the per-job jobmonitor.php daemon both race for this job) already
+      ## finished the cleanup and deleted it. Follow resolve_and_cleanup_job()'s
+      ## contract (1 = finalized / nothing to do) rather than reporting FAILED.
       write_logld( "$me: analysis row for $gfacID already removed by a concurrent cleanup; nothing to do" );
       return( 1 );
    }
@@ -153,18 +155,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
 
-   ## Stage the job's stderr/stdout/results tar into gfac.analysis for EVERY
-   ## cluster, not just co-located ones.
-   ##
-   ## get_local_files() is the only writer of gfac.analysis's stderr/stdout/
-   ## tarfile columns, and the SELECT immediately below reads them back and
-   ## fails the job outright when tarfile is empty ("Failed data fetch").
-   ## Remote clusters used to have those columns populated by the Airavata/
-   ## GFAC service instead; removing Airavata deleted the depositor but left
-   ## this call gated on the cluster being local, so a remote cluster's
-   ## results were never fetched and every completed job there finalized as
-   ## FAILED. get_local_files() stages over scp for co-located and remote
-   ## clusters alike, so there is nothing left for the gate to select on.
+   ## Stage the job's stderr/stdout/results tar into gfac.analysis. This is
+   ## the only writer of those columns, and the SELECT below fails the job
+   ## outright ("Failed data fetch") if tarfile comes back empty, so this must
+   ## run for every cluster, not just co-located ones.
    get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
@@ -232,6 +226,14 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    $need_finish = ( $status == 'COMPLETE' );
 
+   ## us_mpi_analysis prints "Us_Mpi_Analysis has finished successfully" to
+   ## stdout on completion (parallel_masters.cpp, pmasters_compjob.cpp,
+   ## us_mpi_analysis.cpp) -- treat it as an immediate finish signal instead of
+   ## always falling through to the queue_messages check and grace-period
+   ## timeout below.
+   if ( $need_finish && preg_match( "/^Us_Mpi_Analysis has finished successfully/m", $stdout ) )
+      $need_finish = false;
+
    if ( mysqli_num_rows( $result ) > 0 )
    {
       while ( list( $message, $time ) = mysqli_fetch_array( $result ) )
@@ -243,11 +245,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
       }
 
       if ( $need_finish )
-      {  ## No UDP 'Finished' message yet.  UDP is unreliable, so finalize
-         ## anyway once enough time has passed since the job was first seen
-         ## COMPLETE.  Timing uses the jobmonitor's own clock (epoch seconds),
-         ## so it is immune to any timezone/clock skew between the LIMS host,
-         ## the cluster, and the DB (which broke the old strtotime() check).
+      {  ## No 'Finished' message yet -- finalize anyway once enough time has
+         ## passed since the job was first seen COMPLETE. Timing uses the
+         ## jobmonitor's own clock (epoch seconds) to stay immune to
+         ## timezone/clock skew between the LIMS host, cluster, and DB.
          $grace = isset( $global_complete_grace_seconds ) ? (int) $global_complete_grace_seconds : 600;
          $ceil  = isset( $global_complete_max_seconds )   ? (int) $global_complete_max_seconds   : 21600;
          $seen  = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
@@ -341,7 +342,8 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    }
 write_logld( "$me: GFAC DB entry deleted" );
 
-   ## Copy queue messages to LIMS submit directory (files there are deleted after 7 days)
+   ## Write the accumulated message log to the LIMS submit directory (files
+   ## there are deleted after 7 days).
    global $submit_dir;
    
    ## Get the request guid (LIMS submit dir name)
@@ -368,9 +370,7 @@ write_logld( "$me: Output dir determined: $output_dir" );
   ## mysqli_close( $db_handle );
 write_logld( "$me: *messages.txt written" );
 
-   ########/
-   ## Insert data into HPCAnalysis
-
+   ## Update HPCAnalysisResult with the job's stdout/stderr.
    $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "                              .
             "stderr='" . mysqli_real_escape_string( $db_handle, $stderr ) . "', " .
             "stdout='" . mysqli_real_escape_string( $db_handle, $stdout ) . "' "  .
@@ -702,9 +702,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
 ##   mysqli_close( $db_handle );
 
-   ########/
-   ## Send email 
-
+   ## Set the final status now that all model records are written, then notify the user.
    update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
 
