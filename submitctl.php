@@ -3,6 +3,8 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 $home   = dirname( $us3bin );
 include "$us3bin/listen-config.php";
+include_once $class_dir . "../global_config.php";   ## $cluster_details
+include_once "$us3bin/gridctl/cluster_probe.php";   ## ask a cluster about a job
 
 # ********* start user defines *************
 
@@ -339,10 +341,7 @@ while( 1 ) {
 
             if ( $failed ) {
                 if ( $currentGfacID = $obj->{ 'currentGfacID' } ) {
-                    # NOTE: scancel is called without SSH — this only works when submitctl
-                    # runs on the same host as the Slurm head node (USiaB/localhost case).
-                    write_logls( "canceling gfac job with scancel {$currentGfacID}", 1 );
-                    shell_exec( "scancel {$currentGfacID} >> {$home}/etc/submit.log 2>&1 &" );
+                    cancel_stage_job( $currentGfacID, $obj->{ 'clusterDefault' } ?? '' );
                 }
                 $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, statusjson='" . json_encode( $statusJson ) . "' WHERE {$id_field} = {$ID}";
                 $result = mysqli_query( $db_handle, $query );
@@ -384,5 +383,60 @@ while( 1 ) {
     if ( !$work_done ) {
         write_logls( "no requests to process sleeping {$poll_sleep_seconds}s", 2 );
         sleep( $poll_sleep_seconds );
+    }
+}
+
+
+/**
+ * Cancel the job a failed stage left behind.
+ *
+ * The cancel has to be both routed and checked: the stage is recorded as
+ * failed and cleaned up either way, so a cancel that quietly did not land
+ * leaves a job running on the cluster with nothing pointing at it.
+ * remote_exec decides local versus ssh from the cluster's own configuration,
+ * so there is no branch here, and the result is reported.
+ *
+ * The budget is short and unretried. This runs inside a control loop over
+ * every pending request, and the circuit breaker means that once a cluster has
+ * failed a few times the remaining rows in the pass cost nothing at all.
+ */
+function cancel_stage_job( $gfacID, $cluster_default ) {
+    global $db_handle;
+
+    ## The executing cluster wins over the requested one: a metascheduler
+    ## submission can land somewhere other than where it was aimed.
+    $cluster = $cluster_default;
+
+    $stmt = mysqli_prepare( $db_handle,
+        "SELECT cluster, metaschedulerClusterExecuting FROM gfac.analysis WHERE gfacID = ?" );
+
+    if ( $stmt ) {
+        mysqli_stmt_bind_param( $stmt, 's', $gfacID );
+        mysqli_stmt_execute( $stmt );
+        $row = mysqli_fetch_assoc( mysqli_stmt_get_result( $stmt ) );
+        mysqli_stmt_close( $stmt );
+
+        if ( $row ) {
+            $cluster = empty( $row[ 'metaschedulerClusterExecuting' ] )
+                     ? $row[ 'cluster' ] : $row[ 'metaschedulerClusterExecuting' ];
+        }
+    }
+
+    if ( $cluster === '' ) {
+        write_logls( "cannot cancel {$gfacID}: no cluster recorded for it", 0 );
+        return;
+    }
+
+    write_logls( "canceling gfac job {$gfacID} on {$cluster}", 1 );
+
+    $ok = cluster_probe_cancel_job( $cluster, $gfacID,
+        function ( $m ) { write_logls( $m, 1 ); } );
+
+    if ( ! $ok ) {
+        ## Worth saying out loud. The stage is about to be recorded as failed
+        ## and cleaned up either way, so if the cancel did not land this is the
+        ## only trace that a job may still be running on the cluster.
+        write_logls( "cancel of {$gfacID} on {$cluster} was not confirmed;"
+                     . " the job may still be running", 0 );
     }
 }
