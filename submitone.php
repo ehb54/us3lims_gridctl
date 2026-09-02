@@ -329,22 +329,17 @@ try {
 }
 
 if ( $cluster == "localhost" ) {
-    ## Prefer an explicit $default_local_cluster from global_config.php; fall
-    ## back to scanning for an active cluster that runs on the LIMS host.
+    ## $default_local_cluster in global_config.php names the cluster that runs
+    ## on the LIMS host. There is no inference: without it, "localhost" names
+    ## nothing.
     $cluster = null;
     if ( isset( $default_local_cluster )
          && isset( $cluster_details[ $default_local_cluster ] ) ) {
         $cluster = $default_local_cluster;
-    } else if ( isset( $cluster_details ) && is_array( $cluster_details ) ) {
-        foreach ( $cluster_details as $k => $v ) {
-            if ( !empty( $v['active'] ) && !empty( $v['localhost'] ) ) {
-                $cluster = $k;
-                break;
-            }
-        }
     }
     if ( $cluster === null ) {
-        error( "No active localhost cluster found in cluster_details" );
+        error( "cluster 'localhost' requires \$default_local_cluster to be set"
+               . " to a cluster present in \$cluster_details" );
     }
     if ( isset( $cluster_details[$cluster] ) ) {
         $host_name = $cluster_details[$cluster]['name'];
@@ -430,6 +425,7 @@ if ( $stage == "PCSA" ) {
 }
 
 $jobkey = "job_" . strtolower( $stage );
+$job_attributes = (object) [];
 
 if ( !isset( $xmljson->{'analysis_profile'} ) ) {
     error( "analysis profile's xml does not contain an 'analysis_profile' key" );

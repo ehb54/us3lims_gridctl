@@ -58,7 +58,7 @@ function process( $msg )
    // Convert to integer
    settype( $requestID, 'integer' );
 
-   // We need the gfacID
+   // Look up the scheduler job ID associated with this request.
    $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
@@ -84,7 +84,7 @@ function process( $msg )
      return;
    }
 
-   // Set flags for Airavata/Thrift and "Finished..."
+   // Read the current job-tracking state before processing the message.
    list( $gfacID ) = mysqli_fetch_row( $result );
 
    $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'";
@@ -106,7 +106,7 @@ function process( $msg )
 
    $is_finished = preg_match( "/^Finished/i", $message );
 
-   // All jobs are local — update db and gfac status directly
+   // Update the LIMS request and central job-tracking state directly.
    if ( $is_finished )
    {  // Local job finished — data should be there already
       update_db( $db, $requestID, 'finished', $message );
@@ -203,7 +203,7 @@ function update_db( $db, $requestID, $action, $message )
    mysqli_close( $resource );
 }
 
-// Function to update the global database status
+// Update the central job-tracking status and append its message history.
 function update_gfac( $gfacID, $status, $message )
 {
   global $dbhost;
@@ -218,7 +218,7 @@ function update_gfac( $gfacID, $status, $message )
                            'COMPLETE'
                          );
 
-  // Get data from global GFAC DB 
+  // Connect to the central job-tracking database.
   $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
   if ( ! $gLink )
   {

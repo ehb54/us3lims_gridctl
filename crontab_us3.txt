@@ -1,4 +1,3 @@
-##MAILTO=gegorbet@gmail.com
 #nolog(true)
 */1  * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/gridctl.php
 */12 * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/cluster_status.php
