@@ -12,7 +12,7 @@ include_once "$us3bin/gridctl/cluster_probe.php";  ## ask a cluster about a job
 include_once "$us3bin/gridctl/job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
-include "$us3jm/cleanup_job.php";
+include_once "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************
 ## some could be pushed to listen-config.php

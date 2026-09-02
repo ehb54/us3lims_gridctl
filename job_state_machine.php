@@ -309,8 +309,12 @@ class job_state_machine
 
       switch ( $this->outage_timeout_verdict( $what, $updatetime ) )
       {
-         case 'defer':   return;
-         case 'abandon': return $this->abandon_for_outage( $enum_status, $what );
+         case 'defer':
+            return;
+
+         case 'abandon':
+            $this->abandon_for_outage( $enum_status, $what );
+            return;
       }
 
       $this->logf( "$message - id: {$this->gfacID}" );

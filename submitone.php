@@ -217,11 +217,28 @@ register_shutdown_function( function () {
         return;
     }
 
-    $result = mysqli_query( $db_handle,
-        "SELECT status FROM {$lims_db}.{$submit_request_table_name} WHERE {$id_field}=$ID" );
-    if ( ! $result || ! ( $row = mysqli_fetch_object( $result ) ) ) {
+    if ( ! mysqli_select_db( $db_handle, $lims_db ) ) {
         return;
     }
+
+    $request_id = (int) $ID;
+    $statement  = mysqli_prepare( $db_handle,
+        "SELECT status FROM autoflowAnalysis WHERE requestID = ?" );
+    if ( ! $statement ) {
+        return;
+    }
+    mysqli_stmt_bind_param( $statement, 'i', $request_id );
+    if ( ! mysqli_stmt_execute( $statement ) ) {
+        mysqli_stmt_close( $statement );
+        return;
+    }
+
+    $result = mysqli_stmt_get_result( $statement );
+    if ( ! $result || ! ( $row = mysqli_fetch_object( $result ) ) ) {
+        mysqli_stmt_close( $statement );
+        return;
+    }
+    mysqli_stmt_close( $statement );
     if ( strtoupper( $row->{'status'} ) !== 'READY' ) {
         return;
     }
@@ -233,9 +250,14 @@ register_shutdown_function( function () {
 
     write_logl( "$self: {$id_field} {$ID} still READY at shutdown, marking FAILED: $msg", 0 );
 
-    mysqli_query( $db_handle,
-        "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='"
-        . quote_fix( $msg ) . "' WHERE {$id_field} = {$ID}" );
+    $statement = mysqli_prepare( $db_handle,
+        "UPDATE autoflowAnalysis SET status = 'FAILED', statusMsg = ? WHERE requestID = ?" );
+    if ( ! $statement ) {
+        return;
+    }
+    mysqli_stmt_bind_param( $statement, 'si', $msg, $request_id );
+    mysqli_stmt_execute( $statement );
+    mysqli_stmt_close( $statement );
 } );
 
 $autoflowanalysis = db_obj_result( $db_handle,
