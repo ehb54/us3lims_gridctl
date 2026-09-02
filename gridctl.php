@@ -3,6 +3,8 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
 include_once $class_dir . "../global_config.php";   ## $cluster_details, used by get_local_status()
+include_once "$us3bin/gridctl/cluster_probe.php";  ## ask a cluster about a job
+include_once "$us3bin/gridctl/job_state_machine.php";  ## the one implementation of "what happens to this job"
 include_once "$us3bin/gridctl/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include_once "$us3bin/gridctl/jobmonitor/cleanup_job.php";
 
@@ -20,7 +22,7 @@ echo "Time started: " . date( 'Y-m-d H:i:s', $now ) . "\n";
 
 write_log( "start of gridctl.php" );
 
-// Get data from global GFAC DB 
+// Connect to the central job-tracking database.
 $gLink    = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 if ( ! $gLink )
@@ -32,8 +34,11 @@ if ( ! $gLink )
    exit();
 }
    
+## Both forms of the same column, deliberately. The stall clocks do integer
+## arithmetic on the epoch; the admin mail prints the human-readable form.
 $query = "SELECT gfacID, us3_db, cluster, status, queue_msg, " .
-                "UNIX_TIMESTAMP(time), time, autoflowAnalysisID from analysis";
+                "UNIX_TIMESTAMP(time) AS update_epoch, time AS update_text, " .
+                "autoflowAnalysisID from analysis";
 $result = mysqli_query( $gLink, $query );
 
 if ( ! $result )
@@ -50,9 +55,30 @@ if ( mysqli_num_rows( $result ) == 0 )
 }
 //write_log( "$loghdr    gfac-analysis rows $nrows" );
 
-while ( list( $gfacID, $us3_db, $cluster, $status, $queue_msg, $time, $updateTime, $autoflowID ) 
-            = mysqli_fetch_array( $result ) )
+## Read by column name, not by position.
+##
+## This was a list() over mysqli_fetch_array(), which destructures positionally,
+## and the two time columns were bound to variables whose names said the
+## opposite of what they held: $time got UNIX_TIMESTAMP(time) and $updateTime
+## got the datetime string. The arithmetic below was correct only because the
+## right one happened to be passed. Renaming either variable without reading
+## the SELECT, or inserting a column anywhere in it, would have fed a datetime
+## string into timestamp arithmetic and timed out every job on the first sweep.
+##
+## Naming the variables honestly does not remove that hazard, it only relabels
+## it: the coupling is positional either way. Fetching associatively is what
+## removes it, and it is what makes the SELECT aliases above mean something.
+while ( $row = mysqli_fetch_assoc( $result ) )
 {
+   $gfacID       = $row[ 'gfacID' ];
+   $us3_db       = $row[ 'us3_db' ];
+   $cluster      = $row[ 'cluster' ];
+   $status       = $row[ 'status' ];
+   $queue_msg    = $row[ 'queue_msg' ];
+   $update_epoch = $row[ 'update_epoch' ];        ## integer, for the stall clocks
+   $updateTime   = $row[ 'update_text' ];         ## datetime string, for the admin mail
+   $autoflowID   = $row[ 'autoflowAnalysisID' ];
+
    write_log( "$self: gfacID=$gfacID gf_status=$status autoflowID=$autoflowID" );
 
    // Checking we need to do for each entry
@@ -68,7 +94,11 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    // Get local job status
    $status_gw  = $status;
    $status     = get_local_status( $gfacID );
-   if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN' )
+
+   // UNREACHABLE means we could not ask the cluster, so the only defensible
+   // state is the one already recorded. Falling through to the switch on a
+   // fabricated state is what turned a site outage into a wave of ERRORs.
+   if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN'  ||  $status == GRIDCTL_UNREACHABLE )
       $status     = $status_gw;
 echo "$loghdr status_lo=$status\n";
 write_log( "$loghdr Local status=$status status_gw=$status_gw" );
@@ -101,11 +131,11 @@ write_log( "$loghdr switch status=$status" );
          break;
 
       case "SUBMITTED": 
-         submitted( $time );
+         submitted( $update_epoch );
          break;  
 
       case "SUBMIT_TIMEOUT": 
-         submit_timeout( $time );
+         submit_timeout( $update_epoch );
          break;  
 
       case "RUNNING":
@@ -113,11 +143,16 @@ write_log( "$loghdr switch status=$status" );
       case "STAGING":
       case "ACTIVE":
 write_log( "$loghdr   RUNNING gfacID=$gfacID" );
-         running( $time, $queue_msg );
+         running( $update_epoch, $queue_msg );
          break;
 
       case "RUN_TIMEOUT":
-         run_timeout($time );
+         run_timeout( $update_epoch );
+         break;
+
+      // A job that finished and is waiting for its output to be collected.
+      case "DATA":
+         complete();
          break;
 
       case "COMPLETED":
@@ -129,7 +164,10 @@ write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
       case "CANCELLED":
       case "CANCELED":
       case "FAILED":
-         failed();
+write_log( "$loghdr   $status gfacID=$gfacID" );
+         // Pass the observed status through: a cancelled job is 'aborted' to
+         // the user and a failed one is 'failed'.
+         failed( $status );
          break;
 
       case "FINISHED":
@@ -145,187 +183,106 @@ mysqli_close( $gLink );
 
 exit();
 
-function submitted( $updatetime )
+## ---------------------------------------------------------------------- ##
+## Everything below is a shim onto job_state_machine, which holds the policy
+## this sweep and the jobmonitor daemon must apply identically.
+##
+## The function names are kept because cleanup.php and cleanup_job.php call
+## update_autoflow_status(), get_us3_data() and mail_to_admin() from code
+## shared with the daemon, which has no idea which entry point included it.
+## ---------------------------------------------------------------------- ##
+
+/**
+ * The state machine for the row currently being swept.
+ *
+ * Rebuilt per call: the sweep walks every job in one pass, so the per-job
+ * context has to be refreshed anyway, and there is no connection state worth
+ * caching.
+ *
+ * The us3 tables are reached over their own connection. $gLink authenticates
+ * as the gfac user, which is granted the gfac schema; the per-experiment us3
+ * schemas belong to $user, so everything us3 goes over the us3 connection
+ * rather than relying on the gfac account holding rights it should not need.
+ */
+function job_machine()
 {
-   global $self;
    global $gLink;
    global $gfacID;
+   global $cluster;
+   global $us3_db;
    global $autoflowID;
-   global $loghdr;
+   global $dbhost;
+   global $user;
+   global $passwd;
 
-   $now = time();
+   $machine = new job_state_machine(
+      $gLink,
+      function () use ( $dbhost, $user, $passwd, $us3_db ) {
+         $link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
-   if ( $updatetime + 600 > $now ) return; // < 10 minutes ago
+         if ( ! $link )
+         {
+            write_log( "gridctl.php: could not connect to $dbhost : $us3_db" );
+            mail_to_admin( "fail", "Could not connect to $dbhost : $us3_db" );
 
-   if ( $updatetime + 86400 > $now ) // Within the first 24 hours
-   {
-      $job_status = get_local_status( $gfacID );
+            return null;
+         }
 
-      if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN' ) ) )
-      {
-write_log( "$loghdr submitted:job_status=$job_status" );
-         update_job_status( $job_status, $gfacID );
-      }
+         return $link;
+      },
+      '',            ## $gLink is already connected to the job-tracking database
+      function ( $m ) { global $self; write_log( "$self: $m" ); },
+      'mail_to_admin'
+   );
 
-      return;
-   }
-
-   $message = "Job listed submitted longer than 24 hours";
-   write_log( "$self: $message - id: $gfacID" );
-   mail_to_admin( "hang", "$message - id: $gfacID" );
-   $query = "UPDATE analysis SET status='SUBMIT_TIMEOUT' WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-
-   if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-
-   update_queue_messages( $message );
-   update_db( $message );
-   update_autoflow_status( 'SUBMIT_TIMEOUT', $message );
-
+   return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowID );
 }
 
-function submit_timeout( $updatetime )
-{
-   global $self;
-   global $gLink;
-   global $gfacID;
-   global $autoflowID;
-   global $loghdr;
-
-   $job_status = get_local_status( $gfacID );
-
-   if ( ! in_array( $job_status, array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN' ) ) )
-   {
-      update_job_status( $job_status, $gfacID );
-      return;
-   }
-
-   $now = time();
-
-   if ( $updatetime + 86400 > $now ) return; // < 24 hours ago ( 48 total submitted )
-
-   $message = "Job listed submitted longer than 48 hours";
-   write_log( "$self: $message - id: $gfacID" );
-   mail_to_admin( "hang", "$message - id: $gfacID" );
-   $query = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-
-   if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-
-   update_queue_messages( $message );
-   update_db( $message );
-   update_autoflow_status( 'FAILED', $message );
-}
-
-function running( $updatetime, $queue_msg )
-{
-   global $self;
-   global $gLink;
-   global $gfacID;
-   global $autoflowID;
-   global $loghdr;
-
-   $now = time();
-
-   get_us3_data();
-
-   update_autoflow_status( 'RUNNING', $queue_msg );
-
-   if ( $updatetime + 600 > $now ) {
-       return;   // message received < 10 minutes ago
-   }
-
-   if ( $updatetime + 86400 > $now ) // Within the first 24 hours
-   {
-      $job_status = get_local_status( $gfacID );
-
-      if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN' ) ) ) {
-         update_job_status( $job_status, $gfacID );
-      }
-      return;
-   }
-
-   $message = "Job listed running longer than 24 hours";
-   write_log( "$self: $message - id: $gfacID" );
-   mail_to_admin( "hang", "$message - id: $gfacID" );
-   $query = "UPDATE analysis SET status='RUN_TIMEOUT' WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-
-   if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-
-   update_queue_messages( $message );
-   update_db( $message );
-   update_autoflow_status( 'RUN_TIMEOUT', $message );
-}
-
-function run_timeout( $updatetime )
-{
-   global $self;
-   global $gLink;
-   global $gfacID;
-   global $autoflowID;
-   global $loghdr;
-
-   $job_status = get_local_status( $gfacID );
-
-   if ( ! in_array( $job_status, array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN' ) ) )
-   {
-      update_job_status( $job_status, $gfacID );
-      return;
-   }
-
-   $now = time();
-
-   get_us3_data();
-
-   if ( $updatetime + 172800 > $now ) return; // < 48 hours ago
-
-   $message = "Job listed running longer than 48 hours";
-   write_log( "$self: $message - id: $gfacID" );
-   mail_to_admin( "hang", "$message - id: $gfacID" );
-   $query = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-
-   if ( ! $result )
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-
-   update_queue_messages( $message );
-   update_db( $message );
-   update_autoflow_status( 'FAILED', $message );
-}
+function submitted( $updatetime )              { return job_machine()->submitted( $updatetime ); }
+function submit_timeout( $updatetime )         { return job_machine()->submit_timeout( $updatetime ); }
+function running( $updatetime, $queue_msg )    { return job_machine()->running( $updatetime, $queue_msg ); }
+function run_timeout( $updatetime )            { return job_machine()->run_timeout( $updatetime ); }
+function update_job_status( $job_status, $gfacID ) { return job_machine()->update_job_status( $job_status ); }
+function update_queue_messages( $message )     { return job_machine()->update_queue_messages( $message ); }
+function update_db( $message )                 { return job_machine()->update_db( $message ); }
+function get_us3_data()                        { return job_machine()->get_us3_data(); }
+function get_local_status( $gfacID )           { return job_machine()->get_local_status(); }
+function cancel_local_job( $gfacID )           { return job_machine()->cancel_local_job(); }
+function update_autoflow_status( $status, $message ) { return job_machine()->update_autoflow_status( $status, $message ); }
+function update_hpc_analysis_result_status( $status ) { return job_machine()->update_hpc_analysis_result_status( $status ); }
 
 function complete()
 {
    global $gfacID;
 
-   // Record the completion in gfac.analysis BEFORE cleaning up, exactly as
-   // jobmonitor/gridctl.php's complete() does.
+   // Record the completion in gfac.analysis BEFORE cleaning up.
    //
    // cleanup_job.php reads gfac.analysis.status and feeds it to
    // update_autoflow_status(), and submitctl.php only advances a stage whose
    // status is in $completed_status ("complete"/"done") or $failed_status.
    // Without this write the row is still 'SUBMITTED' when cleanup reads it,
-   // so the autoflow request is stamped 'submitted' -- which matches neither
-   // list -- and the whole multi-stage pipeline stalls there permanently.
-   //
-   // This only surfaced once jobs actually started completing: whichever
-   // worker won the cleanup race decided the outcome, so a job finished
-   // normally when jobmonitor.php got there first and hung forever when the
-   // cron sweep did. Slurm's "CD" arrives here as COMPLETED and
-   // update_job_status() maps both COMPLETED and COMPLETE onto the
-   // gfac.analysis enum value 'COMPLETE'.
+   // so the autoflow request is stamped 'submitted', which matches neither
+   // list, and the whole multi-stage pipeline stalls there permanently.
    update_job_status( "COMPLETE", $gfacID );
 
    return cleanup();
 }
 
-function failed()
+function failed( $job_status = 'FAILED' )
 {
-   // Just cleanup
-   cleanup();
+   global $gfacID;
+
+   // Record the terminal status BEFORE cleaning up, for the same reasons
+   // complete() does. Without this write, update_job_status() ->
+   // update_autoflow_status() -> update_hpc_analysis_result_status() never
+   // runs, HPCAnalysisResult.queueStatus keeps whatever it had, and a job that
+   // failed while still 'queued' stays 'queued' forever.
+   //
+   // The status is passed in because the caller routes CANCELLED, CANCELED and
+   // FAILED here alike: CANCELED is 'aborted' to the user, FAILED is 'failed'.
+   update_job_status( $job_status, $gfacID );
+
+   return cleanup();
 }
 
 function cleanup()
@@ -335,323 +292,6 @@ function cleanup()
    global $us3_db;
 
    return resolve_and_cleanup_job( $gLink, $gfacID, $us3_db, 'analysis', 'write_log' );
-}
-
-// Function to update status of job
-function update_job_status( $job_status, $gfacID )
-{
-  global $gLink;
-  global $query;
-  global $self;
-  global $loghdr;
-  
-  switch ( $job_status )
-  {
-    case 'SUBMITTED'   :
-    case 'SUBMITED'    :
-    case 'INITIALIZED' :
-    case 'UPDATING'    :
-    case 'PENDING'     :
-      $status  = 'SUBMITTED';
-      $query   = "UPDATE analysis SET status='SUBMITTED' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is SUBMITTED";
-      break;
-
-    case 'STARTED'     :
-    case 'RUNNING'     :
-    case 'ACTIVE'      :
-      $status  = 'RUNNING';
-      $query   = "UPDATE analysis SET status='RUNNING' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is RUNNING";
-      break;
-
-    case 'EXECUTING'      :
-      $message = "Job status request reports job is EXECUTING";
-      break;
-
-    case 'FINISHED'    :
-      $status  = 'FINISHED';
-      $query   = "UPDATE analysis SET status='FINISHED' WHERE gfacID='$gfacID'";
-      $message = "NONE";
-      break;
-
-    case 'DONE'        :
-      $status  = 'DONE';
-      $query   = "UPDATE analysis SET status='DONE' WHERE gfacID='$gfacID'";
-      $message = "NONE";
-      break;
-
-    case 'COMPLETED'   :
-    case 'COMPLETE'   :
-      $status  = 'COMPLETE';
-      $query   = "UPDATE analysis SET status='COMPLETE' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is COMPLETED";
-      break;
-
-    case 'DATA'        :
-      $status  = 'DATA';
-      $query   = "UPDATE analysis SET status='DATA' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is COMPLETE, waiting for data";
-      break;
-
-    case 'CANCELED'    :
-    case 'CANCELLED'   :
-      $status  = 'CANCELED';
-      $query   = "UPDATE analysis SET status='CANCELED' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is CANCELED";
-      break;
-
-    case 'FAILED'      :
-      $status  = 'FAILED';
-      $query   = "UPDATE analysis SET status='FAILED' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is FAILED";
-      break;
-
-    case 'UNKNOWN'     :
-write_log( "$loghdr job_status='UNKNOWN', reset to 'ERROR' " );
-      $status  = 'ERROR';
-      $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
-      $message = "Job status request reports job is not in the queue";
-      break;
-
-    default            :
-      // We shouldn't ever get here
-      $status  = 'ERROR';
-      $query   = "UPDATE analysis SET status='ERROR' WHERE gfacID='$gfacID'";
-      $message = "Job status was not recognized - $job_status";
-      write_log( "$loghdr update_job_status: " .
-                 "Job status was not recognized - $job_status\n" .
-                 "gfacID = $gfacID\n" );
-      break;
-
-  }
-
-   $result =  mysqli_query( $gLink, $query );
-   if ( ! $result )
-      write_log( "$loghdr Query failed $query - " .  mysqli_error( $gLink ) );
-
-   if ( $message != 'NONE' )
-   {
-      update_queue_messages( $message );
-      update_db( $message );
-      update_autoflow_status( $status, $message );
-   } else {
-      update_autoflow_status( $status, $status );
-   }
-}
-
-function get_us3_data()
-{
-   global $self;
-   global $gfacID;
-   global $autoflowID;
-   global $dbhost;
-   global $user;
-   global $passwd;
-   global $us3_db;
-   global $updateTime;
-   global $loghdr;
-
-   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
-
-   if ( ! $us3_link )
-   {
-      write_log( "$loghdr could not connect: $dbhost, $user, $passwd, $us3_db" );
-      mail_to_admin( "fail", "Could not connect to $dbhost : $us3_db" );
-      return 0;
-   }
-
-   $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-            "FROM HPCAnalysisResult WHERE gfacID='$gfacID'";
-   $result = mysqli_query( $us3_link, $query );
-
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $us3_link ) );
-      mail_to_admin( "fail", "Query failed $query\n" .  mysqli_error( $us3_link ) );
-      return 0;
-   }
-
-   $numrows =  mysqli_num_rows( $result );
-   if ( $numrows > 1 )
-   {  // Duplicate gfacIDs:  get last
-      $query = "SELECT HPCAnalysisRequestID, UNIX_TIMESTAMP(updateTime) " .
-               "FROM HPCAnalysisResult WHERE gfacID='$gfacID' " .
-               " ORDER BY HPCAnalysisResultID DESC LIMIT 1";
-      $result = mysqli_query( $us3_link, $query );
-   }
-
-   list( $requestID, $updateTime ) = mysqli_fetch_array( $result );
-   mysqli_close( $us3_link );
-
-   return $requestID;
-}
-
-// Function to get status from local cluster
-function get_local_status( $gfacID )
-{
-   global $cluster;
-   global $self;
-   global $cluster_details;
-
-   $ruser     = "us3";
-
-   if ( !array_key_exists( $cluster, $cluster_details ) ) {
-       write_log( "$self cluster $cluster missing from global_config.php \$cluster_details" );
-       $status = 'UNKNOWN';
-       write_log( "get_local_status: status = $status");
-       return $status;
-   }
-
-   if ( !array_key_exists( 'name', $cluster_details[$cluster] ) ) {
-       write_log( "$self 'name' key missing from global_config.php \$cluster_details[$cluster]" );
-       $status = 'UNKNOWN';
-       write_log( "get_local_status: status = $status");
-       return $status;
-   }
-
-   $login = $cluster_details[$cluster]['name'];
-
-   if ( array_key_exists( 'login', $cluster_details[$cluster] ) ) {
-       $login = $cluster_details[$cluster]['login'];
-   }
-
-   ## Always go through ssh, co-located clusters included. Whether a Slurm
-   ## client command can be run directly is a property of the calling
-   ## process's unix user (us3 can, www-data cannot), not of the cluster, so
-   ## a per-cluster config flag is the wrong place to decide it. Co-located
-   ## deployments point 'login' at the local host (e.g. 'us3@localhost') and
-   ## rely on a loopback authorized_keys entry.
-   $port   = $cluster_details[$cluster]['sshport'] ?? 22;
-
-   $cmd    = "ssh -p $port -x $login squeue -t all -j $gfacID 2>&1|tail -n 1";
-
-   write_log( "$self gfacID $gfacID cluster $cluster" );
-
-   $result = exec( $cmd );
-echo "locstat: cmd=$cmd  result=$result\n";
-write_log( "$self  locstat: cmd=$cmd  result=$result" );
-
-   $secwait    = 2;
-   $num_try    = 0;
-   // Sleep and retry up to 3 times if ssh has "ssh_exchange_identification" error
-   while ( preg_match( "/ssh_exchange_id/", $result )  &&  $num_try < 3 )
-   {
-      sleep( $secwait );
-      $num_try++;
-      $secwait   *= 2;
-write_log( "$self:   num_try=$num_try  secwait=$secwait" );
-   }
-
-   if ( preg_match( "/^qstat: Unknown/", $result )  ||
-        preg_match( "/ssh_exchange_id/", $result ) )
-   {
-      write_log( "$self get_local_status: Local job $gfacID unknown result=$result" );
-      return 'UNKNOWN';
-   }
-
-   $values = preg_split( "/\s+/", $result );
-   $jstat   = count( $values ) > 5 ? $values[ 5 ] : "unknown";
-write_log( "$self: get_local_status: job status = /$jstat/");
-   switch ( $jstat )
-   {
-      case "W" :                      // Waiting for execution time to be reached
-      case "E" :                      // Job is exiting after having run
-      case "R" :                      // Still running
-      case "CG" :                     // Job is completing
-        $status = 'ACTIVE';
-        break;
-
-      case "C" :                      // Job has completed
-      case "ST" :                     // Job has disappeared
-      case "CD" :                     // Job has completed
-        $status = 'COMPLETED';
-        break;
-
-      case "T" :                      // Job is being moved
-      case "H" :                      // Held
-      case "Q" :                      // Queued
-      case "PD" :                     // Queued
-      case "CF" :                     // Queued
-        $status = 'SUBMITTED';
-        break;
-
-      case "CA" :                     // Job has been canceled
-        $status = 'CANCELED';
-        break;
-
-      case "F"  :                     // Job has failed
-      case "BF" :                     // Job has failed
-      case "NF" :                     // Job has failed
-      case "TO" :                     // Job has timed out
-      case ""   :                     // Job has disappeared
-        $status = 'FAILED';
-        break;
-
-      default :
-        $status = 'UNKNOWN';          // This should not occur
-        break;
-   }
-write_log( "$self: get_local_status: status = $status");
-  
-   return $status;
-}
-
-function update_queue_messages( $message )
-{
-   global $self;
-   global $gLink;
-   global $gfacID;
-
-   // Get analysis table ID
-   $query  = "SELECT id FROM analysis " .
-             "WHERE gfacID = '$gfacID' ";
-   $result = mysqli_query( $gLink, $query );
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-      return;
-   }
-   list( $analysisID ) = mysqli_fetch_array( $result );
-
-   // Insert message into queue_message table
-   $query  = "INSERT INTO queue_messages SET " .
-             "message = '" . mysqli_real_escape_string( $gLink, $message ) . "', " .
-             "analysisID = '$analysisID' ";
-   $result = mysqli_query( $gLink, $query );
-   if ( ! $result )
-   {
-      write_log( "$self: Query failed $query - " .  mysqli_error( $gLink ) );
-      return;
-   }
-}
-
-function update_db( $message )
-{
-   global $self;
-   global $gfacID;
-   global $dbhost;
-   global $user;
-   global $passwd;
-   global $us3_db;
-
-   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
-
-   if ( ! $us3_link )
-   {
-      write_log( "$self: could not connect: $dbhost, $user, $passwd" );
-      mail_to_admin( "fail", "Could not connect to $dbhost : $us3_db" );
-      return 0;
-   }
-
-   $requestID = get_us3_data();
-
-   $query = "UPDATE HPCAnalysisResult SET " .
-            "lastMessage='" . mysqli_real_escape_string( $us3_link, $message ) . "'" .
-            "WHERE gfacID = '$gfacID' AND HPCAnalysisRequestID = '$requestID' ";
-
-   mysqli_query( $us3_link, $query );
-   mysqli_close( $us3_link );
 }
 
 function mail_to_admin( $type, $msg )
@@ -667,8 +307,7 @@ function mail_to_admin( $type, $msg )
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
    $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
-   //   $headers .= "Cc: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
-   $headers .= "Bcc: $org_name Admin<$admin_email>" . "\n";     // make sure
+   $headers .= "Bcc: $org_name Admin<$admin_email>"      . "\n";
 
    // Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
@@ -695,74 +334,3 @@ function mail_to_admin( $type, $msg )
 
    mail( $admin_email, $subject, $message, $headers );
 }
-
-function update_autoflow_status( $status, $message ) {
-    global $gLink;
-    global $gfacID;
-    global $autoflowID;
-    global $us3_db;
-    global $self;
-
-    write_log( "$self: update_autoflow_status() id $autoflowID status $status message $message" );
-
-    // Independent of autoflow linkage below -- this is the only status update
-    // a non-autoflow (HPCAnalysisRequest-only, e.g. DMGA/GA) submission ever
-    // gets when a job fails before it can self-report via
-    // manage-us3-pipe.php's UDP listener. Without it, HPCAnalysisResult.
-    // queueStatus stays 'queued' forever on failure for those submissions.
-    update_hpc_analysis_result_status( $status );
-
-    if ( $autoflowID <= 0 ) {
-        write_log( "$self: update_autoflow_status() ignored, no id" );
-        return;
-    }
-    # escape quotes in message
-    $sqlmessage = str_replace( "'", "\'", $message );
-    $query = "UPDATE {$us3_db}.autoflowAnalysis SET " .
-        "status='$status', " .
-        "statusMsg='$sqlmessage' " .
-        "WHERE requestID = '$autoflowID' AND currentGfacID = '$gfacID' AND NOT status RLIKE '^(failed|error|canceled)\$'";
-
-    $result = mysqli_query( $gLink, $query );
-    if ( ! $result ) {
-        // Just log it and continue
-        write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );
-    }
-}
-
-// Map a jobmonitor status string to HPCAnalysisResult.queueStatus's enum
-// ('queued','failed','running','aborted','completed') and record it against
-// this job's gfacID. Statuses with no clear queueStatus equivalent are left
-// untouched rather than guessed at.
-function update_hpc_analysis_result_status( $status ) {
-    global $gLink;
-    global $gfacID;
-    global $us3_db;
-
-    $queue_status_map = [
-        'RUNNING'        => 'running',
-        'FAILED'         => 'failed',
-        'ERROR'          => 'failed',
-        'SUBMIT_TIMEOUT' => 'aborted',
-        'RUN_TIMEOUT'    => 'aborted',
-        'COMPLETE'       => 'completed',
-        'COMPLETED'      => 'completed',
-    ];
-
-    if ( ! array_key_exists( $status, $queue_status_map ) ) {
-        return;
-    }
-
-    $queueStatus = $queue_status_map[ $status ];
-
-    $query = "UPDATE {$us3_db}.HPCAnalysisResult SET " .
-        "queueStatus='$queueStatus' " .
-        "WHERE gfacID = '$gfacID'";
-
-    $result = mysqli_query( $gLink, $query );
-    if ( ! $result ) {
-        write_log( "$self: Bad query:\n$query\n" . mysqli_error( $gLink ) );
-    }
-}
-   
-?>

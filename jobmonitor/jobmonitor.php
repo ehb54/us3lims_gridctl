@@ -8,6 +8,8 @@ $us3jm   = "$us3lims/bin/gridctl/jobmonitor";
 include_once "$us3bin/listen-config.php";
 include $class_dir . "../global_config.php";
 
+include_once "$us3bin/gridctl/cluster_probe.php";  ## ask a cluster about a job
+include_once "$us3bin/gridctl/job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include "$us3jm/cleanup_job.php";
@@ -150,7 +152,7 @@ open_db();
 
 write_logld( "db opened" );
 
-# gfac?
+# Load the current central job-tracking row.
 
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
@@ -164,7 +166,7 @@ if (
                      . " cluster"
                      . " ,status"
                      . " ,queue_msg"
-                     . " ,UNIX_TIMESTAMP(time)"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
@@ -179,7 +181,13 @@ if (
 $cluster            = $res_analysis->{"cluster"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
-$time               = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+## Two forms of gfac.analysis.time. $update_epoch is the integer the stall
+## clocks measure against; $updateTime is the display string the admin mail
+## prints. These were named $time and $updateTime, so the one called $time held
+## the epoch and the one called $updateTime held the text -- backwards from
+## what the names say, and correct only because the right one happened to be
+## passed to the stall functions.
+$update_epoch       = $res_analysis->{"update_epoch"};
 $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
 
@@ -216,7 +224,7 @@ while( 1 ) {
                          ,"select"
                          . " status"
                          . " ,queue_msg"
-                         . " ,UNIX_TIMESTAMP(time)"
+                         . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                          . " ,time"
                          . " from gfac.analysis"
                          . " where gfacID = \"$gfacID\""
@@ -229,7 +237,7 @@ while( 1 ) {
 
     $status                         = $res_analysis->{"status"};
     $queue_msg                      = $res_analysis->{"queue_msg"};
-    $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $update_epoch                   = $res_analysis->{"update_epoch"};
     $updateTime                     = $res_analysis->{"time"};
 
     if ( check_job() ) {
