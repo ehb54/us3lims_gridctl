@@ -15,9 +15,6 @@ CREATE TABLE analysis (
   stdout longtext,
   stderr longtext,
   tarfile mediumblob,
-  -- Deprecated compatibility members retained for historical rows:
-  -- DATA_TIMEOUT, FAILED_DATA, and CANCELLED. New writes must use the
-  -- canonical vocabulary in job_status.php (including CANCELED with one L).
   status enum('SUBMITTED','SUBMIT_TIMEOUT','RUNNING','RUN_TIMEOUT','DATA','DATA_TIMEOUT','COMPLETE','CANCELLED','CANCELED','FAILED','FAILED_DATA','ERROR') DEFAULT 'SUBMITTED',
   queue_msg text,
   time timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
