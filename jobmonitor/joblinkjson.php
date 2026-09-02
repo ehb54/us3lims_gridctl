@@ -2,16 +2,14 @@
 
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
-$us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/jobmonitor";
+$self    = __FILE__;
+$errors  = '';
 
-include "$us3bin/listen-config.php";
-
-include "$us3jm/gridctl.php";
-include "$us3jm/cleanup.php";
-include "$us3jm/cleanup_gfac.php";
-
-include "$us3util/utility.php";
+## This report only needs configuration, logging and the database helper from
+## listen-config.php. Loading the jobmonitor/cleanup stack here was both unused
+## and fatal after cleanup_gfac.php was removed; utility.php also redeclared
+## logging functions already supplied by listen-config.php.
+require_once "$us3bin/listen-config.php";
 
 # ********* start user defines *************
 
@@ -34,19 +32,33 @@ if ( !preg_match( '/^uslims3_[A-Za-z0-9_]*$/', $us3_db ) ) {
     $errors .= "dbname has an invalid format\n";
 }
 
+if ( !preg_match( '/^[0-9]+$/', $autoflowAnalysisID ) ) {
+    $errors .= "autoflowAnalysisID must be numeric\n";
+}
+
 flush_errors_exit();
 
 # open db
 open_db();
 
 
-$query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+$query = "SELECT modelsDesc FROM {$us3_db}.autoflowModelsLink WHERE autoflowAnalysisID = ?";
 echo "query : $query\n";
 
-$result = mysqli_query( $db_handle, $query );
+$stmt = mysqli_prepare( $db_handle, $query );
+if ( ! $stmt ) {
+    write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+    return;
+}
+
+$autoflowAnalysisID = (int)$autoflowAnalysisID;
+mysqli_stmt_bind_param( $stmt, 'i', $autoflowAnalysisID );
+mysqli_stmt_execute( $stmt );
+$result = mysqli_stmt_get_result( $stmt );
 
 if ( ! $result ) {
     write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+    mysqli_stmt_close( $stmt );
     return;
 }
 
@@ -59,5 +71,6 @@ if ( $result->num_rows ) {
     $descJson = json_decode( $obj->modelsDesc );
 }
 
-debug_json( "modelsDesc", $descJson );
+mysqli_stmt_close( $stmt );
 
+debug_json( "modelsDesc", $descJson );

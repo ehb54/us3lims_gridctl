@@ -99,7 +99,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
-   ## Get the GFAC ID
+   ## Get the scheduler job ID recorded for this request.
    $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
@@ -115,7 +115,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
-   ## Reconnect, this time to the global gfac DB.
+   ## Reconnect, this time to the central job-tracking database.
    $db_handle = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $db_handle )
@@ -155,11 +155,21 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
 
-   ## Stage the job's stderr/stdout/results tar into gfac.analysis. This is
+   ## Stage the job's stderr/stdout/results tar into its job-tracking row. This is
    ## the only writer of those columns, and the SELECT below fails the job
    ## outright ("Failed data fetch") if tarfile comes back empty, so this must
    ## run for every cluster, not just co-located ones.
-   get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
+   ## -1 means the cluster could not be reached, so we do not yet know whether
+   ## the results exist. Return 0 ("not yet finalizable") so resolve_and_cleanup_job()
+   ## hands control back to the jobmonitor poll loop and we ask again in 30s,
+   ## rather than persisting empty result columns and failing the job. The
+   ## existing $global_complete_max_seconds ceiling still force-finalizes a job
+   ## that stays unfetchable, so this cannot hold a job open forever.
+   if ( get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID ) === -1 )
+   {
+      write_logld( "$me: results for $gfacID not retrievable right now (cluster unreachable); will retry" );
+      return( 0 );
+   }
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
@@ -190,7 +200,11 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
       write_logld( "$me: Successful data fetch: $requestID $gfacID" );
    }
    else
-   {  ## Log failure and return immediately — no point continuing without results
+   {  ## The cluster was reachable and has no results tar for this job, so the
+      ## job really did produce nothing. get_local_files() has already returned
+      ## 0 above for the unreachable case, so reaching here means this is a
+      ## genuine result, not an outage -- which is what makes it safe to tell
+      ## the user their job produced no results.
       update_autoflow_status( 'FAILED', "Failed data fetch" );
       write_logld( "$me: Failed data fetch: $requestID $gfacID" );
       mail_to_user( "fail", "No results tarfile" );
@@ -330,7 +344,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    ## move to end (where we email the user)
    ## update_autoflow_status( $status, $queue_msg );
 
-   ## Delete data from GFAC DB
+   ## Delete the completed central job-tracking records.
    $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
@@ -362,7 +376,7 @@ write_logld( "$me: Output dir determined: $output_dir" );
 
    ## Try to create it if necessary, and write the file
    ## Let's use FILE_APPEND, in case this is the second time around and the 
-   ##  GFAC job status was INSERTed, rather than UPDATEd
+   ##  job status was INSERTed, rather than UPDATEd
    if ( ! is_dir( $output_dir ) )
       mkdir( $output_dir, 0775, true );
    $message_filename = "$output_dir/$db-$requestID-messages.txt";
@@ -578,6 +592,28 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $modelGUID   = $model_data[ 'modelGUID' ];
          $editGUID    = $model_data[ 'editGUID' ];
 
+         ## A superglobal result describes the request as a whole, so
+         ## us_mpi_analysis intentionally writes the nil editGUID.  The model
+         ## table still requires one editedDataID for ownership/linkage.  Bind
+         ## that request-level record to the request's primary edited file;
+         ## ordinary per-dataset models must continue to resolve their exact
+         ## editGUID.  This keeps the fallback request-scoped and avoids a
+         ## corpus-specific ID or filename.
+         if ( $editGUID == '00000000-0000-0000-0000-000000000000' )
+         {
+            $request_edit_filename = mysqli_real_escape_string( $db_handle, $editXMLFilename );
+            $edited_data_selector  =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE filename='$request_edit_filename' ORDER BY editedDataID LIMIT 1)";
+         }
+         else
+         {
+            $escaped_edit_guid    = mysqli_real_escape_string( $db_handle, $editGUID );
+            $edited_data_selector =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE editGUID='$escaped_edit_guid')";
+         }
+
          if ( $mc_iteration > 1 )
          {
 ##write_logld( "$me:   MODELUpd: mc_iteration=$mc_iteration" );
@@ -590,8 +626,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
          $query = "INSERT INTO {$us3_db}.model SET "       .
                   "modelGUID='$modelGUID',"      .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "editedDataID=$edited_data_selector," .
                   "description='$description',"  .
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
