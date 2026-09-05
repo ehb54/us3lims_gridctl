@@ -45,6 +45,10 @@ function open_db() {
     if ( ! $db_handle ) error_exit( "Cannot connect to database at $dbhost" );
 }
 
+// Named distinctly from submitone.php's own local db_obj_result() (2 args,
+// always exits on missing rows): both get loaded into the same PHP process
+// when submitone.php includes this file, and PHP has no per-file function
+// scoping, so a shared name here fatals with "Cannot redeclare".
 function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false ) {
     $result = mysqli_query( $db_handle, $query );
     if ( $result === false ) {
