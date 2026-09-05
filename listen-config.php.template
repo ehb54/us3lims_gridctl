@@ -32,17 +32,11 @@ $org_name    = "UltraScan3 Admin";
 $org_domain  = "uleth.ca";
 $admin_email = "us3-admin@biophysics.uleth.ca";
 
-// This is really a library routine
-
 date_default_timezone_set( 'America/Chicago' );
 
-function write_log( $message )
-{
-   global $logfile;
-
-   $log = fopen( $logfile, "a" );
-   fwrite( $log, date( "Y-m-d H:i:s " ) . $message . "\n" );
-   fclose( $log );
-}
+$logging_level = 2;
+$errors = '';
+$db_handle = null;
+require_once "$home/bin/gridctl/listen_functions.php";
 
 ?>
