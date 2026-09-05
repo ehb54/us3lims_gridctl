@@ -189,6 +189,10 @@ if ( file_exists( $dumpfile ) ) {
 }
 
 write_logl( "Starting" );
+// Keep a process-start receipt even when listen-config directs logging to a
+// file. submitctl captures stderr in submit.log; operators and process tests
+// can distinguish a silent include/exit from a child that never started.
+fwrite( STDERR, "$self: starting submission for $lims_db request $ID\n" );
 
 do {
     $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
