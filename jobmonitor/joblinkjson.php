@@ -22,7 +22,9 @@ $u_argv = $argv;
 array_shift( $u_argv ); # first element is program name
 
 if ( count( $u_argv ) != 2 ) {
-    error_exit( $notes );
+    // Usage is a CLI response, even when daemon logging goes to a file.
+    fwrite( STDERR, $notes );
+    exit( 1 );
 }
 
 $us3_db             = array_shift( $u_argv );
