@@ -239,27 +239,40 @@ function cluster_probe_reachable( $cluster, $log_fn = null )
 /**
  * The abandonment-ceiling decision, as a pure function of its inputs.
  *
- * Returns 'proceed', 'defer' or 'abandon'. Both gridctl copies wrap this with
- * their own logging, queue-message and database side effects; the arithmetic
- * that decides a job's fate lives here, where it can be tested without a
- * cluster, a database or a clock.
+ * THIS IS THE CANONICAL EXPLANATION OF THE OUTAGE POLICY. The callers, the
+ * $global_cluster_abandon_hours config key and OutageVerdictTest all point
+ * here rather than restating it, so there is one place to change if the
+ * policy changes.
+ *
+ * Returns 'proceed', 'defer' or 'abandon'. Callers wrap this with their own
+ * logging, queue-message and database side effects; the arithmetic that
+ * decides a job's fate lives here, where it can be tested without a cluster,
+ * a database or a clock.
+ *
+ * The problem it solves. Stall timers measure wall time since the last status
+ * update, so an outage that stops status updates makes every waiting job look
+ * hung, which is backwards: during an outage the jobs are usually fine and the
+ * LIMS is blind. Deferring fixes that. Deferring without a ceiling trades one
+ * bug for another, because a cluster that is decommissioned, renamed or never
+ * coming back would hold its jobs in 'submitted' forever with nobody seeing
+ * them.
  *
  * The three cases:
  *
  *   $reachable            the cluster is answering, so elapsed time means what
  *                         it says. 'proceed' to the normal timeout handling.
- *   within the ceiling    the cluster is not answering. Elapsed time proves
- *                         nothing about the job -- during an outage the jobs
- *                         are usually fine and the LIMS is blind -- so 'defer'
- *                         and look again next pass.
- *   past the ceiling      the cluster has been silent long enough that waiting
- *                         is no longer useful. 'abandon' and close the job out.
+ *   within the ceiling    not answering, and elapsed time proves nothing about
+ *                         the job. 'defer' and look again next pass.
+ *   past the ceiling      silent long enough that waiting is no longer useful.
+ *                         'abandon' and close the job out.
  *
- * $abandon_hours <= 0 means "defer indefinitely", for a site that would rather
- * hold jobs forever than close any out unseen. That was the behaviour before
- * the ceiling existed, and it is a defensible choice, just not a safe default:
- * a decommissioned or renamed cluster would hold its jobs in 'submitted'
- * permanently, where no operator would ever see them.
+ * The ceiling is measured from the same $updatetime the stall timers use, so
+ * it is always the longer of the two clocks: a job reaches its stall timeout
+ * first, and only then starts accumulating deferrals against the ceiling.
+ *
+ * $abandon_hours <= 0 means defer indefinitely, for a site that would rather
+ * hold jobs forever than close any out unseen. Supported, but not a safe
+ * default for the reason given above.
  */
 function cluster_probe_outage_verdict( $reachable, $updatetime, $abandon_hours, $now )
 {

@@ -224,17 +224,9 @@ class job_state_machine
     * Should a stall clock be allowed to fire? Returns 'proceed', 'defer' or
     * 'abandon'.
     *
-    * The stall timers measure wall time since the last status update, so an
-    * outage that stops status updates makes every waiting job look hung, which
-    * is exactly backwards: during an outage the jobs are usually fine and the
-    * LIMS is blind. Deferring fixes that. Deferring without a ceiling trades
-    * one bug for another, since a cluster that is decommissioned or never
-    * coming back would hold its jobs in 'submitted' forever with nobody ever
-    * seeing them. The ceiling is where "we cannot tell" becomes an answer.
-    *
-    * It is measured from the same $updatetime the stall timers use, so it is
-    * always the longer of the two clocks: a job reaches its stall timeout
-    * first and only then starts accumulating deferrals against the ceiling.
+    * Thin wrapper over cluster_probe_outage_verdict(), which carries the
+    * explanation of why an unreachable cluster defers and why the deferral
+    * needs a ceiling.
     */
    public function outage_timeout_verdict( $what, $updatetime )
    {
