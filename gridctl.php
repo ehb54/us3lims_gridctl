@@ -3,10 +3,14 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
 include_once $class_dir . "../global_config.php";   ## $cluster_details, used by get_local_status()
-include_once "$us3bin/gridctl/cluster_probe.php";  ## ask a cluster about a job
-include_once "$us3bin/gridctl/job_state_machine.php";  ## the one implementation of "what happens to this job"
-include_once "$us3bin/gridctl/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
-include_once "$us3bin/gridctl/jobmonitor/cleanup_job.php";
+## Siblings are included relative to this file, not to ~us3/lims/bin. The two
+## deployments disagree on where the repo sits: Ansible clones it as bin/
+## itself, while the USiaB installer and the dev stack put it at bin/gridctl/.
+## Only listen-config.php is genuinely outside the repo in both.
+include_once __DIR__ . "/cluster_probe.php";  ## ask a cluster about a job
+include_once __DIR__ . "/job_state_machine.php";  ## the one implementation of "what happens to this job"
+include_once __DIR__ . "/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
+include_once __DIR__ . "/jobmonitor/cleanup_job.php";
 
 // Global variables
 $gfac_message = "";

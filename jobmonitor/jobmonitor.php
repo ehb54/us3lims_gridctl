@@ -3,13 +3,13 @@
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/gridctl/jobmonitor";
+$us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
 include_once "$us3bin/listen-config.php";
 include $class_dir . "../global_config.php";
 
-include_once "$us3bin/gridctl/cluster_probe.php";  ## ask a cluster about a job
-include_once "$us3bin/gridctl/job_state_machine.php";  ## the one implementation of "what happens to this job"
+include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
+include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
 include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include_once "$us3jm/cleanup_job.php";
