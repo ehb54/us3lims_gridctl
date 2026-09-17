@@ -14,10 +14,7 @@ $listen_port = 12233;
 $dbhost      = "localhost";
 $servhost    = "uslims.uleth.ca";
 $self        = basename( $_SERVER['PHP_SELF'] );
-$class_dir_p = '/srv/www/htdocs/common/class/';        // Class dir for production
-$class_dir_d = '/srv/www/htdocs/common/class_devel/';  // Class dir for development
-$class_dir_l = '/srv/www/htdocs/common/class_local/';  // Class dir for local
-$class_dir   = $class_dir_p;                           // Class dir default
+$class_dir   = '/srv/www/htdocs/common/class/';
 
 // Global DB credentials
 $guser       = "gfac";
@@ -35,17 +32,17 @@ $org_name    = "UltraScan3 Admin";
 $org_domain  = "uleth.ca";
 $admin_email = "us3-admin@biophysics.uleth.ca";
 
-// This is really a library routine
-
 date_default_timezone_set( 'America/Chicago' );
 
-function write_log( $message )
-{
-   global $logfile;
-
-   $log = fopen( $logfile, "a" );
-   fwrite( $log, date( "Y-m-d H:i:s " ) . $message . "\n" );
-   fclose( $log );
-}
+$logging_level = 2;
+$errors = '';
+$db_handle = null;
+## This file is deployed into ~us3/lims/bin, which is either the gridctl
+## checkout itself (Ansible) or its parent (USiaB installer, dev stack), so
+## the helpers are alongside in one layout and one level down in the other.
+$listen_functions = __DIR__ . "/gridctl/listen_functions.php";
+if ( ! file_exists( $listen_functions ) )
+   $listen_functions = __DIR__ . "/listen_functions.php";
+require_once $listen_functions;
 
 ?>

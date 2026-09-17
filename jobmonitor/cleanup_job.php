@@ -1,14 +1,16 @@
 <?php
 /*
- * cleanup_gfac.php
+ * cleanup_job.php
  *
- * functions relating to copying results and cleaning up the gfac DB
+ * Functions for copying results and cleaning up the job tracking DB
+ * after a Slurm job completes.
  *
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
-$me              = 'cleanup_gfac.php';
+
+$me              = 'cleanup_job.php';
 $email_address   = '';
 $queuestatus     = '';
 $jobtype         = '';
@@ -16,7 +18,19 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function gfac_cleanup( $us3_db, $reqID, $db_handle )
+## Guarded fallback in case listen-config.php didn't already define this.
+## Must run before job_cleanup() below makes its first call.
+if ( ! function_exists( 'write_logld' ) ) {
+   function write_logld( $msg, $this_level = 0 ) {
+      global $logging_level;
+      global $self;
+      if ( ! isset( $logging_level ) || $logging_level >= $this_level ) {
+         write_log( ( isset( $self ) ? "$self: " : '' ) . $msg );
+      }
+   }
+}
+
+function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
    global $user;
@@ -42,7 +56,7 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    write_logld( "$me: debug db=$db; requestID=$requestID" );
 
    ## First get basic info for email messages
-   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID=$requestID";
    $result = mysqli_query( $db_handle, $query );
 
@@ -56,20 +70,14 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
 
-   $query  = "SELECT personID FROM ${us3_db}.people " .
+   $query  = "SELECT personID FROM {$us3_db}.people " .
              "WHERE personGUID='$investigatorGUID'";
    $result = mysqli_query( $db_handle, $query );
 
    list( $personID ) = mysqli_fetch_array( $result );
 
-   /*
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
-             "FROM ${us3_db}.HPCAnalysisRequest h LEFT JOIN ${us3_db}.HPCAnalysisResult "            .
-             "ON h.HPCAnalysisRequestID=HPCAnalysisResult.HPCAnalysisRequestID " .
-             "WHERE h.HPCAnalysisRequestID=$requestID";
-   */
    $query  = "SELECT clusterName, submitTime, queueStatus, analType "            .
-             "FROM ${us3_db}.HPCAnalysisRequest h, ${us3_db}.HPCAnalysisResult r "                   .
+             "FROM {$us3_db}.HPCAnalysisRequest h, {$us3_db}.HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
 
@@ -91,8 +99,8 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
-   ## Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM ${us3_db}.HPCAnalysisResult " .
+   ## Get the scheduler job ID recorded for this request.
+   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
    $result = mysqli_query( $db_handle, $query );
@@ -107,8 +115,7 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
-   ########
-   ## Get data from global GFAC DB and insert it into US3 DB
+   ## Reconnect, this time to the central job-tracking database.
    $db_handle = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
    if ( ! $db_handle )
@@ -134,9 +141,12 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## Row vanished: another worker (the per-minute gridctl.php cron sweep
+      ## and the per-job jobmonitor.php daemon both race for this job) already
+      ## finished the cleanup and deleted it. Follow resolve_and_cleanup_job()'s
+      ## contract (1 = finalized / nothing to do) rather than reporting FAILED.
+      write_logld( "$me: analysis row for $gfacID already removed by a concurrent cleanup; nothing to do" );
+      return( 1 );
    }
 ##else
 ##{
@@ -144,25 +154,22 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 ##}
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
-##write_logld( "$me:     db=$db; requestID=$requestID; status=$status; cluster=$cluster" );
 
-##   if ( $cluster == 'bcf-local'  ||  $cluster == 'alamo-local' )
-   if ( preg_match( "/\-local/", $cluster )  ||
-        preg_match( "/us3iab/",  $cluster ) )
+   ## Stage the job's stderr/stdout/results tar into its job-tracking row. This is
+   ## the only writer of those columns, and the SELECT below fails the job
+   ## outright ("Failed data fetch") if tarfile comes back empty, so this must
+   ## run for every cluster, not just co-located ones.
+   ## -1 means the cluster could not be reached, so we do not yet know whether
+   ## the results exist. Return 0 ("not yet finalizable") so resolve_and_cleanup_job()
+   ## hands control back to the jobmonitor poll loop and we ask again in 30s,
+   ## rather than persisting empty result columns and failing the job. The
+   ## existing $global_complete_max_seconds ceiling still force-finalizes a job
+   ## that stays unfetchable, so this cannot hold a job open forever.
+   if ( get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID ) === -1 )
    {
-##      $clushost = $cluster;
-##      $clushost = preg_replace( "/\-local/", "", $clushost );
-      $parts    = explode( "-", $cluster );
-      $clushost = $parts[ 0 ];
-      if ( $cluster == "us3iab-node1" ) {
-          get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
-      } else {
-          get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
-      }
-write_logld( "$me:     clushost=$clushost  reqID=$requestID get_local_files() gfacID=$gfacID" );
+      write_logld( "$me: results for $gfacID not retrievable right now (cluster unreachable); will retry" );
+      return( 0 );
    }
-else
-write_logld( "$me:     NO get_local_files()" );
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
@@ -180,9 +187,10 @@ write_logld( "$me:     NO get_local_files()" );
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## Same concurrent-cleanup race as above -- the competing worker
+      ## deleted the row between our two SELECTs. Not a failure.
+      write_logld( "$me: analysis row for $gfacID removed by a concurrent cleanup mid-run; nothing to do" );
+      return( 1 );
    }
 
    list( $analysisID, $stderr, $stdout, $tarfile ) = mysqli_fetch_array( $result );
@@ -192,11 +200,15 @@ write_logld( "$me:     NO get_local_files()" );
       write_logld( "$me: Successful data fetch: $requestID $gfacID" );
    }
    else
-   {  ## Log failure at fetch attempt
+   {  ## The cluster was reachable and has no results tar for this job, so the
+      ## job really did produce nothing. get_local_files() has already returned
+      ## 0 above for the unreachable case, so reaching here means this is a
+      ## genuine result, not an outage -- which is what makes it safe to tell
+      ## the user their job produced no results.
       update_autoflow_status( 'FAILED', "Failed data fetch" );
       write_logld( "$me: Failed data fetch: $requestID $gfacID" );
-      if ( $analysisID == '' )
-         $analysisID = '0';
+      mail_to_user( "fail", "No results tarfile" );
+      return( -1 );
    }
 
    ## Save queue messages for post-mortem analysis
@@ -228,6 +240,14 @@ write_logld( "$me:     NO get_local_files()" );
 
    $need_finish = ( $status == 'COMPLETE' );
 
+   ## us_mpi_analysis prints "Us_Mpi_Analysis has finished successfully" to
+   ## stdout on completion (parallel_masters.cpp, pmasters_compjob.cpp,
+   ## us_mpi_analysis.cpp) -- treat it as an immediate finish signal instead of
+   ## always falling through to the queue_messages check and grace-period
+   ## timeout below.
+   if ( $need_finish && preg_match( "/^Us_Mpi_Analysis has finished successfully/m", $stdout ) )
+      $need_finish = false;
+
    if ( mysqli_num_rows( $result ) > 0 )
    {
       while ( list( $message, $time ) = mysqli_fetch_array( $result ) )
@@ -239,11 +259,10 @@ write_logld( "$me:     NO get_local_files()" );
       }
 
       if ( $need_finish )
-      {  ## No UDP 'Finished' message yet.  UDP is unreliable, so finalize
-         ## anyway once enough time has passed since the job was first seen
-         ## COMPLETE.  Timing uses the jobmonitor's own clock (epoch seconds),
-         ## so it is immune to any timezone/clock skew between the LIMS host,
-         ## the cluster, and the DB (which broke the old strtotime() check).
+      {  ## No 'Finished' message yet -- finalize anyway once enough time has
+         ## passed since the job was first seen COMPLETE. Timing uses the
+         ## jobmonitor's own clock (epoch seconds) to stay immune to
+         ## timezone/clock skew between the LIMS host, cluster, and DB.
          $grace = isset( $global_complete_grace_seconds ) ? (int) $global_complete_grace_seconds : 600;
          $ceil  = isset( $global_complete_max_seconds )   ? (int) $global_complete_max_seconds   : 21600;
          $seen  = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
@@ -325,7 +344,7 @@ write_logld( "$me:     NO get_local_files()" );
    ## move to end (where we email the user)
    ## update_autoflow_status( $status, $queue_msg );
 
-   ## Delete data from GFAC DB
+   ## Delete the completed central job-tracking records.
    $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
@@ -337,11 +356,12 @@ write_logld( "$me:     NO get_local_files()" );
    }
 write_logld( "$me: GFAC DB entry deleted" );
 
-   ## Copy queue messages to LIMS submit directory (files there are deleted after 7 days)
+   ## Write the accumulated message log to the LIMS submit directory (files
+   ## there are deleted after 7 days).
    global $submit_dir;
    
    ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT HPCAnalysisRequestGUID FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
    $result = mysqli_query( $db_handle, $query );
    
@@ -356,7 +376,7 @@ write_logld( "$me: Output dir determined: $output_dir" );
 
    ## Try to create it if necessary, and write the file
    ## Let's use FILE_APPEND, in case this is the second time around and the 
-   ##  GFAC job status was INSERTed, rather than UPDATEd
+   ##  job status was INSERTed, rather than UPDATEd
    if ( ! is_dir( $output_dir ) )
       mkdir( $output_dir, 0775, true );
    $message_filename = "$output_dir/$db-$requestID-messages.txt";
@@ -364,10 +384,8 @@ write_logld( "$me: Output dir determined: $output_dir" );
   ## mysqli_close( $db_handle );
 write_logld( "$me: *messages.txt written" );
 
-   ########/
-   ## Insert data into HPCAnalysis
-
-   $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "                              .
+   ## Update HPCAnalysisResult with the job's stdout/stderr.
+   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "                              .
             "stderr='" . mysqli_real_escape_string( $db_handle, $stderr ) . "', " .
             "stdout='" . mysqli_real_escape_string( $db_handle, $stdout ) . "' "  .
             "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
@@ -383,14 +401,6 @@ write_logld( "$me: *messages.txt written" );
    }
 
    ## Save the tarfile and expand it
-
-   if ( strlen( $tarfile ) == 0 )
-   {
-      write_logld( "$me: No tarfile" );
-      update_autoflow_status( 'FAILED', "Empty results tarfile" );
-      mail_to_user( "fail", "No results" );
-      return( -1 );
-   }
 
    ## Shouldn't happen
    if ( ! is_dir( "$work" ) )
@@ -465,7 +475,7 @@ write_logld( "$me: *messages.txt written" );
          $statistics  = parse_xml( $xml, 'statistics' );
          $otherdata   = parse_xml( $xml, 'id' );
 
-         $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "   .
+         $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "   .
                   "wallTime = {$statistics['walltime']}, " .
                   "CPUTime = {$statistics['cputime']}, " .
                   "CPUCount = {$statistics['cpucount']}, " .
@@ -499,11 +509,11 @@ write_logld( "$me: *messages.txt written" );
          if ( isset( $model_data[ 'editGUID' ] ) )
             $editGUID   = $model_data[ 'editGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.noise SET "  .
+         $query = "INSERT INTO {$us3_db}.noise SET "  .
                   "noiseGUID='$noiseGUID'," .
                   "modelGUID='$modelGUID'," .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=1, "             .
                   "noiseType='$type',"      .
                   "description='$desc',"    .
@@ -543,9 +553,9 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
          $modelGUID   = $mrecs_data[ 'modelGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.pcsa_modelrecs SET "  .
+         $query = "INSERT INTO {$us3_db}.pcsa_modelrecs SET "  .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=0, "             .
                   "mrecsGUID='$mrecGUID'," .
                   "description='$desc',"    .
@@ -582,6 +592,28 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $modelGUID   = $model_data[ 'modelGUID' ];
          $editGUID    = $model_data[ 'editGUID' ];
 
+         ## A superglobal result describes the request as a whole, so
+         ## us_mpi_analysis intentionally writes the nil editGUID.  The model
+         ## table still requires one editedDataID for ownership/linkage.  Bind
+         ## that request-level record to the request's primary edited file;
+         ## ordinary per-dataset models must continue to resolve their exact
+         ## editGUID.  This keeps the fallback request-scoped and avoids a
+         ## corpus-specific ID or filename.
+         if ( $editGUID == '00000000-0000-0000-0000-000000000000' )
+         {
+            $request_edit_filename = mysqli_real_escape_string( $db_handle, $editXMLFilename );
+            $edited_data_selector  =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE filename='$request_edit_filename' ORDER BY editedDataID LIMIT 1)";
+         }
+         else
+         {
+            $escaped_edit_guid    = mysqli_real_escape_string( $db_handle, $editGUID );
+            $edited_data_selector =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE editGUID='$escaped_edit_guid')";
+         }
+
          if ( $mc_iteration > 1 )
          {
 ##write_logld( "$me:   MODELUpd: mc_iteration=$mc_iteration" );
@@ -592,10 +624,9 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
 write_logld( "$me:   MODELUpd: O:description=$description" );
          }
 
-         $query = "INSERT INTO ${us3_db}.model SET "       .
+         $query = "INSERT INTO {$us3_db}.model SET "       .
                   "modelGUID='$modelGUID',"      .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "editedDataID=$edited_data_selector," .
                   "description='$description',"  .
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
@@ -618,13 +649,13 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
          update_autoflow_models( $modelID, $modelGUID, $editGUID );
 
-         $query = "INSERT INTO ${us3_db}.modelPerson SET " .
+         $query = "INSERT INTO {$us3_db}.modelPerson SET " .
                   "modelID=$modelID, personID=$personID";
          $result = mysqli_query( $db_handle, $query );
 ##write_logld( "$me:   model file inserted into DB : id=$id" );
       }
 
-      $query = "INSERT INTO ${us3_db}.HPCAnalysisResultData SET "       .
+      $query = "INSERT INTO {$us3_db}.HPCAnalysisResultData SET "       .
                "HPCAnalysisResultID='$HPCAnalysisResultID', " .
                "HPCAnalysisResultType='$file_type', "         .
                "resultID=$id";
@@ -648,11 +679,11 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $noiseIDs as $noiseID )
    {
       $modelGUID = $modelGUIDs[ $noiseID ];
-      $query = "UPDATE ${us3_db}.noise SET "                                                 .
+      $query = "UPDATE {$us3_db}.noise SET "                                                 .
                "editedDataID="                                                     .
-               "(SELECT editedDataID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')," .
+               "(SELECT editedDataID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')," .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE noiseID=$noiseID";
 
       $result = mysqli_query( $db_handle, $query );
@@ -673,9 +704,9 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $mrecsIDs as $mrecsID )
    {
       $modelGUID = $rmodlGUIDs[ $mrecsID ];
-      $query = "UPDATE ${us3_db}.pcsa_modelrecs SET "                                                 .
+      $query = "UPDATE {$us3_db}.pcsa_modelrecs SET "                                                 .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE mrecsID=$mrecsID";
 
       $result = mysqli_query( $db_handle, $query );
@@ -694,18 +725,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## Copy results to LIMS submit directory (files there are deleted after 7 days)
    global $submit_dir; ## LIMS submit files dir
 
-  ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   list( $requestGUID ) = mysqli_fetch_array( $result );
-
+   ## $requestGUID was already fetched above; reuse it here.
    chdir( "$submit_dir/$requestGUID" );
    $f = fopen( "analysis.tar", "w" );
    fwrite( $f, $tarfile );
@@ -717,9 +737,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
 ##   mysqli_close( $db_handle );
 
-   ########/
-   ## Send email 
-
+   ## Set the final status now that all model records are written, then notify the user.
    update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
 
@@ -742,7 +760,7 @@ function get_autoflow_type_id() {
 
     ## get autoflow running submission type
 
-    $query = "SELECT statusJson,autoflowID from ${us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
+    $query = "SELECT statusJson,autoflowID from {$us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
     echo "query : $query\n";
 
     $result = mysqli_query( $db_handle, $query );
@@ -783,7 +801,7 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     ## get editeddataID for editGUID
 
-    $query = "SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID'";
+    $query = "SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID'";
 
     $result = mysqli_query( $db_handle, $query );
 
@@ -803,7 +821,7 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     ## get current autoflowModelsLink
 
-    $query = "SELECT modelsDesc from ${us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+    $query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
     echo "query : $query\n";
 
     $result = mysqli_query( $db_handle, $query );
@@ -838,10 +856,10 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     if ( $result->num_rows ) {
         ## update
-        $query = "UPDATE ${us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
+        $query = "UPDATE {$us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
     } else {
         ## insert
-        $query = "INSERT INTO ${us3_db}.autoflowModelsLink"
+        $query = "INSERT INTO {$us3_db}.autoflowModelsLink"
             . " set autoflowAnalysisID=$autoflowAnalysisID"
             . " ,modelsDesc='$descenc'"
             . " ,autoflowID=$autoflowID"
