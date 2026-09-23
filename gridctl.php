@@ -3,10 +3,8 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
 include_once $class_dir . "../global_config.php";   ## $cluster_details, used by get_local_status()
-## Siblings are included relative to this file, not to ~us3/lims/bin. The two
-## deployments disagree on where the repo sits: Ansible clones it as bin/
-## itself, while the USiaB installer and the dev stack put it at bin/gridctl/.
-## Only listen-config.php is genuinely outside the repo in both.
+## Siblings are included relative to this file: the repo is bin/ under Ansible
+## and bin/gridctl/ under USiaB and the dev stack.
 include_once __DIR__ . "/cluster_probe.php";  ## ask a cluster about a job
 include_once __DIR__ . "/job_state_machine.php";  ## the one implementation of "what happens to this job"
 include_once __DIR__ . "/jobmonitor/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
@@ -38,8 +36,7 @@ if ( ! $gLink )
    exit();
 }
    
-## Both forms of the same column, deliberately. The stall clocks do integer
-## arithmetic on the epoch; the admin mail prints the human-readable form.
+## The stall clocks use the epoch; the admin mail prints the text form.
 $query = "SELECT gfacID, us3_db, cluster, status, queue_msg, " .
                 "UNIX_TIMESTAMP(time) AS update_epoch, time AS update_text, " .
                 "autoflowAnalysisID from analysis";
@@ -59,19 +56,7 @@ if ( mysqli_num_rows( $result ) == 0 )
 }
 //write_log( "$loghdr    gfac-analysis rows $nrows" );
 
-## Read by column name, not by position.
-##
-## This was a list() over mysqli_fetch_array(), which destructures positionally,
-## and the two time columns were bound to variables whose names said the
-## opposite of what they held: $time got UNIX_TIMESTAMP(time) and $updateTime
-## got the datetime string. The arithmetic below was correct only because the
-## right one happened to be passed. Renaming either variable without reading
-## the SELECT, or inserting a column anywhere in it, would have fed a datetime
-## string into timestamp arithmetic and timed out every job on the first sweep.
-##
-## Naming the variables honestly does not remove that hazard, it only relabels
-## it: the coupling is positional either way. Fetching associatively is what
-## removes it, and it is what makes the SELECT aliases above mean something.
+## Read by column name, so the two time columns cannot be swapped.
 while ( $row = mysqli_fetch_assoc( $result ) )
 {
    $gfacID       = $row[ 'gfacID' ];
@@ -99,9 +84,7 @@ echo "us3db=$us3_db  gfid=$gfacID\n";
    $status_gw  = $status;
    $status     = get_local_status( $gfacID );
 
-   // UNREACHABLE means we could not ask the cluster, so the only defensible
-   // state is the one already recorded. Falling through to the switch on a
-   // fabricated state is what turned a site outage into a wave of ERRORs.
+   // UNREACHABLE: we could not ask, so keep the recorded status.
    if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN'  ||  $status == GRIDCTL_UNREACHABLE )
       $status     = $status_gw;
 echo "$loghdr status_lo=$status\n";
@@ -169,8 +152,7 @@ write_log( "$loghdr   COMPLETE gfacID=$gfacID" );
       case "CANCELED":
       case "FAILED":
 write_log( "$loghdr   $status gfacID=$gfacID" );
-         // Pass the observed status through: a cancelled job is 'aborted' to
-         // the user and a failed one is 'failed'.
+         // Passed through: cancelled is 'aborted' to the user, failed 'failed'.
          failed( $status );
          break;
 
@@ -188,25 +170,12 @@ mysqli_close( $gLink );
 exit();
 
 ## ---------------------------------------------------------------------- ##
-## Everything below is a shim onto job_state_machine, which holds the policy
-## this sweep and the jobmonitor daemon must apply identically.
-##
-## The function names are kept because cleanup.php and cleanup_job.php call
-## update_autoflow_status(), get_us3_data() and mail_to_admin() from code
-## shared with the daemon, which has no idea which entry point included it.
+## Shims onto job_state_machine. The shared cleanup code calls these names.
 ## ---------------------------------------------------------------------- ##
 
 /**
- * The state machine for the row currently being swept.
- *
- * Rebuilt per call: the sweep walks every job in one pass, so the per-job
- * context has to be refreshed anyway, and there is no connection state worth
- * caching.
- *
- * The us3 tables are reached over their own connection. $gLink authenticates
- * as the gfac user, which is granted the gfac schema; the per-experiment us3
- * schemas belong to $user, so everything us3 goes over the us3 connection
- * rather than relying on the gfac account holding rights it should not need.
+ * The state machine for the row currently being swept. The us3 tables go over
+ * their own connection as $user; $gLink's gfac user has no rights on them.
  */
 function job_machine()
 {
@@ -247,6 +216,7 @@ function submit_timeout( $updatetime )         { return job_machine()->submit_ti
 function running( $updatetime, $queue_msg )    { return job_machine()->running( $updatetime, $queue_msg ); }
 function run_timeout( $updatetime )            { return job_machine()->run_timeout( $updatetime ); }
 function update_job_status( $job_status, $gfacID ) { return job_machine()->update_job_status( $job_status ); }
+function record_job_status( $job_status, $gfacID ) { return job_machine()->record_job_status( $job_status ); }
 function update_queue_messages( $message )     { return job_machine()->update_queue_messages( $message ); }
 function update_db( $message )                 { return job_machine()->update_db( $message ); }
 function get_us3_data()                        { return job_machine()->get_us3_data(); }
@@ -259,15 +229,9 @@ function complete()
 {
    global $gfacID;
 
-   // Record the completion in gfac.analysis BEFORE cleaning up.
-   //
-   // cleanup_job.php reads gfac.analysis.status and feeds it to
-   // update_autoflow_status(), and submitctl.php only advances a stage whose
-   // status is in $completed_status ("complete"/"done") or $failed_status.
-   // Without this write the row is still 'SUBMITTED' when cleanup reads it,
-   // so the autoflow request is stamped 'submitted', which matches neither
-   // list, and the whole multi-stage pipeline stalls there permanently.
-   update_job_status( "COMPLETE", $gfacID );
+   // cleanup_job.php reads COMPLETE back from gfac.analysis and sets the
+   // stage status once the results are imported. See record_job_status().
+   record_job_status( "COMPLETE", $gfacID );
 
    return cleanup();
 }
@@ -276,14 +240,8 @@ function failed( $job_status = 'FAILED' )
 {
    global $gfacID;
 
-   // Record the terminal status BEFORE cleaning up, for the same reasons
-   // complete() does. Without this write, update_job_status() ->
-   // update_autoflow_status() -> update_hpc_analysis_result_status() never
-   // runs, HPCAnalysisResult.queueStatus keeps whatever it had, and a job that
-   // failed while still 'queued' stays 'queued' forever.
-   //
-   // The status is passed in because the caller routes CANCELLED, CANCELED and
-   // FAILED here alike: CANCELED is 'aborted' to the user, FAILED is 'failed'.
+   // Record the terminal status everywhere before cleaning up. The caller
+   // passes it in: CANCELED is 'aborted' to the user, FAILED is 'failed'.
    update_job_status( $job_status, $gfacID );
 
    return cleanup();

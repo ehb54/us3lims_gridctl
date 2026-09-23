@@ -9,10 +9,8 @@ require "$us3bin/cluster_config.php";
 $debug         = false;
 $no_db_updates = false;
 
-## Health probes are short control commands. Keep this policy with the probe
-## implementation instead of publishing another deployment timeout knob. A
-## function is used because the unit-test loader safely extracts declarations
-## from this side-effecting script.
+## Health probes are short control commands. A function so the test loader
+## can extract it from this script.
 function cluster_status_command_timeout_seconds() {
     return 120;
 }
@@ -34,9 +32,7 @@ function error_exit( $msg ) {
     exit(-1);
 }
 
-## Locate GNU timeout(1). This is a Linux runtime requirement supplied by the
-## coreutils package, not a CMake/build dependency. See
-## remote_exec::timeout_bin() for the same resolution.
+## Locate GNU timeout(1) (coreutils). Same resolution as remote_exec::timeout_bin().
 function status_timeout_bin() {
     static $bin = null;
 
@@ -57,15 +53,9 @@ function status_timeout_bin() {
     return $bin = '';
 }
 
-## Run one probe command under a wall-clock bound.
-##
-## The per-cluster 'status' entries in cluster_config.php are raw shell strings,
-## mostly bare `ssh <host> .../status/slurm <partition>` with no timeout of
-## their own. Unbounded, one probe against a wedged login node blocks the whole
-## cron pass, so every cluster's row stops being updated and the queue-setup UI
-## keeps showing a stale 'up' for a site that is down. Bounding happens here
-## because the command itself is opaque: cluster_probe.php cannot be used, as
-## it builds its own remote invocation rather than wrapping a given one.
+## Run one probe command under a wall-clock bound, so a wedged login node
+## cannot stall the whole pass. The configured 'status' commands are opaque
+## shell strings, so they are wrapped here rather than via cluster_probe.php.
 ##
 ## Returns [ 'lines' => array, 'exit' => int, 'timed_out' => bool ].
 function run_probe( $cmd, $seconds ) {
@@ -181,10 +171,7 @@ function update( $cluster, $queued, $status, $running ) {
     $result = mysqli_query( $gfac_link, $query );
 
     if ( ! $result ) {
-        ## Do not error_exit() here. This runs in a loop over every cluster,
-        ## so aborting on the first bad write leaves every remaining cluster's
-        ## row unwritten, and the staleness check then downgrades all of them
-        ## to 'down'. Report and carry on.
+        ## Report and carry on, so one bad write does not skip the other clusters.
         fwrite( STDERR, "cluster_status: failed to record status for $cluster: "
                         . mysqli_error( $gfac_link ) . "\n" );
     }
@@ -215,12 +202,7 @@ function local_status() {
              || !is_numeric( $probe[ 'lines' ][1] )
              || !is_numeric( $probe[ 'lines' ][2] )
            ) {
-            ## The probe did not come back with a usable answer. Whether that
-            ## means the cluster is down or merely that we could not reach it
-            ## is decided by escalate_probe_failure(), because a single failed
-            ## probe against a shared HPC site is routine (a login node
-            ## refusing one connection under rate limiting) while two in a row
-            ## is a real outage.
+            ## No usable answer; escalate_probe_failure() decides warn or down.
             $sta = escalate_probe_failure( $clname, $probe );
             $run = 0;
             $que = 0;
@@ -248,18 +230,9 @@ function local_status() {
     }
 }
 
-## Decide what a failed probe means, using the previously recorded status as a
-## one-bit consecutive-failure counter.
-##
-## Not straight to 'down': against a large shared cluster a single refused
-## connection is normal background noise, and flapping to 'down' on one bad
-## probe takes the cluster out of the queue-setup UI for everyone. Not 'up'
-## either, which would let a dead site keep accepting submissions. 'warn' is
-## the intermediate state the schema already has, and a second consecutive
-## failure escalates it to 'down'.
-##
-## The escalation ladder is deliberately stored in the status column rather
-## than a new counter column, so this needs no schema migration.
+## Decide what a failed probe means: the first failure is 'warn' (one refused
+## connection is routine on a shared cluster), a second in a row is 'down'.
+## The previous status serves as the failure counter.
 function escalate_probe_failure( $cluster, $probe ) {
     global $gfac_link;
 

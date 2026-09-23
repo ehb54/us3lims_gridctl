@@ -181,12 +181,7 @@ if (
 $cluster            = $res_analysis->{"cluster"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
-## Two forms of gfac.analysis.time. $update_epoch is the integer the stall
-## clocks measure against; $updateTime is the display string the admin mail
-## prints. These were named $time and $updateTime, so the one called $time held
-## the epoch and the one called $updateTime held the text -- backwards from
-## what the names say, and correct only because the right one happened to be
-## passed to the stall functions.
+## gfac.analysis.time twice: the epoch for the stall clocks, the text for the admin mail.
 $update_epoch       = $res_analysis->{"update_epoch"};
 $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
@@ -196,13 +191,6 @@ $autoflowType       = is_object( $type_id_obj ) && isset( $type_id_obj->type ) ?
 $autoflowID         = is_object( $type_id_obj ) && isset( $type_id_obj->autoflowID ) ? $type_id_obj->autoflowID : 0;
 
 write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
-
-## debugging
-## 
-## debug_json( timestamp("analysis"), $res_analysis );
-## update_autoflow_models(1,2,"00000000-0000-0000-0000-000000000000");
-## update_autoflow_models(3,4,"a71cda5a-a8cb-41a5-9858-10c9296a3e6e");
-## exit(-1);
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );

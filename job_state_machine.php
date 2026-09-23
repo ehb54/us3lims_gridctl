@@ -2,30 +2,14 @@
 /*
  * job_state_machine.php
  *
- * The one implementation of "what should happen to this job now", shared by
- * gridctl.php (the per-minute cron sweep over gfac.analysis) and
- * jobmonitor/gridctl.php (the function library behind the per-job
- * jobmonitor.php daemon). Both act on the same rows, so whichever fires first
- * decides the outcome. The policy therefore has to be identical, which means
- * it has to live in one place.
- *
- * WHAT STAYS SEPARATE
- *
- * The two entry points are different programs and are meant to be: one is a
- * sweep that exits, the other a daemon that polls. What differs between them
- * is context, not policy. Which mysqli handle, which logger, which database
- * prefix, and whether a process lives long enough for "have I already mailed
- * the admin about this job" to mean anything. All of that is constructor
- * arguments.
- *
- * Both entry files keep the old global function names and signatures, because
- * cleanup.php and cleanup_job.php call update_autoflow_status(),
- * get_us3_data() and mail_to_admin() from shared code that does not know which
- * of the two included it. Those globals are one-line shims onto this class.
+ * Job-state policy shared by gridctl.php (the per-minute cron sweep) and
+ * jobmonitor/gridctl.php (the per-job daemon). Both act on the same rows, so
+ * the policy lives here; connections, logger and mailer are constructor
+ * arguments. Each entry file exposes the methods as global one-line shims for
+ * the shared cleanup code.
  */
 
-## $class_dir comes from listen-config.php. Guarded so a test process that has
-## already loaded cluster_probe.php by another route does not reload it.
+## Guarded so a test process that already loaded cluster_probe.php does not reload it.
 if ( ! function_exists( 'cluster_probe_job_status' ) )
 {
    require_once __DIR__ . '/cluster_probe.php';
@@ -35,28 +19,21 @@ require_once __DIR__ . '/job_status.php';
 
 class job_state_machine
 {
-   ## Statuses that mean "still waiting to start", i.e. no news. UNKNOWN is the
-   ## cluster saying it has no record; GRIDCTL_UNREACHABLE is us failing to ask.
-   ## Neither is grounds for rewriting the stored status here.
+   ## Probe answers that carry no news. UNKNOWN: the cluster has no record.
+   ## GRIDCTL_UNREACHABLE: we could not ask.
    const QUEUED_STATES  = array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN', GRIDCTL_UNREACHABLE );
    const RUNNING_STATES = array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN', GRIDCTL_UNREACHABLE );
 
-   ## Nothing is judged stalled inside this window. A job whose status was
-   ## touched in the last ten minutes is simply in progress.
+   ## A job touched within this window is never judged stalled.
    const SETTLE_SECONDS = 600;
 
    private $gfac;         ## mysqli reaching the gfac tables
    private $us3;          ## mysqli or callable returning one, for the us3 tables
    private $gfac_prefix;  ## '' when $gfac is connected to the gfac db, else 'gfac.'
    private $log;          ## callable( string )
-   ## callable( $type, $msg ). Whether a second mail about the same job is
-   ## suppressed is the entry point's business, not this class's: it depends on
-   ## whether the caller is a one-shot sweep or a daemon that lives as long as
-   ## the job does, so the deduplicating wrapper is supplied from there.
-   private $mailer;
+   private $mailer;       ## callable( $type, $msg ); the entry point handles dedup
 
-   ## Per job. Reset by for_job() on every row the sweep visits; set once by
-   ## the daemon.
+   ## Per job, set by for_job().
    private $gfacID     = '';
    private $cluster    = '';
    private $us3_db     = '';
@@ -87,14 +64,8 @@ class job_state_machine
    ## Configuration                                                      ##
    ## ----------------------------------------------------------------- ##
 
-   /**
-    * Hours a job may sit in one state before the stall clock fires.
-    *
-    * Zero or negative disables the timeout entirely, which is a supported
-    * setting: a site running jobs longer than any sensible ceiling would
-    * rather have them sit than be closed out. The sweep used to ignore this
-    * and time the job out at a hardcoded 24 hours anyway.
-    */
+   ## Hours a job may sit in one state before the stall clock fires.
+   ## Zero or negative disables the timeout.
    private function stall_hours( $global_key, $default )
    {
       $hours = isset( $GLOBALS[ $global_key ] ) ? $GLOBALS[ $global_key ] : $default;
@@ -122,11 +93,8 @@ class job_state_machine
       call_user_func( $this->mailer, $type, $msg );
    }
 
-   ## The us3 tables live in a per-experiment database and, in the sweep, are
-   ## reached over a different connection than the gfac tables: the sweep's
-   ## gfac handle authenticates as the gfac user, which is not the account the
-   ## us3 schemas are granted to. Resolved lazily so a pass that never touches
-   ## a us3 table never opens the connection.
+   ## In the sweep the us3 schemas need their own connection (the gfac user has
+   ## no rights on them). Opened lazily, on first use.
    private function us3()
    {
       if ( is_callable( $this->us3 ) )
@@ -145,9 +113,7 @@ class job_state_machine
       return $this->us3_db . '.' . $name;
    }
 
-   ## Run a statement and log rather than throw on failure. Every caller here
-   ## is a status update on a best-effort path: losing one must not take the
-   ## sweep or the daemon down with it.
+   ## Best-effort: log a failed statement rather than abort the sweep or daemon.
    protected function exec( $handle, $query )
    {
       $result = mysqli_query( $handle, $query );
@@ -163,10 +129,8 @@ class job_state_machine
       return mysqli_real_escape_string( $handle, $value );
    }
 
-   ## The three mysqli calls that are not statement execution, given their own
-   ## names so a test double can stand in for the database without one. Every
-   ## database access in this class goes through exec(), quote(), fetch_row()
-   ## or num_rows() and nothing else.
+   ## All database access goes through exec(), quote(), fetch_row() and
+   ## num_rows(), so a test double can replace the database.
    protected function fetch_row( $result )
    {
       return mysqli_fetch_array( $result );
@@ -186,10 +150,7 @@ class job_state_machine
    ## Asking the cluster                                                 ##
    ## ----------------------------------------------------------------- ##
 
-   /**
-    * May return GRIDCTL_UNREACHABLE, which is NOT a job state: it means the
-    * cluster could not be asked. Every caller must leave the job alone then.
-    */
+   ## May return GRIDCTL_UNREACHABLE, which is not a job state: leave the job alone.
    public function get_local_status()
    {
       $log    = $this->log;
@@ -200,34 +161,20 @@ class job_state_machine
       return $status;
    }
 
-   /**
-    * Returns true only when scancel was actually delivered.
-    *
-    * Both entry points call this now. The sweep never used to, so whether a
-    * timed-out job was really stopped depended on which worker reached it
-    * first; the loser's jobs kept running and kept burning allocation while
-    * the LIMS recorded them as timed out.
-    */
-   ## Is the cluster answering at all? Its own seam so the stall policy can be
-   ## tested against an outage without one.
+   ## Is the cluster answering at all? Overridable for tests.
    protected function reachable()
    {
       return cluster_probe_reachable( $this->cluster, $this->log );
    }
 
+   ## True only when scancel was actually delivered.
    public function cancel_local_job()
    {
       return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log );
    }
 
-   /**
-    * Should a stall clock be allowed to fire? Returns 'proceed', 'defer' or
-    * 'abandon'.
-    *
-    * Thin wrapper over cluster_probe_outage_verdict(), which carries the
-    * explanation of why an unreachable cluster defers and why the deferral
-    * needs a ceiling.
-    */
+   ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see
+   ## cluster_probe_outage_verdict().
    public function outage_timeout_verdict( $what, $updatetime )
    {
       $verdict = cluster_probe_outage_verdict(
@@ -246,20 +193,10 @@ class job_state_machine
       return 'defer';
    }
 
-   /**
-    * Close a job out because its cluster has been unreachable past the ceiling.
-    *
-    * $enum_status must be a value gfac.analysis.status actually accepts,
-    * SUBMIT_TIMEOUT or RUN_TIMEOUT. There is deliberately no UNREACHABLE
-    * member: adding one needs a schema migration, and a timeout describes what
-    * happened well enough. The distinction that matters to a human lives in
-    * the message and in the autoflow status, which is free text and so can
-    * carry CLUSTER_UNAVAILABLE, the thing that tells an operator to look at
-    * the site rather than at the job.
-    *
-    * No cancel here, unlike the ordinary timeout paths: the cluster is
-    * unreachable by definition, so there is nothing to send scancel to.
-    */
+   ## Close out a job whose cluster has been unreachable past the ceiling.
+   ## $enum_status is SUBMIT_TIMEOUT or RUN_TIMEOUT (the ENUM has no
+   ## UNREACHABLE); the message says what really happened. No cancel: there is
+   ## no cluster to send it to.
    public function abandon_for_outage( $enum_status, $what )
    {
       $hours   = $this->abandon_hours();
@@ -283,14 +220,8 @@ class job_state_machine
    ## The stall clocks                                                   ##
    ## ----------------------------------------------------------------- ##
 
-   /**
-    * The tail shared by all four stall paths: decide whether the clock may
-    * fire, and if so close the job out.
-    *
-    * Returns without acting while the job is still inside its window, or when
-    * the window is disabled, or when the cluster is unreachable and the
-    * abandonment ceiling has not been passed.
-    */
+   ## Shared by the four stall paths: close the job out once its window has
+   ## passed, unless the window is disabled or the outage verdict defers.
    private function fire_stall( $updatetime, $window_seconds, $enum_status, $what, $message )
    {
       if ( $window_seconds <= 0 )
@@ -320,22 +251,12 @@ class job_state_machine
       $this->update_db( $message );
       $this->update_autoflow_status( $enum_status, $message );
 
-      ## The verdict above came back 'proceed', which means the cluster
-      ## answered a moment ago, so there is something there to cancel against.
-      ## The sweep never used to do this and the daemon always did, so whether
-      ## a timed-out job was really stopped came down to which won the race.
+      ## 'proceed' means the cluster just answered, so the cancel can land.
       $this->cancel_local_job();
    }
 
-   /**
-    * Ask the cluster where the job actually is, and record any answer that
-    * contradicts the status we are holding. $live_states are the answers that
-    * mean "no news", including the two that are not job states at all:
-    * UNKNOWN (the cluster has no record) and GRIDCTL_UNREACHABLE (we never got
-    * to ask). Neither is grounds for rewriting anything.
-    *
-    * Returns true when the job has moved on and the caller should stop.
-    */
+   ## Record the cluster's answer unless it is one of $live_states ("no news").
+   ## Returns true when the job has moved on and the caller should stop.
    private function reconcile( $live_states, $what )
    {
       $job_status = $this->get_local_status();
@@ -358,8 +279,7 @@ class job_state_machine
       if ( $updatetime + self::SETTLE_SECONDS > time() )
          return;
 
-      ## Inside the window there is nothing to decide yet, but it is still
-      ## worth asking whether the job has moved on.
+      ## Inside the window: just check whether the job has moved on.
       if ( $window > 0 && $updatetime + $window > time() )
       {
          $this->reconcile( self::QUEUED_STATES, 'submitted' );
@@ -375,7 +295,7 @@ class job_state_machine
    {
       $hours = $this->stall_hours( 'global_max_queue_time_hours', 24 );
 
-      ## Already moved on: the first timeout was premature and the job is fine.
+      ## Moved on: the first timeout was premature.
       if ( $this->reconcile( self::QUEUED_STATES, 'submit timeout' ) )
          return;
 
@@ -423,32 +343,19 @@ class job_state_machine
    ## Writing status                                                     ##
    ## ----------------------------------------------------------------- ##
 
-   /**
-    * Record a status the cluster reported.
-    *
-    * The switch this replaced did three jobs at once: it normalised aliases,
-    * it chose a user-facing message, and it handed the same string to three
-    * columns that speak three different vocabularies. That last part is what
-    * put FINISHED and DONE into an ENUM that has no such members, and what
-    * left every timed-out autoflow pipeline hanging. Normalisation now happens
-    * once, in job_status.php, and each column is written in its own words.
-    */
+   ## Record a status the cluster reported, in gfac.analysis and on the LIMS
+   ## side. Each column gets its own vocabulary via job_status.php.
    public function update_job_status( $job_status )
    {
       $this->logf( "update_job_status( '$job_status', '{$this->gfacID}' )" );
 
       $log    = $this->log;
-      ## 'ERROR' rather than the default: a status we cannot parse is a real
-      ## condition an operator needs recorded, not one to pass over quietly.
+      ## An unparseable status is recorded as ERROR rather than ignored.
       $status = job_status_normalise( $job_status, $log, 'ERROR' );
 
       if ( $status === null )
       {
-         ## Nothing was learned about the job. GRIDCTL_UNREACHABLE is the
-         ## important case: the previous status is the best information we
-         ## have, and the next pass will ask again. Collapsing this into
-         ## UNKNOWN is what errored out thousands of healthy jobs during the
-         ## outage this work started from.
+         ## Nothing learned (e.g. cluster unreachable): keep the previous status.
          $this->logf( "status '$job_status' says nothing about the job, leaving it untouched" );
          $this->update_queue_messages( "Cluster unreachable; job status could not be checked" );
          return;
@@ -469,10 +376,42 @@ class job_state_machine
       $this->update_autoflow_status( $status, $message !== null ? $message : $status );
    }
 
-   /**
-    * The sentence a user sees for a job status, or null when the transition is
-    * bookkeeping they should not be notified about.
-    */
+   ## Record a status in gfac.analysis without touching the stage or queue
+   ## status, which submitctl.php acts on. Used by complete(): cleanup sets
+   ## those after importing the results. Messages are written only on a change,
+   ## since complete() repeats every poll while cleanup waits.
+   public function record_job_status( $job_status )
+   {
+      $this->logf( "record_job_status( '$job_status', '{$this->gfacID}' )" );
+
+      $status = job_status_normalise( $job_status, $this->log, 'ERROR' );
+
+      if ( $status === null )
+         return null;
+
+      $analysis = $this->gfac_table( 'analysis' );
+      $result   = $this->exec( $this->gfac,
+         "SELECT status FROM $analysis WHERE gfacID='{$this->gfacID}'" );
+      $row      = $result ? $this->fetch_row( $result ) : null;
+
+      if ( $row && $row[ 0 ] === $status )
+         return $status;
+
+      $this->exec( $this->gfac,
+         "UPDATE $analysis SET status='$status' WHERE gfacID='{$this->gfacID}'" );
+
+      $message = $this->status_message( $status );
+
+      if ( $message !== null )
+      {
+         $this->update_queue_messages( $message );
+         $this->update_db( $message );
+      }
+
+      return $status;
+   }
+
+   ## The sentence a user sees for a status, or null for bookkeeping ones.
    private function status_message( $status )
    {
       switch ( $status )
@@ -527,10 +466,7 @@ class job_state_machine
          . "WHERE gfacID = '{$this->gfacID}' AND HPCAnalysisRequestID = '$requestID'" );
    }
 
-   /**
-    * Look up this job's HPCAnalysisRequestID. Returns it, or 0 when it cannot
-    * be found.
-    */
+   ## This job's HPCAnalysisRequestID, or 0 when it cannot be found.
    public function get_us3_data()
    {
       $us3 = $this->us3_link();
@@ -563,15 +499,6 @@ class job_state_machine
       if ( ! $row )
          return 0;
 
-      ## Deliberately does NOT touch $GLOBALS['updateTime'].
-      ##
-      ## The old code assigned HPCAnalysisResult's UNIX_TIMESTAMP(updateTime)
-      ## to that global, which both entry points' mail_to_admin() prints as
-      ## "Update Time". Two things were wrong with it. The global otherwise
-      ## holds gfac.analysis.time as a datetime string, so after this ran the
-      ## admin mail printed a bare epoch instead. And it is a different column
-      ## of a different table, so the mail silently changed which event it was
-      ## reporting depending on whether this function had happened to run yet.
       list( $requestID ) = $row;
 
       return $requestID;
@@ -581,20 +508,13 @@ class job_state_machine
    {
       $this->logf( "update_autoflow_status() id {$this->autoflowID} status $status message $message" );
 
-      ## Normalise at the boundary. cleanup_job.php and the other shared
-      ## callers pass whatever word is to hand, including scheduler spellings
-      ## like COMPLETED, and the maps below are defined over the JOB
-      ## vocabulary only.
+      ## Callers pass scheduler spellings too (COMPLETED); the maps want job words.
       $status = job_status_normalise( $status, $this->log );
 
       if ( $status === null )
          return;
 
-      ## Independent of the autoflow linkage below. This is the only status
-      ## update a non-autoflow (HPCAnalysisRequest-only, e.g. DMGA/GA)
-      ## submission ever gets when a job fails before it can self-report via
-      ## manage-us3-pipe.php's UDP listener. Without it, queueStatus stays
-      ## 'queued' forever on failure for those submissions.
+      ## Non-autoflow submissions (DMGA/GA) get their status only through this.
       $this->update_hpc_analysis_result_status( $status );
 
       if ( $this->autoflowID <= 0 )
@@ -608,10 +528,7 @@ class job_state_machine
       if ( ! $us3 )
          return;
 
-      ## The stage column is submitctl.php's, not ours. It gets the stage word
-      ## for this job status, never the job word: submitctl lowercases what it
-      ## finds and matches fixed lists, so a JOB value like SUBMIT_TIMEOUT
-      ## matched nothing and left the request in "processing" forever.
+      ## submitctl.php matches this column against fixed stage words.
       $stage = stage_status_from_job( $status, $this->log );
 
       if ( $stage === null )
@@ -625,11 +542,7 @@ class job_state_machine
          . " AND NOT status RLIKE '^(failed|error|canceled)$'" );
    }
 
-   /**
-    * Record what the scientist sees. queue_status_from_job() owns the mapping;
-    * a status with no user-facing equivalent leaves the column alone rather
-    * than guessing.
-    */
+   ## The status the scientist sees; left alone when there is no mapping.
    public function update_hpc_analysis_result_status( $status )
    {
       $status = job_status_normalise( $status, $this->log );

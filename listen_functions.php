@@ -39,21 +39,26 @@ if ( !function_exists( 'debug_json' ) ) {
     }
 }
 
+// Used by jobmonitor.php's fatal messages. esign.php declares its own.
+if ( !function_exists( 'timestamp' ) ) {
+    function timestamp( $msg = "" ) {
+        return date( "Y-m-d H:i:s " ) . $msg;
+    }
+}
+
 function open_db() {
     global $db_handle, $dbhost, $user, $passwd;
     $db_handle = mysqli_connect( $dbhost, $user, $passwd );
     if ( ! $db_handle ) error_exit( "Cannot connect to database at $dbhost" );
 }
 
-// Named distinctly from submitone.php's own local db_obj_result() (2 args,
-// always exits on missing rows): both get loaded into the same PHP process
-// when submitone.php includes this file, and PHP has no per-file function
-// scoping, so a shared name here fatals with "Cannot redeclare".
+// Not db_obj_result(): submitone.php declares its own and includes this file.
 function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false ) {
     $result = mysqli_query( $db_handle, $query );
     if ( $result === false ) {
         if ( $die_on_error ) error_exit( "Query failed: $query\n" . mysqli_error( $db_handle ) );
         return false;
     }
-    return $return_obj ? mysqli_fetch_object( $result ) : $result;
+    // false for no rows (mysqli gives null); jobmonitor.php exits on false.
+    return $return_obj ? ( mysqli_fetch_object( $result ) ?? false ) : $result;
 }

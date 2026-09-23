@@ -388,17 +388,8 @@ while( 1 ) {
 
 
 /**
- * Cancel the job a failed stage left behind.
- *
- * The cancel has to be both routed and checked: the stage is recorded as
- * failed and cleaned up either way, so a cancel that quietly did not land
- * leaves a job running on the cluster with nothing pointing at it.
- * remote_exec decides local versus ssh from the cluster's own configuration,
- * so there is no branch here, and the result is reported.
- *
- * The budget is short and unretried. This runs inside a control loop over
- * every pending request, and the circuit breaker means that once a cluster has
- * failed a few times the remaining rows in the pass cost nothing at all.
+ * Cancel the job a failed stage left behind, and report whether it landed.
+ * Short and unretried: this runs inside the loop over every pending request.
  */
 function cancel_stage_job( $gfacID, $cluster_default ) {
     global $db_handle;
@@ -433,9 +424,7 @@ function cancel_stage_job( $gfacID, $cluster_default ) {
         function ( $m ) { write_logls( $m, 1 ); } );
 
     if ( ! $ok ) {
-        ## Worth saying out loud. The stage is about to be recorded as failed
-        ## and cleaned up either way, so if the cancel did not land this is the
-        ## only trace that a job may still be running on the cluster.
+        ## The only trace that a job may still be running on the cluster.
         write_logls( "cancel of {$gfacID} on {$cluster} was not confirmed;"
                      . " the job may still be running", 0 );
     }

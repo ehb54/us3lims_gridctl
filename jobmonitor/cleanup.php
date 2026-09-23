@@ -14,11 +14,8 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-## Shared glue for gridctl.php's cron sweep and jobmonitor/gridctl.php's
-## per-job watcher: both call this from their own cleanup() so the
-## gfacID-exists check, requestID lookup, and job_cleanup() dispatch/return
-## live in one place instead of two independently-maintained copies.
-## Contract: -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
+## Called by both the cron sweep's and the daemon's cleanup().
+## Returns -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
 {
    $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
@@ -38,19 +35,8 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       return 1;          ## gfacID no longer tracked: nothing to do
    }
 
-   ## Claim this job before doing any work. Two independent workers reach
-   ## here for the same gfacID -- the per-minute gridctl.php cron sweep
-   ## (/etc/cron.d/uslims, which takes no lock of its own) and the per-job
-   ## jobmonitor.php daemon (whose lock only excludes other jobmonitors).
-   ##
-   ## Without a claim both can pass the row-exists check above and both run
-   ## job_cleanup(), which issues plain INSERTs (model, noise,
-   ## pcsa_modelrecs, modelPerson, HPCAnalysisResultData -- no REPLACE, no
-   ## ON DUPLICATE KEY), so a double run duplicates imported result rows in
-   ## the LIMS database.
-   ##
-   ## mkdir() is atomic on POSIX, so exactly one worker gets the claim; the
-   ## loser returns "nothing to do" rather than racing.
+   ## The cron sweep and the daemon both reach here for the same job, and
+   ## job_cleanup() imports with plain INSERTs, so only the claim holder runs it.
    $claim = cleanup_claim_path( $us3_db, $gfacID );
 
    if ( ! cleanup_claim_acquire( $claim, $log_fn ) )
@@ -76,8 +62,9 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    }
 }
 
-## Directory used as the cross-worker cleanup claim for one job.
-function cleanup_claim_path( $us3_db, $gfacID )
+## Per-job directory under the job log tree; jobmonitor.php's $lock_dir.
+## The cron sweep does not set $ll_base_dir, hence the fallback.
+function cleanup_job_dir( $us3_db, $gfacID )
 {
    global $ll_base_dir;
 
@@ -85,16 +72,48 @@ function cleanup_claim_path( $us3_db, $gfacID )
            ? $ll_base_dir
            : ( exec( "ls -d ~us3/lims" ) . "/etc/joblog" );
 
-   return "$base/$us3_db/$gfacID/cleanup.claim";
+   return "$base/$us3_db/$gfacID";
 }
 
-## Atomically take the claim. Returns true if this process now owns it.
-##
-## A crashed worker would otherwise leave the claim behind and block cleanup
-## for that job forever, so a claim older than the stale threshold is taken
-## over. The threshold is generous: job_cleanup() does several scp fetches
-## with sleep/backoff, so a legitimately slow run can hold the claim for
-## minutes.
+## Directory used as the cross-worker cleanup claim for one job.
+function cleanup_claim_path( $us3_db, $gfacID )
+{
+   return cleanup_job_dir( $us3_db, $gfacID ) . "/cleanup.claim";
+}
+
+## Seconds since cleanup first found this job not yet finalizable. The first
+## call starts the clock, persisted in $seen_file across polls and sweeps.
+function cleanup_pending_seconds( $seen_file )
+{
+   $seen = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
+
+   if ( $seen <= 0 )
+   {
+      $seen = time();
+      @mkdir( dirname( $seen_file ), 0770, true );
+      @file_put_contents( $seen_file, $seen );
+   }
+
+   return time() - $seen;
+}
+
+## How long cleanup retries a job before finalizing it anyway.
+function cleanup_complete_ceiling()
+{
+   global $global_complete_max_seconds;
+
+   return isset( $global_complete_max_seconds ) ? (int) $global_complete_max_seconds : 21600;
+}
+
+## Keep retrying a job whose cluster is unreachable? True until the ceiling.
+function cleanup_retry_unreachable( $seen_file )
+{
+   return cleanup_pending_seconds( $seen_file ) <= cleanup_complete_ceiling();
+}
+
+## Atomically take the claim (mkdir). Returns true if this process now owns
+## it. A claim older than an hour is assumed to be from a crashed worker and
+## taken over; a slow but live cleanup can hold it for minutes.
 function cleanup_claim_acquire( $claim, $log_fn )
 {
    $stale_seconds = 3600;
@@ -142,8 +161,7 @@ function mail_to_user( $type, $msg )
 global $me;
 write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
-   ## Read the stored job status and message. The helper retains its historical
-   ## name because it is part of the gridctl compatibility surface.
+   ## Read the stored job status and message.
    $gfac_message = get_gfac_message( $gfacID );
    if ( $gfac_message === false ) $gfac_message = "Job Finished";
       
@@ -262,7 +280,7 @@ function parse_xml( $xml, $type )
    return $results;
 }
 
-## Compatibility helper for historical externally assigned analysis IDs.
+## Recognises externally assigned analysis IDs.
 function get_gfac_message( $gfacID )
 {
   global $serviceURL;
@@ -272,7 +290,7 @@ function get_gfac_message( $gfacID )
   if ( ! preg_match( "/^US3-Experiment/i", $gfacID ) &&
        ! preg_match( "/^US3-$hex{8}-$hex{4}-$hex{4}-$hex{4}-$hex{12}$/", $gfacID ) )
    {
-      ## This is not one of the historical external analysis-ID formats.
+      ## Not an external analysis-ID format.
       return false;
    }
 
@@ -310,39 +328,11 @@ function parse_message( $xml )
    return $gfac_message;
 }
 
-## Stage a finished job's stderr, stdout and analysis-results.tar off the
-## cluster and into its central job-tracking row.
-##
-## Returns:
-##    1  files staged (or definitively absent -- the cluster answered)
-##   -1  the cluster could not be reached, so we do not yet know whether the
-##       results exist. The caller must NOT finalize the job on this. "No
-##       results" and "could not ask" are different facts, and a retry budget
-##       measured in seconds cannot outlast an outage measured in minutes, so
-##       treating them alike mails users "No results tarfile" for jobs whose
-##       results are sitting intact on the cluster.
-/**
- * Ask a cluster where its work directory is, and read the answer.
- *
- * Separate from get_local_files() because the answer becomes the base of every
- * path this file subsequently fetches from, so it is worth being able to
- * assert on it on its own. A wrong path here does not fail loudly: the fetches
- * simply find nothing, and the job looks like one whose results never arrived.
- *
- * Returns array( 'class' => 'OK' | 'UNREACHABLE' | 'MISSING',
- *                'path'  => the directory, when class is OK,
- *                'detail'=> a short reason, otherwise ).
- *
- * UNREACHABLE means we learned nothing and the caller must retry rather than
- * conclude anything about the job. MISSING is a real answer from a reachable
- * cluster: there is no such directory, so there is nothing to fetch. Making
- * that distinction explicitly, and on its own, is the whole point of the
- * function.
- *
- * The answer is trusted as-is because remote_exec::run() fences the command's
- * own stdout, so a login node's ~/.bashrc cannot put its welcome banner where
- * this is looking for a path. See frame() there.
- */
+## Ask a cluster where its work directory is.
+## Returns array( 'class' => 'OK' | 'UNREACHABLE' | 'MISSING', 'path', 'detail' ).
+## UNREACHABLE: we learned nothing, retry. MISSING: the cluster answered and
+## there is no such directory. remote_exec::run() fences stdout, so login
+## banners cannot pollute the path.
 function resolve_remote_workdir( $rx, $lworkdir )
 {
    $res = $rx->run( "ls -d " . escapeshellarg( $lworkdir ), array( 'label' => 'resolve workdir' ) );
@@ -356,6 +346,10 @@ function resolve_remote_workdir( $rx, $lworkdir )
    return array( 'class' => 'OK', 'path' => trim( $res[ 'text' ] ), 'detail' => '' );
 }
 
+## Stage a job's stderr, stdout and results tar into its gfac.analysis row.
+## Returns 1 staged (or the cluster confirmed there is nothing to stage),
+## -1 cluster unreachable, so not known yet: do not finalize on this,
+## -2 can never be staged (cluster not configured, or the row rejects the tar).
 function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 {
    global $work;
@@ -373,7 +367,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
    if ( ! isset( $cluster_details[ $cluster ] ) || ! isset( $cluster_details[ $cluster ][ 'name' ] ) )
    {
       write_logld( "$me cluster $cluster missing from global_config.php \$cluster_details" );
-      return -1;
+      return -2;
    }
 
    $rx = cluster_probe_remote( $cluster, 'write_logld' );
@@ -405,13 +399,8 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
    if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
    chdir( "$work/$gfacID" );
 
-   ## us_mpi_analysis writes analysis-results.tar into the TOP LEVEL of the
-   ## job's work directory: US_Archive::compress() is given a bare relative
-   ## filename and the batch script cd's to $workdir before launching. It is
-   ## not written under output/ -- output/ holds the individual result files
-   ## that get archived into the tar and then deleted. Try the top-level
-   ## location first and keep output/ as a fallback so any job laid out the
-   ## older way still resolves.
+   ## us_mpi_analysis writes the tar at the top of the work directory;
+   ## output/ is a fallback for older layouts.
    $tar_candidates = array(
       "$remoteDir/analysis-results.tar",
       "$remoteDir/output/analysis-results.tar",
@@ -419,11 +408,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );
 
-   ## The remote job may finish writing stdout/stderr before it finishes
-   ## writing and closing analysis-results.tar, so a fetch can legitimately
-   ## race ahead of the result being ready. Retry that race -- but only when
-   ## the cluster is answering. Retrying into an outage just burns the budget
-   ## and then reports the wrong conclusion.
+   ## The tar may still be being written; retry while the cluster answers.
    $secwait = 10;
    $num_try = 0;
    while ( $tar[ 'class' ] === 'MISSING' && $num_try < 3 )
@@ -441,9 +426,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
       return -1;
    }
 
-   ## stdout/stderr are diagnostics. Their absence is not fatal, but an
-   ## unreachable cluster still is: finalizing now would persist an empty
-   ## stderr for a job whose real stderr we simply could not read.
+   ## Missing stdout/stderr is fine; an unreachable cluster is not.
    foreach ( array( 'stdout', 'stderr' ) as $fn )
    {
       $one = fetch_first_remote( $rx, array( "$remoteDir/$fn" ), $fn, $fn );
@@ -455,8 +438,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
       }
    }
 
-   ## Store the staged files in the central job-tracking database. The fetch
-   ## above has already retried, so there is nothing further to wait for here.
+   ## Store the staged files in the central job-tracking database.
 
    $lense = 0;
    if ( file_exists( "stderr"  ) )
@@ -478,8 +460,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    if ( file_exists( "stdout" ) ) $stdout  = file_get_contents( "stdout" );
 
-   ## Both remote candidates land at the same local name (fetch_first_remote
-   ## chooses it), so there is only one local path to read.
+   ## Both remote candidates land at this one local name.
    $fn_tarfile = "analysis-results.tar";
 
    if ( file_exists( $fn_tarfile ) )
@@ -522,7 +503,7 @@ write_logld( "$me:  es-tarfile size: $lenf");
    {
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
       echo "Bad query\n";
-      return( -1 );
+      return( -2 );
    }
 
    return 1;
@@ -531,19 +512,11 @@ write_logld( "$me:  es-tarfile size: $lenf");
 ## Fetch the first of $candidates that exists on the cluster, landing it at
 ## $local_name in the current directory.
 ##
-## Returns [ 'class' => 'OK' | 'MISSING' | 'UNREACHABLE' ]. The three are
-## genuinely different outcomes and the caller acts differently on each:
-## OK means we have the file, MISSING means the cluster answered and it is not
-## there (yet), UNREACHABLE means we still do not know. Collapsing MISSING and
-## UNREACHABLE into a single "failed" is what made an outage look like a job
-## that produced no results.
+## Returns [ 'class' => 'OK' | 'MISSING' | 'UNREACHABLE' ]: MISSING means the
+## cluster answered that it is not there, UNREACHABLE that we do not know.
 ##
-## The download lands on a ".part" path and is renamed into place only after
-## scp exits 0. scp is not atomic: an interrupted transfer -- exactly what a
-## flaky link or a timeout(1) kill produces, and something the retry loop above
-## now makes far more likely -- leaves a truncated file behind. Without the
-## rename, that truncated file satisfies the caller's file_exists() check and a
-## corrupt tarball is written into the job record as if it were the result.
+## Downloads to ".part" and renames only when scp succeeds, so an interrupted
+## transfer never leaves a truncated file under the real name.
 function fetch_first_remote( $rx, $candidates, $local_name, $label )
 {
    global $me;

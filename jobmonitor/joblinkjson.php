@@ -5,10 +5,7 @@ $us3bin  = "$us3lims/bin";
 $self    = __FILE__;
 $errors  = '';
 
-## This report only needs configuration, logging and the database helper from
-## listen-config.php. Loading the jobmonitor/cleanup stack here was both unused
-## and fatal after cleanup_gfac.php was removed; utility.php also redeclared
-## logging functions already supplied by listen-config.php.
+## Needs only configuration, logging and the database helper from listen-config.php.
 require_once "$us3bin/listen-config.php";
 
 # ********* start user defines *************

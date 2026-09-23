@@ -158,21 +158,9 @@ function truestr( $val ) {
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
 
-## The web pages this script includes further down (queue_setup_1/2/3.php and
-## everything they pull in) resolve their per-instance config through
-## uslims3/config.php, which reads LIMS_INSTANCE and exits(1) when it is
-## missing. Nothing in the environment supplies it here: submitctl.php serves
-## every uslims3_* database from one long-lived process, so it cannot carry a
-## single instance in its own environment for children to inherit, and Apache's
-## SetEnv only covers web requests. $lims_db is that instance name and is
-## already authoritative for every query this script makes, so publish it for
-## the includes rather than requiring callers to repeat it as an env var.
-##
-## Without this, a submitctl-launched submitone.php dies inside
-## queue_setup_1.php with "FATAL: LIMS_INSTANCE missing or invalid ('')" after
-## the row has already been set to READY, leaving the request parked at READY
-## forever with no Slurm job and no error status -- the whole autoflow pipeline
-## stalls on its first stage.
+## The included web pages read their instance from LIMS_INSTANCE (via
+## uslims3/config.php, which exits without it). submitctl.php serves every
+## instance from one process and cannot set it, so publish $lims_db here.
 if ( getenv( 'LIMS_INSTANCE' ) !== $lims_db ) {
     putenv( "LIMS_INSTANCE=$lims_db" );
 }
@@ -189,9 +177,8 @@ if ( file_exists( $dumpfile ) ) {
 }
 
 write_logl( "Starting" );
-// Keep a process-start receipt even when listen-config directs logging to a
-// file. submitctl captures stderr in submit.log; operators and process tests
-// can distinguish a silent include/exit from a child that never started.
+// Process-start receipt on stderr (submitctl's submit.log), even when logging
+// goes to a file, so a child that never started is distinguishable.
 fwrite( STDERR, "$self: starting submission for $lims_db request $ID\n" );
 
 do {
@@ -204,16 +191,9 @@ do {
 
 write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 
-## Safety net for exits this script never sees coming. error()/fail_job()
-## cover the failures submitone.php detects itself, but the web pages included
-## below are ordinary page code: any of them can hit a PHP fatal or call
-## exit() directly (uslims3/config.php does exactly that on a bad
-## LIMS_INSTANCE), and neither path runs our error handlers. submitctl.php has
-## already set the row to READY before launching us and has no timeout on that
-## state, so an unhandled exit leaves the request parked at READY forever --
-## no Slurm job, no failure, no further stages, nothing in the UI to indicate
-## anything is wrong. Fail loud instead: if we are shutting down and the row
-## is still READY, the submission did not happen.
+## The included web pages can fatal or exit() without reaching our error
+## handlers, and submitctl.php never times out a READY row. If we shut down
+## with the row still READY, the submission did not happen: fail it.
 register_shutdown_function( function () {
     global $db_handle, $lims_db, $submit_request_table_name, $id_field, $ID, $self;
 
@@ -355,9 +335,7 @@ try {
 }
 
 if ( $cluster == "localhost" ) {
-    ## $default_local_cluster in global_config.php names the cluster that runs
-    ## on the LIMS host. There is no inference: without it, "localhost" names
-    ## nothing.
+    ## $default_local_cluster in global_config.php names the LIMS host's cluster.
     $cluster = null;
     if ( isset( $default_local_cluster )
          && isset( $cluster_details[ $default_local_cluster ] ) ) {

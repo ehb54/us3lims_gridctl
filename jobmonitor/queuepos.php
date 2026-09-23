@@ -4,14 +4,8 @@
 /*
  * queuepos.php <gfacID>
  *
- * Reports a job's queue position and state as JSON.
- *
- * An operator runs this when something looks wrong, which means it is most
- * often run while the cluster is misbehaving, so it asks the cluster the job
- * actually ran on through remote_exec: bounded by a timeout, and with
- * transport failure kept separate from a real answer rather than parsed as
- * one. There is no local-versus-remote branch here, because remote_exec
- * decides that from the cluster's own configuration.
+ * Reports a job's queue position and state as JSON. Asks through remote_exec,
+ * so a transport failure is reported as such rather than parsed as an answer.
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
@@ -47,10 +41,8 @@ if ( count( $u_argv ) ) {
 
 $STDERR = STDERR;
 
-## Which cluster is this job on? The executing cluster wins over the requested
-## one: a metascheduler submission can land somewhere other than where it was
-## aimed, and asking the wrong cluster reports "job not found" for a job that
-## is running perfectly well.
+## The executing cluster wins over the requested one: a metascheduler
+## submission can land somewhere other than where it was aimed.
 $gLink = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 
 if ( ! $gLink ) {
@@ -74,9 +66,7 @@ if ( ! $row ) {
 $cluster = empty( $row[ 'metaschedulerClusterExecuting' ] )
          ? $row[ 'cluster' ] : $row[ 'metaschedulerClusterExecuting' ];
 
-## Short budget and no retry: this is a diagnostic with a human waiting, and a
-## reachability answer that took a minute to arrive describes history rather
-## than the present.
+## Short budget and no retry: a human is waiting.
 $rx  = cluster_probe_remote( $cluster, function ( $m ) use ( $STDERR ) {
     fwrite( $STDERR, "$m\n" );
 } );
@@ -87,9 +77,7 @@ $out = $rx->run( "squeue -t all", array(
     'retries' => 0,
 ) );
 
-## An infrastructure fault is not an answer about the job. Saying so plainly is
-## the whole point: "unreachable" and "not queued" look identical to a user and
-## mean opposite things.
+## An infrastructure fault is not an answer about the job.
 if ( remote_exec_infra_fault( $out ) ) {
     echo json_encode( [
         "error"   => "cluster $cluster did not respond, so the queue could not be read",
@@ -116,18 +104,7 @@ if ( ! count( $res ) ) {
     exit;
 }
 
-## Guarded because listen-config.php, included at the top of this file,
-## declares a debug_json() of its own. An unguarded top-level declaration is
-## hoisted at compile time, so it was already in place before listen-config.php
-## ran and every invocation of this script died with "Cannot redeclare
-## debug_json()" -- no argument and no configuration avoided it. submitone.php
-## and submitctl.php carry the same guard for the same reason.
-##
-## The consequence is deliberate: with the guard, listen-config.php's version
-## wins, so this output is gated behind $logging_level >= 3 and goes through
-## write_log() rather than unconditionally to stderr. That matches the sibling
-## scripts, and an operator running this for a queue position does not want a
-## dump of every squeue line by default.
+## Guarded: listen-config.php declares debug_json() too, and its version wins.
 if ( !function_exists( 'debug_json' ) ) {
     function debug_json( $msg, $json ) {
         global $STDERR;
@@ -144,10 +121,7 @@ debug_json( "squeue result", $res );
 $jinfo = (object)[];
 $jcount = count( $res );
 
-## Number of running jobs ahead of the queue. Left unset when nothing is
-## running, which made the pending-position arithmetic below subtract an
-## undefined value: PHP treats that as 0 with a warning, so every reported
-## position was silently wrong by the running-job count on an idle cluster.
+## Number of running jobs ahead of the queue.
 $jstart = 0;
 
 foreach ( $res as $v ) {
