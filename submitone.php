@@ -3,11 +3,11 @@
 # begin to build up data in replacement of queue_setup_1,2,3.php in prep for 2DSA_? submit
 
 $self = __FILE__;
-    
+
 $notes = <<<__EOD
 usage: $self db ID
 
-1. finds db.AnalysisRequest with a RequestID = ID
+1. finds db.autoflowAnalysis with requestID = ID
 2. finds associated db.analysisprofile
 3. loads any related tables needed to build up \$_SESSION
 4. converts XML -> JSON to setup the job
@@ -21,30 +21,24 @@ if ( count( $argv ) != 3 ) {
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
-include "$class_dir/experiment_status.php";
 
 # ********* start user defines *************
 
-# the polling interval
 $poll_sleep_seconds = 30;
 
-# logging_level 
-# 0 : minimal messages (expected value for production)
-# 1 : add detailed db messages
-# 2 : add idle polling messages
-$logging_level      = 3;
-    
+$logging_level = 3;
+
 $dumpfilebase = "/home/us3/lims/etc/submit";
 if ( !is_dir( $dumpfilebase ) ) {
     mkdir( $dumpfilebase );
 }
 
-# www_uslims3 should likely be in listen_config.php
-$www_uslims3   = "/srv/www/htdocs/uslims3";
+# www_uslims3 — use value from listen-config.php if set, otherwise production default
+$www_uslims3 = isset( $www_uslims3 ) ? $www_uslims3 : "/srv/www/htdocs/uslims3";
+
 # ********* end user defines ***************
 
 # ********* start admin defines *************
-# these should only be changed by developers
 $db                                = "gfac";
 $submit_request_table_name         = "autoflowAnalysis";
 $submit_request_history_table_name = "autoflowAnalysisHistory";
@@ -95,14 +89,14 @@ function fail_job() {
     global $ID;
     global $db_handle;
     global $self;
-    
+
     $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
-    
-    $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', quote_fix( $use_cli_errors ) ) . "' WHERE ${id_field} = ${ID}";
+
+    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', quote_fix( $use_cli_errors ) ) . "' WHERE {$id_field} = {$ID}";
     $result = mysqli_query( $db_handle, $query );
-    
+
     if ( !$result ) {
-        write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status FAILED. query $query", 0 );
+        write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
     }
 }
 
@@ -110,8 +104,7 @@ function write_logl( $msg, $this_level = 0 ) {
     global $logging_level;
     global $self;
     if ( $logging_level >= $this_level ) {
-        # echo "${self}: " . $msg . "\n";
-        write_log( "${self}: " . $msg );
+        write_log( "{$self}: " . $msg );
     }
 }
 
@@ -124,40 +117,36 @@ function error( $msg, $fail_job = true ) {
     global $ID;
     global $db_handle;
     global $self;
-    
+
     if ( $fail_job ) {
-        $qfmsg = quote_fix( $msg );
-        $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='FAILED', statusMsg='Error submitting job: $qfmsg' WHERE ${id_field} = ${ID}";
+        $qfmsg  = quote_fix( $msg );
+        $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='Error submitting job: $qfmsg' WHERE {$id_field} = {$ID}";
         $result = mysqli_query( $db_handle, $query );
-    
+
         if ( !$result ) {
-            write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} status FAILED. query $query", 0 );
+            write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
         }
     }
     exit(-1);
 }
 
-function debug_json( $msg, $json ) {
-    return;
-#    echo "$msg\n";
-#    echo json_encode( $json, JSON_PRETTY_PRINT );
-#    echo "\n";
+if ( !function_exists( 'debug_json' ) ) {
+    function debug_json( $msg, $json ) {
+        return;
+    }
 }
 
 function db_obj_result( $db_handle, $query ) {
     $result = mysqli_query( $db_handle, $query );
 
     if ( !$result || !$result->num_rows ) {
-        if ( $result ) {
-            # $result->free_result();
-        }
         write_logl( "db query failed : $query" );
         exit;
     }
 
     if ( $result->num_rows > 1 ) {
         write_logl( "WARNING: db query returned " . $result->num_rows . " rows : $query" );
-    }    
+    }
 
     return mysqli_fetch_object( $result );
 }
@@ -169,40 +158,102 @@ function truestr( $val ) {
 $lims_db = $argv[ 1 ];
 $ID      = $argv[ 2 ];
 
+## The included web pages read their instance from LIMS_INSTANCE (via
+## uslims3/config.php, which exits without it). submitctl.php serves every
+## instance from one process and cannot set it, so publish $lims_db here.
+if ( getenv( 'LIMS_INSTANCE' ) !== $lims_db ) {
+    putenv( "LIMS_INSTANCE=$lims_db" );
+}
+$_SERVER[ 'LIMS_INSTANCE' ] = $lims_db;
+
 if ( !is_dir( $dumpfilebase ) ) {
     write_logl( "ERROR $dumpfilebase is not a directory, logs will not be stored!\n" );
 }
 
-$dumpfile = "${dumpfilebase}/$lims_db-$ID.txt";
+$dumpfile = "{$dumpfilebase}/$lims_db-$ID.txt";
 global $dumpfile;
 if ( file_exists( $dumpfile ) ) {
     unlink( $dumpfile );
 }
 
 write_logl( "Starting" );
+// Process-start receipt on stderr (submitctl's submit.log), even when logging
+// goes to a file, so a child that never started is distinguishable.
+fwrite( STDERR, "$self: starting submission for $lims_db request $ID\n" );
 
 do {
     $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
     if ( !$db_handle ) {
-        write_logl( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
+        write_logl( "could not connect to mysql: $dbhost, $user, $db. Will retry in {$poll_sleep_seconds}s" );
         sleep( $poll_sleep_seconds );
     }
 } while ( !$db_handle );
 
 write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 
-# get AutoflowAnalysis record
+## The included web pages can fatal or exit() without reaching our error
+## handlers, and submitctl.php never times out a READY row. If we shut down
+## with the row still READY, the submission did not happen: fail it.
+register_shutdown_function( function () {
+    global $db_handle, $lims_db, $submit_request_table_name, $id_field, $ID, $self;
 
-$autoflowanalysis = db_obj_result( $db_handle, 
-                                   "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM ${lims_db}.${submit_request_table_name} WHERE ${id_field}=$ID" );
+    if ( ! $db_handle ) {
+        return;
+    }
+
+    if ( ! mysqli_select_db( $db_handle, $lims_db ) ) {
+        return;
+    }
+
+    $request_id = (int) $ID;
+    $statement  = mysqli_prepare( $db_handle,
+        "SELECT status FROM autoflowAnalysis WHERE requestID = ?" );
+    if ( ! $statement ) {
+        return;
+    }
+    mysqli_stmt_bind_param( $statement, 'i', $request_id );
+    if ( ! mysqli_stmt_execute( $statement ) ) {
+        mysqli_stmt_close( $statement );
+        return;
+    }
+
+    $result = mysqli_stmt_get_result( $statement );
+    if ( ! $result || ! ( $row = mysqli_fetch_object( $result ) ) ) {
+        mysqli_stmt_close( $statement );
+        return;
+    }
+    mysqli_stmt_close( $statement );
+    if ( strtoupper( $row->{'status'} ) !== 'READY' ) {
+        return;
+    }
+
+    $last = error_get_last();
+    $msg  = $last === null
+            ? "submitone.php exited without submitting the job"
+            : "submitone.php aborted: " . $last[ 'message' ];
+
+    write_logl( "$self: {$id_field} {$ID} still READY at shutdown, marking FAILED: $msg", 0 );
+
+    $statement = mysqli_prepare( $db_handle,
+        "UPDATE autoflowAnalysis SET status = 'FAILED', statusMsg = ? WHERE requestID = ?" );
+    if ( ! $statement ) {
+        return;
+    }
+    mysqli_stmt_bind_param( $statement, 'si', $msg, $request_id );
+    mysqli_stmt_execute( $statement );
+    mysqli_stmt_close( $statement );
+} );
+
+$autoflowanalysis = db_obj_result( $db_handle,
+    "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM {$lims_db}.{$submit_request_table_name} WHERE {$id_field}=$ID" );
 
 $cluster    = $autoflowanalysis->{'clusterDefault'};
 $statusJson = json_decode( $autoflowanalysis->{"statusJson"} );
 debug_json( "after fetch, decode", $statusJson );
-        
+
 if ( !isset( $statusJson->{ $processing_key } ) ||
      empty( $statusJson->{ $processing_key } ) ) {
-    write_logl( "AutoflowAnalysis db ${lims_db} ${id_field} $ID is NOT ${processing_key}", 1 );
+    write_logl( "AutoflowAnalysis db {$lims_db} {$id_field} $ID is NOT {$processing_key}", 1 );
     exit;
 }
 
@@ -210,22 +261,18 @@ $stage  = $statusJson->{ $processing_key };
 $triple = str_replace( ".Interference", ".660", $autoflowanalysis->{ 'tripleName' } );
 $invID  = $autoflowanalysis->{ 'invID' };
 
-write_logl( "job $ID found. stage to submit " .  json_encode( $stage, JSON_PRETTY_PRINT ) );
-
-# get analysisprofile record
+write_logl( "job $ID found. stage to submit " . json_encode( $stage, JSON_PRETTY_PRINT ) );
 
 $aprofileguid = $autoflowanalysis->{ 'aprofileGUID' };
 
-$analysisprofile = db_obj_result( $db_handle, 
-                                  "SELECT * FROM ${lims_db}.analysisprofile WHERE aprofileGUID='${aprofileguid}'" );
+$analysisprofile = db_obj_result( $db_handle,
+    "SELECT * FROM {$lims_db}.analysisprofile WHERE aprofileGUID='{$aprofileguid}'" );
 
 write_logl( "aprofileGUID $aprofileguid found", 3 );
 
 $xmljson = json_decode( json_encode( simplexml_load_string( $analysisprofile->{ 'xml' } ) ) );
 
 debug_json( "analysisprofile's xml in json:", $xmljson );
-
-# sanity checks
 
 $xmljsonfilename = $xmljson->{ 'analysis_profile' }->{ '@attributes' }->{ 'name' };
 $xmljsonguid     = $xmljson->{ 'analysis_profile' }->{ '@attributes' }->{ 'guid' };
@@ -239,67 +286,108 @@ if ( $xmljsonfilename != $aprofilename ||
 
 write_logl( "analysisprofile filename $aaname triplename $triple" );
 
-# $autoflow = db_obj_result( $db_handle, 
-#                           "SELECT * FROM ${lims_db}.autoflow WHERE aprofileGUID='${aprofileguid}'" );
-
 $rawdata = db_obj_result( $db_handle,
-                          "select rawDataID, filename from ${lims_db}.rawData where filename like '${aaname}.%.${triple}%'" );
+    "select rawDataID, filename from {$lims_db}.rawData where filename like '{$aaname}.%.{$triple}%'" );
 
 echo json_encode( $rawdata, JSON_PRETTY_PRINT ) . "\n";
 
 $editdata = db_obj_result( $db_handle,
-                          "select editedDataID, filename from ${lims_db}.editedData where filename like '${aaname}.%.${triple}%'" );
+    "select editedDataID, filename from {$lims_db}.editedData where filename like '{$aaname}.%.{$triple}%'" );
 
 echo json_encode( $editdata, JSON_PRETTY_PRINT ) . "\n";
 
 $person = db_obj_result( $db_handle,
-                          "select * from ${lims_db}.people where personID='${invID}'" );
+    "select * from {$lims_db}.people where personID='{$invID}'" );
 
 echo json_encode( $person, JSON_PRETTY_PRINT ) . "\n";
 
 $clusterAuth = explode( ":", $person->{'clusterAuthorizations'} );
 
-echo "personid:" .  $person->{'personID'} . "\n";
+echo "personid:" . $person->{'personID'} . "\n";
 
-$php_base          = "${www_uslims3}/${lims_db}";
+$php_base = "{$www_uslims3}/{$lims_db}";
 chdir( $php_base );
 
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
-# person overrides
 $person->{'userlevel'} = 2;
-$person->{'email'}     = "us3-admin@biophysics.uleth.ca";
+$autoflow_admin_email        = "us3-admin@biophysics.uleth.ca";
+$person->{'email'}           = $autoflow_admin_email;
+$person->{'submitter_email'} = $autoflow_admin_email;
 
 # ************* queue_setup_1 ***************
 
-$php_queue_setup_1 = "${php_base}/queue_setup_1.php";
-$php_queue_setup_2 = "${php_base}/queue_setup_2.php";
-$php_queue_setup_3 = "${php_base}/queue_setup_3.php";
+$php_queue_setup_1 = "{$php_base}/queue_setup_1.php";
+$php_queue_setup_2 = "{$php_base}/queue_setup_2.php";
+$php_queue_setup_3 = "{$php_base}/queue_setup_3.php";
 echo "preparing to call $php_queue_setup_1\n";
+
+## Resolve cluster, host_name, and queue before building $_SESSION
+## so $_SESSION['gwhostid'] is populated with the actual host name.
+
+$queue = "batch";
+
+$global_config_file = "$class_dir/../global_config.php";
+try {
+    include_once( $global_config_file );
+} catch ( Exception $e ) {
+    echo "ERROR: including $global_config_file " . $e->getMessage() . "\n";
+}
+
+if ( $cluster == "localhost" ) {
+    ## $default_local_cluster in global_config.php names the LIMS host's cluster.
+    $cluster = null;
+    if ( isset( $default_local_cluster )
+         && isset( $cluster_details[ $default_local_cluster ] ) ) {
+        $cluster = $default_local_cluster;
+    }
+    if ( $cluster === null ) {
+        error( "cluster 'localhost' requires \$default_local_cluster to be set"
+               . " to a cluster present in \$cluster_details" );
+    }
+    if ( isset( $cluster_details[$cluster] ) ) {
+        $host_name = $cluster_details[$cluster]['name'];
+        $queue     = $cluster_details[$cluster]['queue'] ?? 'batch';
+    }
+    echo "localhost cluster resolved to $cluster host_name $host_name queue $queue\n";
+} else {
+    if ( isset( $cluster_details )
+         && is_array( $cluster_details )
+         && array_key_exists( $cluster, $cluster_details )
+         && array_key_exists( 'name', $cluster_details[ $cluster ] ) ) {
+        $host_name = $cluster_details[ $cluster ][ 'name' ];
+        if ( array_key_exists( 'queue', $cluster_details[ $cluster ] ) ) {
+            $queue = $cluster_details[ $cluster ][ 'queue' ];
+        }
+        echo "cluster $cluster host_name $host_name queue $queue\n";
+    } else {
+        error( "cluster '$cluster' not found or missing 'name' in cluster_details" );
+    }
+}
 
 $_SESSION = [];
 
-$_SESSION[ 'id' ]               = $person->{'personID'};
-$_SESSION[ 'loginID' ]          = $person->{'personID'};
-$_SESSION[ 'firstname' ]        = $person->{'fname'};
-$_SESSION[ 'lastname' ]         = $person->{'lname'};
-$_SESSION[ 'phone' ]            = $person->{'phone'};
-$_SESSION[ 'email' ]            = $person->{'email'};
-$_SESSION[ 'submitter_email' ]  = $person->{'email'};
-$_SESSION[ 'userlevel' ]        = $person->{'userlevel'};
-$_SESSION[ 'instance' ]         = $lims_db;
-$_SESSION[ 'user_id' ]          = $person->{'fname'} . "_" . $person->{'lname'} . "_" . $person->{'personGUID'} ;
-$_SESSION[ 'advancelevel' ]     = $person->{'advancelevel'};
-$_SESSION[ 'clusterAuth' ]      = $clusterAuth;
-$_SESSION[ 'gwhostid' ]         = $host_name;
+$_SESSION[ 'id' ]              = $person->{'personID'};
+$_SESSION[ 'loginID' ]         = $person->{'personID'};
+$_SESSION[ 'firstname' ]       = $person->{'fname'};
+$_SESSION[ 'lastname' ]        = $person->{'lname'};
+$_SESSION[ 'phone' ]           = $person->{'phone'};
+$_SESSION[ 'email' ]           = $person->{'email'};
+$_SESSION[ 'submitter_email' ] = $person->{'email'};
+$_SESSION[ 'userlevel' ]       = $person->{'userlevel'};
+$_SESSION[ 'instance' ]        = $lims_db;
+$_SESSION[ 'user_id' ]         = $person->{'fname'} . "_" . $person->{'lname'} . "_" . $person->{'personGUID'};
+$_SESSION[ 'advancelevel' ]    = $person->{'advancelevel'};
+$_SESSION[ 'clusterAuth' ]     = $clusterAuth;
+$_SESSION[ 'gwhostid' ]        = $host_name;
 
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
 
 $_REQUEST = [];
-$_REQUEST[ 'submitter_email' ]  = $person->{'email'};
-$_REQUEST[ 'expIDs' ]           = [ $rawdata->{'rawDataID' } ];
-$_REQUEST[ 'cells' ]            = [ $rawdata->{'rawDataID' } . ":" . $rawdata->{ 'filename' } ]; 
-$_REQUEST[ 'next' ]             = "Add to Queue";
+$_REQUEST[ 'submitter_email' ] = $person->{'email'};
+$_REQUEST[ 'expIDs' ]          = [ $rawdata->{'rawDataID'} ];
+$_REQUEST[ 'cells' ]           = [ $rawdata->{'rawDataID'} . ":" . $rawdata->{ 'filename' } ];
+$_REQUEST[ 'next' ]            = "Add to Queue";
 
 $_POST = $_REQUEST;
 
@@ -318,10 +406,8 @@ while (ob_get_level()) ob_end_flush();
 check_cli_errors();
 
 # ************* queue_setup_2 ***************
-# queue_setup_3 is chained by queue_setup_2
 
-$_REQUEST[ 'save' ]             = 'Save Queue Information';
-
+$_REQUEST[ 'save' ] = 'Save Queue Information';
 $_POST = $_REQUEST;
 
 echo "preparing to call $php_queue_setup_2\n";
@@ -343,6 +429,7 @@ if ( $stage == "PCSA" ) {
 }
 
 $jobkey = "job_" . strtolower( $stage );
+$job_attributes = (object) [];
 
 if ( !isset( $xmljson->{'analysis_profile'} ) ) {
     error( "analysis profile's xml does not contain an 'analysis_profile' key" );
@@ -354,12 +441,12 @@ if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup} ) ) {
 
 if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
     error( "analysis profile's xml does not contain 'analysis_profile'->'channel_parms'" );
-}    
+}
 
 if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) &&
      !count( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
     error( "analysis profile's xml does not contain an 'analysis_profile'->'channel_parms' key with a nonzero size" );
-}    
+}
 
 if ( is_array( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} ) ) {
     if ( !isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'}[0]->{'@attributes'} ) ) {
@@ -386,40 +473,16 @@ if ( $stage != "PCSA" ) {
     debug_json( "job attributes", $job_attributes );
 
     if ( isset( $job_attributes->{'interactive'} ) ) {
-        $query  = "UPDATE ${lims_db}.${submit_request_table_name} SET status='WAIT', statusMsg='Waiting for manual stage $stage to complete.' WHERE ${id_field} = ${ID}";
+        $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='WAIT', statusMsg='Waiting for manual stage $stage to complete.' WHERE {$id_field} = {$ID}";
         $result = mysqli_query( $db_handle, $query );
-        
+
         if ( !$result ) {
-            write_logl( "$self: error updating table ${submit_request_table_name} ${id_field} ${ID} statusJson. query $query", 0 );
+            write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} statusJson. query $query", 0 );
         } else {
-            write_logl( "$self: ${submit_request_table_name} now interactive ${id_field} $ID stage " . json_encode( $stage ), 1 );
+            write_logl( "$self: {$submit_request_table_name} now interactive {$id_field} $ID stage " . json_encode( $stage ), 1 );
         }
         exit();
     }
-}
-
-$queue = "batch";
-
-if ( $cluster == "localhost" ) {
-    $cluster = "us3iab-node0";
-} else {
-    $global_config_file  = "$class_dir/../global_config.php";
-    try {
-        include( $global_config_file );
-    } catch ( Exception $e ) {
-        echo "ERROR: including $global_config_file " . $e->getMessage() . "\n";
-    }
-
-    if ( isset( $cluster_details )
-         && is_array( $cluster_details )
-         && array_key_exists( $cluster, $cluster_details ) 
-         && array_key_exists( 'name', $cluster_details[ $cluster ] ) ) {
-        $host_name = $cluster_details[ $cluster ][ 'name' ];
-        if ( array_key_exists( 'queue', $cluster_details[ $cluster ] ) ) {
-            $queue = $cluster_details[ $cluster ][ 'queue' ];
-        }
-    }
-    echo "cluster $cluster host_name $host_name queue $queue\n";
 }
 
 if ( $stage == "PCSA" ) {
@@ -442,7 +505,6 @@ if ( $stage == "PCSA" ) {
         ,"reg_alpha"           => "tikreg_alpha"
         ,"mc_iterations"       => "mc_iterations"
         ];
-
 
     $defaults_pcsa = [
         "curve_type"           => "IS"
@@ -468,37 +530,37 @@ if ( $stage == "PCSA" ) {
         ,"band_volume-value"   => "0.015"
         ,"radial_grid"         => "0"
         ,"time_grid"           => "1"
-        ,"cluster"             =>  "${host_name}:${cluster}:${queue}"
+        ,"cluster"             => "{$host_name}:{$cluster}:{$queue}"
         ,"TIGRE"               => "Submit"
         ];
 
-    $pcsa_curve_types = [ "SL", "IS", "DS", "All", "HL", "2O" ];
+    $pcsa_curve_types  = [ "SL", "IS", "DS", "All", "HL", "2O" ];
     $pcsa_solute_types = [
-        "s - f/f0 - vbar"     => "013.skv"
-        ,"s - mw - vbar"      => "023.swv"
-        ,"s - vbar - f/f0"    => "031.svk"
-        ,"s - vbar - mw"      => "032.svw"
-        ,"s - D - vbar"       => "043.sdv"
-        ,"f/f0 - s - vbar"    => "103.ksv"
-        ,"f/f0 - mw - vbar"   => "123.kwv"
-        ,"f/f0 - vbar - mw"   => "132.kvw"
-        ,"f/f0 - D - vbar"    => "143.kdv"
-        ,"mw - s - vbar"      => "203.wsv"
-        ,"mw - f/f0 - vbar"   => "213.wkv"
-        ,"mw - vbar - f/f0"   => "231.wvk"
-        ,"mw - D - vbar"      => "243.wdv"
-        ,"vbar - s - f/f0"    => "301.vsk"
-        ,"vbar - s - mw"      => "302.vsw"
-        ,"vbar - f/f0 - mw"   => "312.vkv"
-        ,"vbar - mw - f/f0"   => "321.vwk"
-        ,"vbar - D - f/f0"    => "341.vdv"
-        ,"vbar - D - mw"      => "342.vdv"
-        ,"D - s - vbar"       => "403.dsv"
-        ,"D - k - vbar"       => "413.dkv"
-        ,"D - mw - vbar"      => "423.dkv"
-        ,"D - vbar - f/f0"    => "431.dvk"
-        ,"D - vbar - mw"      => "432.dvw"
-        ];        
+        "s - f/f0 - vbar"  => "013.skv"
+        ,"s - mw - vbar"   => "023.swv"
+        ,"s - vbar - f/f0" => "031.svk"
+        ,"s - vbar - mw"   => "032.svw"
+        ,"s - D - vbar"    => "043.sdv"
+        ,"f/f0 - s - vbar" => "103.ksv"
+        ,"f/f0 - mw - vbar"=> "123.kwv"
+        ,"f/f0 - vbar - mw"=> "132.kvw"
+        ,"f/f0 - D - vbar" => "143.kdv"
+        ,"mw - s - vbar"   => "203.wsv"
+        ,"mw - f/f0 - vbar"=> "213.wkv"
+        ,"mw - vbar - f/f0"=> "231.wvk"
+        ,"mw - D - vbar"   => "243.wdv"
+        ,"vbar - s - f/f0" => "301.vsk"
+        ,"vbar - s - mw"   => "302.vsw"
+        ,"vbar - f/f0 - mw"=> "312.vkv"
+        ,"vbar - mw - f/f0"=> "321.vwk"
+        ,"vbar - D - f/f0" => "341.vdv"
+        ,"vbar - D - mw"   => "342.vdv"
+        ,"D - s - vbar"    => "403.dsv"
+        ,"D - k - vbar"    => "413.dkv"
+        ,"D - mw - vbar"   => "423.dkv"
+        ,"D - vbar - f/f0" => "431.dvk"
+        ,"D - vbar - mw"   => "432.dvw"
+        ];
 
     $_REQUEST = $defaults_pcsa;
 
@@ -533,7 +595,7 @@ if ( $stage == "PCSA" ) {
             $solute_types[ $k ] = $v;
             continue;
         }
-        if ( $k = 'regularization' ) {
+        if ( $k == 'regularization' ) {
             if ( $v == "none" ) {
                 $_REQUEST[ 'tikreg_option' ] = 0;
                 continue;
@@ -560,8 +622,7 @@ if ( $stage == "PCSA" ) {
     $solute_type =
         $solute_types["x_type"] . " - " .
         $solute_types["y_type"] . " - " .
-        $solute_types["z_type"]
-        ;
+        $solute_types["z_type"];
 
     if ( !array_key_exists( $solute_type, $pcsa_solute_types ) ) {
         error( "pcsa: unknown solute_type '$solute_type'" );
@@ -573,8 +634,8 @@ if ( $stage == "PCSA" ) {
 
     $_POST = $_REQUEST;
 
-    $php_pcsa_1 = "${php_base}/PCSA_1.php";
-    $php_pcsa_2 = "${php_base}/PCSA_2.php";
+    $php_pcsa_1 = "{$php_base}/PCSA_1.php";
+    $php_pcsa_2 = "{$php_base}/PCSA_2.php";
 
     echo "preparing to call $php_pcsa_1\n";
     echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
@@ -586,10 +647,8 @@ if ( $stage == "PCSA" ) {
     check_cli_errors();
 
 } else {
-    $use_custom_grid = false; # set if recognized as a custom grid
+    $use_custom_grid = false;
 
-    # all 2dsa methods
-    
     $conv_2dsa_keys = [
         "s_min"              => "s_value_min"
         ,"s_max"             => "s_value_max"
@@ -606,34 +665,37 @@ if ( $stage == "PCSA" ) {
         ,"meniscus_range"    => "meniscus_range"
         ,"meniscus_points"   => "meniscus_points"
         ,"custom_grid_guid"  => "_special_handling_"
+        ,"vary_vbar"         => "_ignore_"
+        ,"constant_ff0"      => "_ignore_"
+        ,"fit_range"         => "_ignore_"
+        ,"grid_points"       => "_ignore_"
         ];
 
     $defaults_2dsa = [
-        "s_value_min"        =>  "1",
-        "s_value_max"        =>  "10",
-        "s_grid_points"      =>  "64",
-        "ff0_min"            =>  "1",
-        "ff0_max"            =>  "4",
-        "ff0_grid_points"    =>  "64",
-        "mc_iterations"      =>  "1",
-        "tinoise_option"     =>  "0",
-        "rinoise_option"     =>  "0",
-        "fit_mb_select"      =>  "0",
-        "meniscus_range"     =>  "0.03",
-        "meniscus_points"    =>  "11",
-        "iterations_option"  =>  "0",
-        "max_iterations"     =>  "10",
-        "debug_level-value"  =>  "0",
-        "debug_text-value"   =>  "",
-        "simpoints-value"    =>  "200",
-        "band_volume-value"  =>  "0.015",
-        "radial_grid"        =>  "0",
-        "time_grid"          =>  "1",
-        "cluster"            =>  "${host_name}:${cluster}:${queue}",
-        "TIGRE"              =>  "Submit",
-        "uniform_grid"       =>  "6" # current default in 2DSA-CG_1.php
-        ];    
-
+        "s_value_min"        => "1",
+        "s_value_max"        => "10",
+        "s_grid_points"      => "64",
+        "ff0_min"            => "1",
+        "ff0_max"            => "4",
+        "ff0_grid_points"    => "64",
+        "mc_iterations"      => "1",
+        "tinoise_option"     => "0",
+        "rinoise_option"     => "0",
+        "fit_mb_select"      => "0",
+        "meniscus_range"     => "0.03",
+        "meniscus_points"    => "11",
+        "iterations_option"  => "0",
+        "max_iterations"     => "10",
+        "debug_level-value"  => "0",
+        "debug_text-value"   => "",
+        "simpoints-value"    => "200",
+        "band_volume-value"  => "0.015",
+        "radial_grid"        => "0",
+        "time_grid"          => "1",
+        "cluster"            => "{$host_name}:{$cluster}:{$queue}",
+        "TIGRE"              => "Submit",
+        "uniform_grid"       => "6"
+        ];
 
     $_REQUEST = $defaults_2dsa;
 
@@ -676,10 +738,8 @@ if ( $stage == "PCSA" ) {
         }
         if ( $k == 'custom_grid_guid' ) {
             if ( empty( $v ) ) {
-                # empty custom_grid_guid disables custom grid
                 continue;
             }
-            # require CG_modelID
             if ( isset( $all_attributes->CG_modelID )
                  && !empty( $all_attributes->CG_modelID ) ) {
                 $_REQUEST[ 'CG_modelID' ] = $all_attributes->CG_modelID;
@@ -694,11 +754,11 @@ if ( $stage == "PCSA" ) {
     $_POST = $_REQUEST;
 
     if ( $use_custom_grid ) {
-        $php_2dsa_1 = "${php_base}/2DSA-CG_1.php";
-        $php_2dsa_2 = "${php_base}/2DSA-CG_2.php";
+        $php_2dsa_1 = "{$php_base}/2DSA-CG_1.php";
+        $php_2dsa_2 = "{$php_base}/2DSA-CG_2.php";
     } else {
-        $php_2dsa_1 = "${php_base}/2DSA_1.php";
-        $php_2dsa_2 = "${php_base}/2DSA_2.php";
+        $php_2dsa_1 = "{$php_base}/2DSA_1.php";
+        $php_2dsa_2 = "{$php_base}/2DSA_2.php";
     }
 
     echo "preparing to call $php_2dsa_1\n";
@@ -710,64 +770,3 @@ if ( $stage == "PCSA" ) {
     check_cli_errors_in_dump();
     check_cli_errors();
 }
-
-# what we need to add for 2DSA
-/*
-Post:
-{
-    "s_value_min": "1",
-    "s_value_max": "10",
-    "s_grid_points": "64",
-    "ff0_min": "1",
-    "ff0_max": "4",
-    "ff0_grid_points": "64",
-    "mc_iterations": "1",
-    "tinoise_option": "0",
-    "rinoise_option": "0",
-    "fit_mb_select": "0",
-    "meniscus_range": "0.03",
-    "meniscus_points": "11",
-    "iterations_option": "0",
-    "max_iterations": "10",
-    "debug_level-value": "0",
-    "debug_text-value": "",
-    "simpoints-value": "200",
-    "band_volume-value": "0.015",
-    "radial_grid": "0",
-    "time_grid": "1",
-    "cluster": "129.114.17.229:us3iab-node1:normal",
-    "TIGRE": "Submit"
-}
-*/;
-
-# what we need to add for PCSA
-/*
-Post:
-{
-    "curve_type": "IS",
-    "solute_type": "013.skv",
-    "x_min": "1",
-    "x_max": "10",
-    "y_min": "1",
-    "y_max": "4",
-    "z_value": "0",
-    "vars_count": "10",
-    "hl_vars_count": "100",
-    "gfit_iterations": "3",
-    "thr_deltr_ratio": "0.0001",
-    "curves_points": "200",
-    "tikreg_option": "0",
-    "tikreg_alpha": "0.275",
-    "mc_iterations": "1",
-    "tinoise_option": "0",
-    "rinoise_option": "0",
-    "debug_level-value": "0",
-    "debug_text-value": "",
-    "simpoints-value": "200",
-    "band_volume-value": "0.015",
-    "radial_grid": "0",
-    "time_grid": "1",
-    "cluster": "js237a.genapp.rocks:us3iab-node0:batch",
-    "TIGRE": "Submit"
-}
-*/

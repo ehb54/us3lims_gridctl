@@ -2,7 +2,6 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include "$us3bin/listen-config.php";
-include "$class_dir/experiment_status.php";
 
 # ********* start user defines *************
 
@@ -93,7 +92,7 @@ function db_connect() {
     do {
         $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
         if ( !$db_handle ) {
-            write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
+            write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in {$poll_sleep_seconds}s" );
             sleep( $poll_sleep_seconds );
         }
     } while ( !$db_handle );
@@ -407,7 +406,7 @@ while( 1 ) {
                                     }
 
                                     $query =
-                                        "UPDATE ${lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
+                                    "UPDATE {$lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
                                         . str_replace( "'", "\'", json_encode( $update_eSignStatusJson ) )
                                         . "' where ID = $ID"
                                         ;
@@ -557,7 +556,7 @@ while( 1 ) {
     # echo "================================================================================\n";
     
     if ( !$work_done ) {
-        write_logls( "no requests to process sleeping ${poll_sleep_seconds}s", 2 );
+        write_logls( "no requests to process sleeping {$poll_sleep_seconds}s", 2 );
         sleep( $poll_sleep_seconds );
     }
 }

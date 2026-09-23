@@ -3,27 +3,21 @@
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/jobmonitor";
+$us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
-include "$us3bin/listen-config.php";
-include $class_dir_p . "experiment_status.php";
-include $class_dir_p . "experiment_errors.php";
-include $class_dir_p . "experiment_cancel.php";
-include $class_dir_p . "experiment_resource.php";
-include $class_dir_p . "job_details.php";
-include $class_dir_p . "../global_config.php";
+include_once "$us3bin/listen-config.php";
+include $class_dir . "../global_config.php";
 
+include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
+include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
-include "$us3jm/cleanup.php";
-include "$us3jm/cleanup_gfac.php";
-
-include "$us3util/utility.php";
+include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
+include_once "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************
 ## some could be pushed to listen-config.php
 
 # the polling interval
-$poll_sleep_seconds = 165 + random_int( 10, 30 );
 $poll_sleep_seconds = 30;
 
 # logging_level 
@@ -158,7 +152,7 @@ open_db();
 
 write_logld( "db opened" );
 
-# gfac?
+# Load the current central job-tracking row.
 
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
@@ -167,12 +161,12 @@ $loop      = 0;
 if (
     false ===
     ( $res_analysis =
-      db_obj_result( $db_handle
+      listen_db_obj_result( $db_handle
                      ,"select"
                      . " cluster"
                      . " ,status"
                      . " ,queue_msg"
-                     . " ,UNIX_TIMESTAMP(time)"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
@@ -187,7 +181,8 @@ if (
 $cluster            = $res_analysis->{"cluster"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
-$time               = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+## gfac.analysis.time twice: the epoch for the stall clocks, the text for the admin mail.
+$update_epoch       = $res_analysis->{"update_epoch"};
 $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
 
@@ -196,13 +191,6 @@ $autoflowType       = is_object( $type_id_obj ) && isset( $type_id_obj->type ) ?
 $autoflowID         = is_object( $type_id_obj ) && isset( $type_id_obj->autoflowID ) ? $type_id_obj->autoflowID : 0;
 
 write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
-
-## debugging
-## 
-## debug_json( timestamp("analysis"), $res_analysis );
-## update_autoflow_models(1,2,"00000000-0000-0000-0000-000000000000");
-## update_autoflow_models(3,4,"a71cda5a-a8cb-41a5-9858-10c9296a3e6e");
-## exit(-1);
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
@@ -220,12 +208,11 @@ while( 1 ) {
     if (
         false ===
         ( $res_analysis =
-          db_obj_result( $db_handle
+          listen_db_obj_result( $db_handle
                          ,"select"
                          . " status"
                          . " ,queue_msg"
-                         . " ,metaschedulerClusterExecuting"
-                         . " ,UNIX_TIMESTAMP(time)"
+                         . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                          . " ,time"
                          . " from gfac.analysis"
                          . " where gfacID = \"$gfacID\""
@@ -238,9 +225,8 @@ while( 1 ) {
 
     $status                         = $res_analysis->{"status"};
     $queue_msg                      = $res_analysis->{"queue_msg"};
-    $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $update_epoch                   = $res_analysis->{"update_epoch"};
     $updateTime                     = $res_analysis->{"time"};
-    $metascheduler_cluser_executing = $res_analysis->{"metaschedulerClusterExecuting"};
 
     if ( check_job() ) {
         write_logld( "jobmonitor.php exiting" );

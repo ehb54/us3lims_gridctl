@@ -1,14 +1,16 @@
 <?php
 /*
- * cleanup_gfac.php
+ * cleanup_job.php
  *
- * functions relating to copying results and cleaning up the gfac DB
+ * Functions for copying results and cleaning up the job tracking DB
+ * after a Slurm job completes.
  *
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 include_once "$us3bin/listen-config.php";
-$me              = 'cleanup_gfac.php';
+
+$me              = 'cleanup_job.php';
 $email_address   = '';
 $queuestatus     = '';
 $jobtype         = '';
@@ -16,15 +18,23 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function gfac_cleanup( $us3_db, $reqID, $db_handle )
+## Fallback for when listen-config.php did not define it.
+if ( ! function_exists( 'write_logld' ) ) {
+   function write_logld( $msg, $this_level = 0 ) {
+      global $logging_level;
+      global $self;
+      if ( ! isset( $logging_level ) || $logging_level >= $this_level ) {
+         write_log( ( isset( $self ) ? "$self: " : '' ) . $msg );
+      }
+   }
+}
+
+function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
    global $user;
    global $passwd;
    global $db;
-   global $guser;
-   global $gpasswd;
-   global $gDB;
    global $me;
    global $work;
    global $email_address;
@@ -41,44 +51,49 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    $db = $us3_db;
    write_logld( "$me: debug db=$db; requestID=$requestID" );
 
+   ## LIMS tables over their own connection as $user: the cron sweep passes a
+   ## gfac-user handle, which has no rights on them. $db_handle is for gfac only.
+   $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
+
+   if ( ! $us3_link )
+   {
+      write_logld( "$me: Could not connect to DB $dbhost : $us3_db" );
+      update_autoflow_status( 'FAILED', "Internal error - cleanup could not connect to DB $us3_db" );
+      return( -1 );
+   }
+
    ## First get basic info for email messages
-   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID=$requestID";
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
       write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $db_handle ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $db_handle ) );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
 
-   $query  = "SELECT personID FROM ${us3_db}.people " .
+   $query  = "SELECT personID FROM {$us3_db}.people " .
              "WHERE personGUID='$investigatorGUID'";
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
 
    list( $personID ) = mysqli_fetch_array( $result );
 
-   /*
-   $query  = "SELECT clusterName, submitTime, queueStatus, method "              .
-             "FROM ${us3_db}.HPCAnalysisRequest h LEFT JOIN ${us3_db}.HPCAnalysisResult "            .
-             "ON h.HPCAnalysisRequestID=HPCAnalysisResult.HPCAnalysisRequestID " .
-             "WHERE h.HPCAnalysisRequestID=$requestID";
-   */
    $query  = "SELECT clusterName, submitTime, queueStatus, analType "            .
-             "FROM ${us3_db}.HPCAnalysisRequest h, ${us3_db}.HPCAnalysisResult r "                   .
+             "FROM {$us3_db}.HPCAnalysisRequest h, {$us3_db}.HPCAnalysisResult r "                   .
              "WHERE h.HPCAnalysisRequestID=$requestID "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $db_handle ) );
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
@@ -91,34 +106,23 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
 
-   ## Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM ${us3_db}.HPCAnalysisResult " .
+   ## Get the scheduler job ID recorded for this request.
+   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
             "WHERE HPCAnalysisRequestID=$requestID";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
       write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $db_handle ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $db_handle ) );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       return( -1 );
    }
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
-   ########
-   ## Get data from global GFAC DB and insert it into US3 DB
-   $db_handle = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
-
-   if ( ! $db_handle )
-   {
-      write_logld( "$me: Could not connect to DB $dbhost : $gDB" );
-      mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $gDB" );
-      update_autoflow_status( 'FAILED', "Internal error - Could not connect to DB $gDB" );
-      return( -1 );
-   }
-
+   ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, id FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
 
@@ -134,9 +138,9 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## Another worker already finished the cleanup and deleted the row.
+      write_logld( "$me: analysis row for $gfacID already removed by a concurrent cleanup; nothing to do" );
+      return( 1 );
    }
 ##else
 ##{
@@ -144,25 +148,31 @@ function gfac_cleanup( $us3_db, $reqID, $db_handle )
 ##}
 
    list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
-##write_logld( "$me:     db=$db; requestID=$requestID; status=$status; cluster=$cluster" );
 
-##   if ( $cluster == 'bcf-local'  ||  $cluster == 'alamo-local' )
-   if ( preg_match( "/\-local/", $cluster )  ||
-        preg_match( "/us3iab/",  $cluster ) )
+   ## Stage the results into the job-tracking row. An unreachable cluster (-1)
+   ## is retried until the ceiling, then the job is failed; -2 fails it now.
+   $seen_file     = cleanup_job_dir( $db, $gfacID ) . "/complete_seen";
+   $fetch_failure = '';
+
+   $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
+
+   if ( $fetched === -1 )
    {
-##      $clushost = $cluster;
-##      $clushost = preg_replace( "/\-local/", "", $clushost );
-      $parts    = explode( "-", $cluster );
-      $clushost = $parts[ 0 ];
-      if ( $cluster == "us3iab-node1" ) {
-          get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
-      } else {
-          get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
+      if ( cleanup_retry_unreachable( $seen_file ) )
+      {
+         write_logld( "$me: results for $gfacID not retrievable right now (cluster unreachable); will retry" );
+         return( 0 );
       }
-write_logld( "$me:     clushost=$clushost  reqID=$requestID get_local_files() gfacID=$gfacID" );
+
+      $ceil          = cleanup_complete_ceiling();
+      $fetch_failure = "Results could not be retrieved from $cluster";
+      write_logld( "$me: results for $gfacID still not retrievable after $ceil s; failing the job" );
    }
-else
-write_logld( "$me:     NO get_local_files()" );
+   else if ( $fetched === -2 )
+   {
+      $fetch_failure = "Results could not be staged from $cluster";
+      write_logld( "$me: results for $gfacID cannot be staged; failing the job" );
+   }
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
@@ -180,23 +190,28 @@ write_logld( "$me:     NO get_local_files()" );
    $num_rows = mysqli_num_rows( $result );
    if ( $num_rows == 0 )
    {
-      write_logld( "$me: Cleanup analysis query found 0 entries for $gfacID" );
-      update_autoflow_status( 'FAILED', "Cleanup analysis query found 0 entries for $gfacID" );
-      return( -1 );
+      ## Another worker deleted the row between our two SELECTs.
+      write_logld( "$me: analysis row for $gfacID removed by a concurrent cleanup mid-run; nothing to do" );
+      return( 1 );
    }
 
    list( $analysisID, $stderr, $stdout, $tarfile ) = mysqli_fetch_array( $result );
 
-   if ( strlen( $tarfile ) > 0 )
+   ## A job with no results is still finalized (stdout/stderr saved, tracking
+   ## row deleted) and then failed at the tar step, so no worker retries it.
+   $has_results = ( $fetch_failure == '' && strlen( $tarfile ) > 0 );
+
+   if ( $has_results )
    {  ## Log success at fetch attempt
       write_logld( "$me: Successful data fetch: $requestID $gfacID" );
    }
    else
-   {  ## Log failure at fetch attempt
+   {  ## The fetch failed for good, or the cluster has no results tar.
+      if ( $fetch_failure == '' )
+         $fetch_failure = "No results tarfile";
+
       update_autoflow_status( 'FAILED', "Failed data fetch" );
       write_logld( "$me: Failed data fetch: $requestID $gfacID" );
-      if ( $analysisID == '' )
-         $analysisID = '0';
    }
 
    ## Save queue messages for post-mortem analysis
@@ -218,15 +233,14 @@ write_logld( "$me:     NO get_local_files()" );
                   "Processed: $now\n\n" .
                   "Queue Messages\n\n" ;
 
-   global $lock_dir;
-   global $ll_base_dir;
    global $global_complete_grace_seconds;
-   global $global_complete_max_seconds;
 
-   $seen_dir  = ( isset( $lock_dir ) && $lock_dir != "" ) ? $lock_dir : "$ll_base_dir/$db/$gfacID";
-   $seen_file = "$seen_dir/complete_seen";
+   ## No results means no 'Finished' message worth waiting for.
+   $need_finish = ( $status == 'COMPLETE' && $has_results );
 
-   $need_finish = ( $status == 'COMPLETE' );
+   ## us_mpi_analysis's own success line counts as the finish signal.
+   if ( $need_finish && preg_match( "/^Us_Mpi_Analysis has finished successfully/m", $stdout ) )
+      $need_finish = false;
 
    if ( mysqli_num_rows( $result ) > 0 )
    {
@@ -239,21 +253,13 @@ write_logld( "$me:     NO get_local_files()" );
       }
 
       if ( $need_finish )
-      {  ## No UDP 'Finished' message yet.  UDP is unreliable, so finalize
-         ## anyway once enough time has passed since the job was first seen
-         ## COMPLETE.  Timing uses the jobmonitor's own clock (epoch seconds),
-         ## so it is immune to any timezone/clock skew between the LIMS host,
-         ## the cluster, and the DB (which broke the old strtotime() check).
-         $grace = isset( $global_complete_grace_seconds ) ? (int) $global_complete_grace_seconds : 600;
-         $ceil  = isset( $global_complete_max_seconds )   ? (int) $global_complete_max_seconds   : 21600;
-         $seen  = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
-         if ( $seen <= 0 )
-         {
-            $seen = time();
-            @file_put_contents( $seen_file, $seen );
-         }
-         $elapsed = time() - $seen;
-         write_logld( "$me: complete-since: seen=$seen now=" . time() . " elapsed=$elapsed grace=$grace ceil=$ceil" );
+      {  ## No 'Finished' message yet -- finalize anyway once enough time has
+         ## passed since the job was first seen COMPLETE (local clock, so no
+         ## skew between hosts).
+         $grace   = isset( $global_complete_grace_seconds ) ? (int) $global_complete_grace_seconds : 600;
+         $ceil    = cleanup_complete_ceiling();
+         $elapsed = cleanup_pending_seconds( $seen_file );
+         write_logld( "$me: complete-since: elapsed=$elapsed grace=$grace ceil=$ceil" );
          if ( $elapsed > $grace )
          {
             $need_finish = false;
@@ -298,6 +304,7 @@ write_logld( "$me:     NO get_local_files()" );
    $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM gfac.analysis " .
              "WHERE gfacID='$gfacID' ";
    $result = mysqli_query( $db_handle, $query );
+   $autoflowAnalysisID = 0;
    try
    {
       ## What if this is too large?
@@ -325,7 +332,7 @@ write_logld( "$me:     NO get_local_files()" );
    ## move to end (where we email the user)
    ## update_autoflow_status( $status, $queue_msg );
 
-   ## Delete data from GFAC DB
+   ## Delete the completed central job-tracking records.
    $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
@@ -337,17 +344,18 @@ write_logld( "$me:     NO get_local_files()" );
    }
 write_logld( "$me: GFAC DB entry deleted" );
 
-   ## Copy queue messages to LIMS submit directory (files there are deleted after 7 days)
+   ## Write the accumulated message log to the LIMS submit directory (files
+   ## there are deleted after 7 days).
    global $submit_dir;
    
    ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
+   $query  = "SELECT HPCAnalysisRequestGUID FROM {$us3_db}.HPCAnalysisRequest " .
              "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
    
    if ( ! $result )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
    }
    
    list( $requestGUID ) = mysqli_fetch_array( $result );
@@ -356,7 +364,7 @@ write_logld( "$me: Output dir determined: $output_dir" );
 
    ## Try to create it if necessary, and write the file
    ## Let's use FILE_APPEND, in case this is the second time around and the 
-   ##  GFAC job status was INSERTed, rather than UPDATEd
+   ##  job status was INSERTed, rather than UPDATEd
    if ( ! is_dir( $output_dir ) )
       mkdir( $output_dir, 0775, true );
    $message_filename = "$output_dir/$db-$requestID-messages.txt";
@@ -364,33 +372,29 @@ write_logld( "$me: Output dir determined: $output_dir" );
   ## mysqli_close( $db_handle );
 write_logld( "$me: *messages.txt written" );
 
-   ########/
-   ## Insert data into HPCAnalysis
-
-   $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "                              .
-            "stderr='" . mysqli_real_escape_string( $db_handle, $stderr ) . "', " .
-            "stdout='" . mysqli_real_escape_string( $db_handle, $stdout ) . "' "  .
+   ## Update HPCAnalysisResult with the job's stdout/stderr.
+   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "                              .
+            "stderr='" . mysqli_real_escape_string( $us3_link, $stderr ) . "', " .
+            "stdout='" . mysqli_real_escape_string( $us3_link, $stdout ) . "' "  .
             "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = mysqli_query( $us3_link, $query );
 
    if ( ! $result )
    {
       update_autoflow_status( 'FAILED', "Could not insert data into HPCAnalysis" );
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+      mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+      return( -1 );
+   }
+
+   if ( ! $has_results )
+   {
+      mail_to_user( "fail", $fetch_failure );
       return( -1 );
    }
 
    ## Save the tarfile and expand it
-
-   if ( strlen( $tarfile ) == 0 )
-   {
-      write_logld( "$me: No tarfile" );
-      update_autoflow_status( 'FAILED', "Empty results tarfile" );
-      mail_to_user( "fail", "No results" );
-      return( -1 );
-   }
 
    ## Shouldn't happen
    if ( ! is_dir( "$work" ) )
@@ -424,6 +428,9 @@ write_logld( "$me: *messages.txt written" );
       return( -1 );
    }
 ##write_logld( "$me: tar files extracted" );
+
+   ## Explicit rather than jobmonitor.php's globals, which the cron sweep lacks.
+   $autoflow = get_autoflow_type_id( $us3_link, $us3_db, $autoflowAnalysisID );
 
    ## Insert the model files and noise files
    $files      = file( "analysis_files.txt", FILE_IGNORE_NEW_LINES );
@@ -465,7 +472,7 @@ write_logld( "$me: *messages.txt written" );
          $statistics  = parse_xml( $xml, 'statistics' );
          $otherdata   = parse_xml( $xml, 'id' );
 
-         $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "   .
+         $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "   .
                   "wallTime = {$statistics['walltime']}, " .
                   "CPUTime = {$statistics['cputime']}, " .
                   "CPUCount = {$statistics['cpucount']}, " .
@@ -474,11 +481,11 @@ write_logld( "$me: *messages.txt written" );
                   "endTime = '{$otherdata['endtime']}', " .
                   "mgroupcount = {$otherdata['groupcount']} " .
                   "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
-         $result = mysqli_query( $db_handle, $query );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
          }
 
          file_put_contents( "$output_dir/$fn", $xml );    ## Copy to submit dir
@@ -499,29 +506,29 @@ write_logld( "$me: *messages.txt written" );
          if ( isset( $model_data[ 'editGUID' ] ) )
             $editGUID   = $model_data[ 'editGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.noise SET "  .
+         $query = "INSERT INTO {$us3_db}.noise SET "  .
                   "noiseGUID='$noiseGUID'," .
                   "modelGUID='$modelGUID'," .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=1, "             .
                   "noiseType='$type',"      .
                   "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
          ## Add later after all files are processed: editDataID, modelID
 
-         $result = mysqli_query( $db_handle, $query );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $id        = mysqli_insert_id( $db_handle );
+         $id        = mysqli_insert_id( $us3_link );
          $file_type = "noise";
          $noiseIDs[] = $id;
 
@@ -543,27 +550,27 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
          $modelGUID   = $mrecs_data[ 'modelGUID' ];
 
-         $query = "INSERT INTO ${us3_db}.pcsa_modelrecs SET "  .
+         $query = "INSERT INTO {$us3_db}.pcsa_modelrecs SET "  .
                   "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
                   "modelID=0, "             .
                   "mrecsGUID='$mrecGUID'," .
                   "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
          ## Add later after all files are processed: editDataID, modelID
 
-         $result = mysqli_query( $db_handle, $query );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $id         = mysqli_insert_id( $db_handle );
+         $id         = mysqli_insert_id( $us3_link );
          $file_type  = "mrecs";
          $mrecsIDs[] = $id;
 
@@ -582,6 +589,23 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $modelGUID   = $model_data[ 'modelGUID' ];
          $editGUID    = $model_data[ 'editGUID' ];
 
+         ## A superglobal model has the nil editGUID; link it to the request's
+         ## primary edited file, since model needs an editedDataID.
+         if ( $editGUID == '00000000-0000-0000-0000-000000000000' )
+         {
+            $request_edit_filename = mysqli_real_escape_string( $us3_link, $editXMLFilename );
+            $edited_data_selector  =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE filename='$request_edit_filename' ORDER BY editedDataID LIMIT 1)";
+         }
+         else
+         {
+            $escaped_edit_guid    = mysqli_real_escape_string( $us3_link, $editGUID );
+            $edited_data_selector =
+               "(SELECT editedDataID FROM {$us3_db}.editedData " .
+               "WHERE editGUID='$escaped_edit_guid')";
+         }
+
          if ( $mc_iteration > 1 )
          {
 ##write_logld( "$me:   MODELUpd: mc_iteration=$mc_iteration" );
@@ -592,50 +616,49 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
 write_logld( "$me:   MODELUpd: O:description=$description" );
          }
 
-         $query = "INSERT INTO ${us3_db}.model SET "       .
+         $query = "INSERT INTO {$us3_db}.model SET "       .
                   "modelGUID='$modelGUID',"      .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
+                  "editedDataID=$edited_data_selector," .
                   "description='$description',"  .
                   "MCIteration='$mc_iteration'," .
                   "meniscus='$meniscus'," .
                   "variance='$variance'," .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
+                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
 
-         $result = mysqli_query( $db_handle, $query );
+         $result = mysqli_query( $us3_link, $query );
 
          if ( ! $result )
          {
-            write_logld( "$me: Bad query:\n$query " . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+            write_logld( "$me: Bad query:\n$query " . mysqli_error( $us3_link ) );
+            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+            update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
             return( -1 );
          }
 
-         $modelID   = mysqli_insert_id( $db_handle );
+         $modelID   = mysqli_insert_id( $us3_link );
          $id        = $modelID;
          $file_type = "model";
 
-         update_autoflow_models( $modelID, $modelGUID, $editGUID );
+         update_autoflow_models( $us3_link, $us3_db, $autoflowAnalysisID, $autoflow, $modelID, $modelGUID, $editGUID );
 
-         $query = "INSERT INTO ${us3_db}.modelPerson SET " .
+         $query = "INSERT INTO {$us3_db}.modelPerson SET " .
                   "modelID=$modelID, personID=$personID";
-         $result = mysqli_query( $db_handle, $query );
+         $result = mysqli_query( $us3_link, $query );
 ##write_logld( "$me:   model file inserted into DB : id=$id" );
       }
 
-      $query = "INSERT INTO ${us3_db}.HPCAnalysisResultData SET "       .
+      $query = "INSERT INTO {$us3_db}.HPCAnalysisResultData SET "       .
                "HPCAnalysisResultID='$HPCAnalysisResultID', " .
                "HPCAnalysisResultType='$file_type', "         .
                "resultID=$id";
 
-      $result = mysqli_query( $db_handle, $query );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 ##write_logld( "$me:    ResultData updated : file_type=$file_type" );
@@ -648,20 +671,20 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $noiseIDs as $noiseID )
    {
       $modelGUID = $modelGUIDs[ $noiseID ];
-      $query = "UPDATE ${us3_db}.noise SET "                                                 .
+      $query = "UPDATE {$us3_db}.noise SET "                                                 .
                "editedDataID="                                                     .
-               "(SELECT editedDataID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')," .
+               "(SELECT editedDataID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')," .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE noiseID=$noiseID";
 
-      $result = mysqli_query( $db_handle, $query );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $db_handle ) );
-         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 ##write_logld( "$me:     noise entry updated : noiseID=$noiseID" );
@@ -673,18 +696,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    foreach ( $mrecsIDs as $mrecsID )
    {
       $modelGUID = $rmodlGUIDs[ $mrecsID ];
-      $query = "UPDATE ${us3_db}.pcsa_modelrecs SET "                                                 .
+      $query = "UPDATE {$us3_db}.pcsa_modelrecs SET "                                                 .
                "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
+               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
                "WHERE mrecsID=$mrecsID";
 
-      $result = mysqli_query( $db_handle, $query );
+      $result = mysqli_query( $us3_link, $query );
 
       if ( ! $result )
       {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $db_handle ) );
-         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $db_handle ) );
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
+         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $us3_link ) );
+         update_autoflow_status( 'FAILED', "Internal error - bad query $query " . mysqli_error( $us3_link ) );
          return( -1 );
       }
 ##write_logld( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
@@ -694,18 +717,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## Copy results to LIMS submit directory (files there are deleted after 7 days)
    global $submit_dir; ## LIMS submit files dir
 
-  ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   list( $requestGUID ) = mysqli_fetch_array( $result );
-
+   ## $requestGUID was already fetched above; reuse it here.
    chdir( "$submit_dir/$requestGUID" );
    $f = fopen( "analysis.tar", "w" );
    fwrite( $f, $tarfile );
@@ -717,46 +729,48 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
 ##   mysqli_close( $db_handle );
 
-   ########/
-   ## Send email 
-
+   ## Set the final status now that all model records are written, then notify the user.
    update_autoflow_status( $status, $queue_msg );
    mail_to_user( "success", "" );
 
    return 1;
 }
 
-function get_autoflow_type_id() {
-    global $db_handle;
-    global $gfacID;
-    global $autoflowAnalysisID;
-    global $us3_db;
-    global $self;
-
-    write_logld( "get_autoflow_type() id $autoflowAnalysisID" );
-        
-    if ( $autoflowAnalysisID <= 0 ) {
-        write_logld( "update_autoflow_links() ignored, no id" );
-        return;
+## The autoflow stage type and autoflowID for an autoflowAnalysis request, or
+## null. With no arguments it uses jobmonitor.php's globals.
+function get_autoflow_type_id( $link = null, $us3_db = null, $autoflowAnalysisID = null ) {
+    if ( $link === null ) {
+        $link               = $GLOBALS[ 'db_handle' ];
+        $us3_db             = $GLOBALS[ 'us3_db' ];
+        $autoflowAnalysisID = $GLOBALS[ 'autoflowAnalysisID' ];
     }
 
-    ## get autoflow running submission type
+    write_logld( "get_autoflow_type() id $autoflowAnalysisID" );
 
-    $query = "SELECT statusJson,autoflowID from ${us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
-    echo "query : $query\n";
+    if ( $autoflowAnalysisID <= 0 ) {
+        write_logld( "get_autoflow_type() ignored, no id" );
+        return null;
+    }
 
-    $result = mysqli_query( $db_handle, $query );
+    $query = "SELECT statusJson,autoflowID from {$us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
+
+    $result = mysqli_query( $link, $query );
 
     if ( ! $result ) {
-        ## Just log it and continue
-        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-        return;
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
+        return null;
     }
 
     $obj = mysqli_fetch_object( $result );
+
+    if ( ! $obj ) {
+        write_logld( "get_autoflow_type() no autoflowAnalysis row $autoflowAnalysisID" );
+        return null;
+    }
+
     $statusJson = json_decode( $obj->statusJson );
     debug_json( "statusJson", $statusJson );
-    $tag = $statusJson->submitted;
+    $tag = is_object( $statusJson ) && isset( $statusJson->submitted ) ? $statusJson->submitted : "unknown";
     debug_json( "tag", $tag );
     return
         (object) [
@@ -765,30 +779,27 @@ function get_autoflow_type_id() {
         ];
 }
 
-function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
-    global $db_handle;
-    global $gfacID;
-    global $autoflowAnalysisID;
-    global $us3_db;
-    global $self;
-    global $autoflowType;
-    global $autoflowID;
-
+## Record a stage's model in autoflowModelsLink. $autoflow is what
+## get_autoflow_type_id() returned for $autoflowAnalysisID.
+function update_autoflow_models( $link, $us3_db, $autoflowAnalysisID, $autoflow, $modelID, $modelGUID, $editGUID ) {
     write_logld( "update_autoflow_models() id $autoflowAnalysisID model $modelID modelGUID $modelGUID editGUID $editGUID" );
-        
-    if ( $autoflowAnalysisID <= 0 ) {
-        write_logld( "update_autoflow_models() ignored, no id" );
+
+    if ( $autoflowAnalysisID <= 0 || ! $autoflow ) {
+        write_logld( "update_autoflow_models() ignored, no autoflow request" );
         return;
     }
 
+    $autoflowType = $autoflow->type;
+    $autoflowID   = $autoflow->autoflowID;
+
     ## get editeddataID for editGUID
 
-    $query = "SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID'";
+    $query = "SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID'";
 
-    $result = mysqli_query( $db_handle, $query );
+    $result = mysqli_query( $link, $query );
 
     if ( ! $result ) {
-        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
         return;
     }
 
@@ -803,17 +814,14 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
 
     ## get current autoflowModelsLink
 
-    $query = "SELECT modelsDesc from ${us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
-    echo "query : $query\n";
+    $query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
 
-    $result = mysqli_query( $db_handle, $query );
+    $result = mysqli_query( $link, $query );
 
     if ( ! $result ) {
-        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
         return;
     }
-
-    # debug_json( "result", $result );
 
     $descJson = (object)[];
 
@@ -834,24 +842,24 @@ function update_autoflow_models( $modelID, $modelGUID, $editGUID ) {
         ];
          
     debug_json( "ending descJson", $descJson );
-    $descenc = json_encode( $descJson );
+    $descenc = mysqli_real_escape_string( $link, json_encode( $descJson ) );
 
     if ( $result->num_rows ) {
         ## update
-        $query = "UPDATE ${us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
+        $query = "UPDATE {$us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
     } else {
         ## insert
-        $query = "INSERT INTO ${us3_db}.autoflowModelsLink"
+        $query = "INSERT INTO {$us3_db}.autoflowModelsLink"
             . " set autoflowAnalysisID=$autoflowAnalysisID"
             . " ,modelsDesc='$descenc'"
             . " ,autoflowID=$autoflowID"
             ;
     }
 
-    $result = mysqli_query( $db_handle, $query );
+    $result = mysqli_query( $link, $query );
 
     if ( ! $result ) {
-        write_logld( "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+        write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
         return;
     }
 
