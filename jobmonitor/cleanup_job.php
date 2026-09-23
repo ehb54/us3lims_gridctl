@@ -35,9 +35,6 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    global $user;
    global $passwd;
    global $db;
-   global $guser;
-   global $gpasswd;
-   global $gDB;
    global $me;
    global $work;
    global $email_address;
@@ -125,17 +122,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
 
-   ## Reconnect, this time to the central job-tracking database.
-   $db_handle = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
-
-   if ( ! $db_handle )
-   {
-      write_logld( "$me: Could not connect to DB $dbhost : $gDB" );
-      mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $gDB" );
-      update_autoflow_status( 'FAILED', "Internal error - Could not connect to DB $gDB" );
-      return( -1 );
-   }
-
+   ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, id FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
 
