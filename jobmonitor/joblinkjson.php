@@ -73,3 +73,4 @@ if ( $result->num_rows ) {
 mysqli_stmt_close( $stmt );
 
 debug_json( "modelsDesc", $descJson );
+echo json_encode( $descJson, JSON_PRETTY_PRINT ) . "\n";

@@ -60,7 +60,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    }
    finally
    {
-      @rmdir( $claim );
+      cleanup_claim_release( $claim );
    }
 }
 
@@ -126,21 +126,42 @@ function cleanup_retry_unreachable( $seen_file )
 ## Atomically take the claim (mkdir). Returns true if this process now owns
 ## it. A claim older than an hour is assumed to be from a crashed worker and
 ## taken over; a slow but live cleanup can hold it for minutes.
+function cleanup_claim_release( $claim )
+{
+   @unlink( "$claim/owner" );
+   @rmdir( $claim );
+}
+
 function cleanup_claim_acquire( $claim, $log_fn )
 {
    $stale_seconds = 3600;
 
    if ( @mkdir( $claim, 0770, true ) )
+   {
+      ## Owner tag: a live owner keeps its claim however long a copy takes.
+      @file_put_contents( "$claim/owner", getmypid() );
       return true;
+   }
 
    ## Already claimed -- take it over only if it is clearly abandoned.
-   $mtime = @filemtime( $claim );
-
-   if ( $mtime !== false  &&  ( time() - $mtime ) > $stale_seconds )
+   $owner = (int) @file_get_contents( "$claim/owner" );
+   if ( $owner > 0 )
+      $abandoned = function_exists( 'posix_kill' ) ? ! @posix_kill( $owner, 0 ) : ! file_exists( "/proc/$owner" );
+   else
    {
-      $log_fn( "removing stale cleanup claim $claim (age " . ( time() - $mtime ) . "s)" );
-      @rmdir( $claim );
-      return (bool) @mkdir( $claim, 0770, true );
+      $mtime     = @filemtime( $claim );
+      $abandoned = $mtime !== false && ( time() - $mtime ) > $stale_seconds;
+   }
+
+   if ( $abandoned )
+   {
+      $log_fn( "removing abandoned cleanup claim $claim (owner " . ( $owner ?: 'unknown' ) . ")" );
+      cleanup_claim_release( $claim );
+      if ( @mkdir( $claim, 0770, true ) )
+      {
+         @file_put_contents( "$claim/owner", getmypid() );
+         return true;
+      }
    }
 
    return false;

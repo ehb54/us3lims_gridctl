@@ -15,4 +15,10 @@ if ( ( $listen_config_version ?? 0 ) < 2 ) {
     exit( 1 );
 }
 
+// One form for every caller: $class_dir always ends in a slash
+$class_dir = rtrim( $class_dir, '/' ) . '/';
+
+// The "log and continue" paths expect failed queries to return false (PHP 8.1+ throws by default)
+mysqli_report( MYSQLI_REPORT_OFF );
+
 require_once __DIR__ . '/listen_functions.php';

@@ -52,6 +52,10 @@ if ( ! $gLink ) {
 
 $stmt = mysqli_prepare( $gLink,
     "SELECT cluster, metaschedulerClusterExecuting FROM analysis WHERE gfacID = ?" );
+if ( ! $stmt ) {
+    fwrite( $STDERR, "query failed: " . mysqli_error( $gLink ) . "\n" );
+    exit( 1 );
+}
 mysqli_stmt_bind_param( $stmt, 's', $gfacid );
 mysqli_stmt_execute( $stmt );
 $row = mysqli_fetch_assoc( mysqli_stmt_get_result( $stmt ) );

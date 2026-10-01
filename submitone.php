@@ -315,7 +315,7 @@ chdir( $php_base );
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
 $person->{'userlevel'} = 2;
-$autoflow_admin_email        = "us3-admin@biophysics.uleth.ca";
+$autoflow_admin_email        = $admin_email;   ## from listen-config.php
 $person->{'email'}           = $autoflow_admin_email;
 $person->{'submitter_email'} = $autoflow_admin_email;
 
@@ -331,7 +331,7 @@ echo "preparing to call $php_queue_setup_1\n";
 
 $queue = "batch";
 
-$global_config_file = "$class_dir/../global_config.php";
+$global_config_file = $class_dir . "../global_config.php";
 try {
     include_once( $global_config_file );
 } catch ( Exception $e ) {

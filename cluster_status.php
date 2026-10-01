@@ -245,11 +245,11 @@ function escalate_probe_failure( $cluster, $probe ) {
     $previous = previous_cluster_status( $cluster );
 
     if ( $previous === 'warn' || $previous === 'down' ) {
-        fwrite( STDERR, "cluster_status: $cluster still failing ($why); marking down\n" );
+        write_log( "cluster_status: $cluster still failing ($why); marking down" );
         return 'down';
     }
 
-    fwrite( STDERR, "cluster_status: $cluster $why; marking warn (will escalate if it fails again)\n" );
+    write_log( "cluster_status: $cluster $why; marking warn (will escalate if it fails again)" );
 
     return 'warn';
 }

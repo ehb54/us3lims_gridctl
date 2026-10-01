@@ -49,7 +49,13 @@ function cluster_probe_job_status( $cluster, $gfacID, $log_fn = null )
       return GRIDCTL_UNKNOWN;
    }
 
-   $rx  = cluster_probe_remote( $cluster, $log );
+   try {
+      $rx = cluster_probe_remote( $cluster, $log );
+   } catch ( Throwable $e ) {
+      ## A bad cluster entry must not abort the whole sweep; nothing was learned.
+      $log( "cluster_probe: cluster '$cluster' configuration rejected: " . $e->getMessage() );
+      return GRIDCTL_UNREACHABLE;
+   }
    $res = $rx->run( "squeue -h -o %T -t all -j " . escapeshellarg( $gfacID ), array( 'label' => "status $gfacID" ) );
 
    return cluster_probe_status_from_result( $res, $cluster, $gfacID, $log );
@@ -161,7 +167,12 @@ function cluster_probe_cancel_job( $cluster, $gfacID, $log_fn = null, $opts = ar
 {
    $log = is_callable( $log_fn ) ? $log_fn : 'error_log';
 
-   $rx  = cluster_probe_remote( $cluster, $log );
+   try {
+      $rx = cluster_probe_remote( $cluster, $log );
+   } catch ( Throwable $e ) {
+      $log( "cluster_probe: cluster '$cluster' configuration rejected: " . $e->getMessage() );
+      return false;
+   }
    $res = $rx->run( "scancel " . escapeshellarg( $gfacID ),
                     array_merge( array( 'label' => "scancel $gfacID" ), $opts ) );
 
@@ -180,7 +191,11 @@ function cluster_probe_cancel_job( $cluster, $gfacID, $log_fn = null, $opts = ar
 /** Is the cluster answering right now? Short and unretried on purpose. */
 function cluster_probe_reachable( $cluster, $log_fn = null )
 {
-   $res = cluster_probe_remote( $cluster, $log_fn )->ping();
+   try {
+      $res = cluster_probe_remote( $cluster, $log_fn )->ping();
+   } catch ( Throwable $e ) {
+      return false;
+   }
 
    return $res[ 'ok' ];
 }

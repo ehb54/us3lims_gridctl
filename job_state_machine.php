@@ -461,10 +461,13 @@ class job_state_machine
 
       list( $analysisID ) = $row;
 
+      ## A deferral repeats every poll from every worker; record it once an hour.
+      $table  = $this->gfac_table( 'queue_messages' );
+      $quoted = $this->quote( $this->gfac, $message );
       $this->exec( $this->gfac,
-         "INSERT INTO " . $this->gfac_table( 'queue_messages' ) . " SET "
-         . "message = '" . $this->quote( $this->gfac, $message ) . "', "
-         . "analysisID = '$analysisID'" );
+         "INSERT INTO $table ( message, analysisID ) SELECT '$quoted', '$analysisID' FROM DUAL"
+         . " WHERE NOT EXISTS ( SELECT 1 FROM $table WHERE analysisID = '$analysisID'"
+         . " AND message = '$quoted' AND time > NOW() - INTERVAL 1 HOUR )" );
    }
 
    /** Record the user-visible message against the job's HPCAnalysisResult row. */
