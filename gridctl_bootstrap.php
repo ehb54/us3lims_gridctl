@@ -1,0 +1,18 @@
+<?php
+// Loads listen-config.php (values only), refuses a pre-upgrade config, then loads the shared helpers.
+if ( !isset( $us3bin ) ) {
+    $us3entry = function_exists( 'posix_getpwnam' ) ? posix_getpwnam( 'us3' ) : false;
+    $us3bin   = ( $us3entry ? $us3entry[ 'dir' ] : '/home/us3' ) . '/lims/bin';
+}
+
+include "$us3bin/listen-config.php";
+
+if ( ( $listen_config_version ?? 0 ) < 2 ) {
+    $msg = "gridctl: $us3bin/listen-config.php is the pre-upgrade format; "
+         . "run php ~us3/lims/database/utils/uslims_upgrade.php";
+    if ( function_exists( 'syslog' ) ) syslog( LOG_ERR, $msg );
+    fwrite( STDERR, "$msg\n" );
+    exit( 1 );
+}
+
+require_once __DIR__ . '/listen_functions.php';

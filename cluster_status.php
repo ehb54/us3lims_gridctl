@@ -3,7 +3,7 @@
 {};
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-require "$us3bin/listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 require "$us3bin/cluster_config.php";
 
 $debug         = false;

@@ -6,7 +6,7 @@ $self    = __FILE__;
 $errors  = '';
 
 ## Needs only configuration, logging and the database helper from listen-config.php.
-require_once "$us3bin/listen-config.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 
 # ********* start user defines *************
 

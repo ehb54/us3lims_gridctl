@@ -1,7 +1,7 @@
 <?php
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 
 # add locking
 if ( isset( $lock_dir ) ) {

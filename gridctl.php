@@ -1,7 +1,7 @@
 <?php
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include_once "$us3bin/listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 include_once $class_dir . "../global_config.php";   ## $cluster_details, used by get_local_status()
 ## Siblings are included relative to this file: the repo is bin/ under Ansible
 ## and bin/gridctl/ under USiaB and the dev stack.

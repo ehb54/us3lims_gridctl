@@ -20,7 +20,7 @@ if ( count( $argv ) != 3 ) {
 }
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 
 # ********* start user defines *************
 
@@ -335,6 +335,8 @@ try {
     echo "ERROR: including $global_config_file " . $e->getMessage() . "\n";
 }
 
+## Cluster errors are raised after the interactive check, since a WAIT stage needs no cluster.
+$cluster_error = null;
 if ( $cluster == "localhost" ) {
     ## $default_local_cluster in global_config.php names the LIMS host's cluster.
     $cluster = null;
@@ -343,8 +345,9 @@ if ( $cluster == "localhost" ) {
         $cluster = $default_local_cluster;
     }
     if ( $cluster === null ) {
-        error( "cluster 'localhost' requires \$default_local_cluster to be set"
-               . " to a cluster present in \$cluster_details" );
+        $cluster_error = "cluster 'localhost' requires \$default_local_cluster to be set"
+               . " to a cluster present in \$cluster_details;"
+               . " run php ~us3/lims/database/utils/uslims_upgrade.php";
     }
     if ( isset( $cluster_details[$cluster] ) ) {
         $host_name = $cluster_details[$cluster]['name'];
@@ -362,7 +365,7 @@ if ( $cluster == "localhost" ) {
         }
         echo "cluster $cluster host_name $host_name queue $queue\n";
     } else {
-        error( "cluster '$cluster' not found or missing 'name' in cluster_details" );
+        $cluster_error = "cluster '$cluster' not found or missing 'name' in cluster_details";
     }
 }
 
@@ -484,6 +487,10 @@ if ( $stage != "PCSA" ) {
         }
         exit();
     }
+}
+
+if ( $cluster_error !== null ) {
+    error( $cluster_error );
 }
 
 if ( $stage == "PCSA" ) {

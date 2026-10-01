@@ -9,7 +9,7 @@
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include_once "$us3bin/listen-config.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 include_once $class_dir . "../global_config.php";   ## $cluster_details
 include_once __DIR__ . "/../cluster_probe.php";
 

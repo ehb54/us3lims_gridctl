@@ -5,7 +5,7 @@ $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
 $us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
-include_once "$us3bin/listen-config.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 include $class_dir . "../global_config.php";
 
 include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
