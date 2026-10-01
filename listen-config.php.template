@@ -13,6 +13,7 @@ $listen_port = 12233;
 //$dbhost      = "uslims.uleth.ca";
 $dbhost      = "localhost";
 $servhost    = "uslims.uleth.ca";
+$host_name   = "uslims.uleth.ca";                      // this host, in notification emails
 $self        = basename( $_SERVER['PHP_SELF'] );
 $class_dir   = '/srv/www/htdocs/common/class/';
 
