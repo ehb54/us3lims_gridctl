@@ -65,7 +65,7 @@ function process( $msg )
    if ( ! $resource )
    {
       write_log( "$self process(): Could not connect to MySQL - " . mysqli_error($resource) );
-      write_log( "$self process(): dbhost,user,passwd,db $dbhost, $user, $passwd, $db" );
+      write_log( "$self process(): dbhost,user,db $dbhost, $user, $db" );
       write_log( "$self process(): original msg - $msg" );
       return;
    }
