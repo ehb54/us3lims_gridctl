@@ -164,7 +164,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
          return( 0 );
       }
 
-      $ceil          = cleanup_complete_ceiling();
+      $ceil          = cleanup_unreachable_ceiling();
       $fetch_failure = "Results could not be retrieved from $cluster";
       write_logld( "$me: results for $gfacID still not retrievable after $ceil s; failing the job" );
    }

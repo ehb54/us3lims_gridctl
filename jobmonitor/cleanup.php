@@ -107,10 +107,20 @@ function cleanup_complete_ceiling()
    return isset( $global_complete_max_seconds ) ? (int) $global_complete_max_seconds : 21600;
 }
 
-## Keep retrying a job whose cluster is unreachable? True until the ceiling.
+## How long to keep retrying results on an unreachable cluster: the outage
+## hold, so a maintenance window does not fail a job whose results are intact.
+function cleanup_unreachable_ceiling()
+{
+   global $global_cluster_abandon_hours;
+
+   $hold = isset( $global_cluster_abandon_hours ) ? (int) $global_cluster_abandon_hours * 3600 : 72 * 3600;
+   return max( cleanup_complete_ceiling(), $hold );
+}
+
+## Keep retrying a job whose cluster is unreachable? True until the outage hold.
 function cleanup_retry_unreachable( $seen_file )
 {
-   return cleanup_pending_seconds( $seen_file ) <= cleanup_complete_ceiling();
+   return cleanup_pending_seconds( $seen_file ) <= cleanup_unreachable_ceiling();
 }
 
 ## Atomically take the claim (mkdir). Returns true if this process now owns
