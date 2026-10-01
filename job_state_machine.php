@@ -257,9 +257,21 @@ class job_state_machine
 
    ## Record the cluster's answer unless it is one of $live_states ("no news").
    ## Returns true when the job has moved on and the caller should stop.
-   private function reconcile( $live_states, $what )
+   private function reconcile( $live_states, $what, $updatetime )
    {
       $job_status = $this->get_local_status();
+
+      ## A configured cluster that answers but no longer lists the job: it ended
+      ## and aged out of squeue (e.g. its 'Finished' UDP was lost). Finish it like
+      ## any completed job; cleanup then fails it if the results are missing.
+      if ( $job_status === GRIDCTL_UNKNOWN
+           && isset( $GLOBALS[ 'cluster_details' ][ $this->cluster ] )
+           && $updatetime + self::SETTLE_SECONDS <= time() )
+      {
+         $this->logf( "$what: job no longer listed by the cluster; collecting results" );
+         $this->update_job_status( 'COMPLETED' );
+         return true;
+      }
 
       if ( in_array( $job_status, $live_states ) )
          return false;
@@ -273,16 +285,16 @@ class job_state_machine
    /** Job has been sitting in SUBMITTED. First stall window. */
    public function submitted( $updatetime )
    {
-      $hours  = $this->stall_hours( 'global_max_queue_time_hours', 24 );
+      $hours  = $this->stall_hours( 'global_max_queue_time_hours', 0 );
       $window = $hours * 3600;
 
       if ( $updatetime + self::SETTLE_SECONDS > time() )
          return;
 
-      ## Inside the window: just check whether the job has moved on.
-      if ( $window > 0 && $updatetime + $window > time() )
+      ## Inside the window, or no window (#864): just check whether the job has moved on.
+      if ( $window <= 0 || $updatetime + $window > time() )
       {
-         $this->reconcile( self::QUEUED_STATES, 'submitted' );
+         $this->reconcile( self::QUEUED_STATES, 'submitted', $updatetime );
          return;
       }
 
@@ -293,10 +305,10 @@ class job_state_machine
    /** Job has been sitting in SUBMIT_TIMEOUT. Second window, then give up. */
    public function submit_timeout( $updatetime )
    {
-      $hours = $this->stall_hours( 'global_max_queue_time_hours', 24 );
+      $hours = $this->stall_hours( 'global_max_queue_time_hours', 0 );
 
       ## Moved on: the first timeout was premature.
-      if ( $this->reconcile( self::QUEUED_STATES, 'submit timeout' ) )
+      if ( $this->reconcile( self::QUEUED_STATES, 'submit timeout', $updatetime ) )
          return;
 
       $this->fire_stall( $updatetime, $hours * 3600, 'FAILED', 'submit timeout (final)',
@@ -315,9 +327,9 @@ class job_state_machine
       if ( $updatetime + self::SETTLE_SECONDS > time() )
          return;
 
-      if ( $window > 0 && $updatetime + $window > time() )
+      if ( $window <= 0 || $updatetime + $window > time() )
       {
-         $this->reconcile( self::RUNNING_STATES, 'running' );
+         $this->reconcile( self::RUNNING_STATES, 'running', $updatetime );
          return;
       }
 
@@ -330,7 +342,7 @@ class job_state_machine
    {
       $hours = $this->stall_hours( 'global_max_run_time_hours', 24 );
 
-      if ( $this->reconcile( self::RUNNING_STATES, 'run timeout' ) )
+      if ( $this->reconcile( self::RUNNING_STATES, 'run timeout', $updatetime ) )
          return;
 
       $this->get_us3_data();
