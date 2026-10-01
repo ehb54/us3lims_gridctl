@@ -297,7 +297,8 @@ $editdata = db_obj_result( $db_handle,
 echo json_encode( $editdata, JSON_PRETTY_PRINT ) . "\n";
 
 $person = db_obj_result( $db_handle,
-    "select * from {$lims_db}.people where personID='{$invID}'" );
+    "select personID, personGUID, fname, lname, phone, email, userlevel, advancelevel, clusterAuthorizations " .
+    "from {$lims_db}.people where personID='{$invID}'" );
 
 echo json_encode( $person, JSON_PRETTY_PRINT ) . "\n";
 
@@ -396,7 +397,7 @@ echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\
 function dump_it( $str ) {
    global $dumpfile;
    file_put_contents( $dumpfile, $str, FILE_APPEND );
-   chmod( $dumpfile, 0666 );
+   chmod( $dumpfile, 0640 );
    return true;
 }
 
