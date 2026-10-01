@@ -146,7 +146,9 @@ function cleanup_claim_acquire( $claim, $log_fn )
    ## Already claimed -- take it over only if it is clearly abandoned.
    $owner = (int) @file_get_contents( "$claim/owner" );
    if ( $owner > 0 )
+   {
       $abandoned = function_exists( 'posix_kill' ) ? ! @posix_kill( $owner, 0 ) : ! file_exists( "/proc/$owner" );
+   }
    else
    {
       $mtime     = @filemtime( $claim );
