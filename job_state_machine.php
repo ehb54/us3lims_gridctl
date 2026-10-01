@@ -385,7 +385,12 @@ class job_state_machine
          $this->update_db( $message );
       }
 
-      $this->update_autoflow_status( $status, $message !== null ? $message : $status );
+      ## The stage advances only when cleanup has imported the results; until
+      ## then a finished job reads as DATA (still in progress) to submitctl.
+      if ( $status === 'COMPLETE' )
+         $this->update_autoflow_status( 'DATA', 'Job finished; importing results' );
+      else
+         $this->update_autoflow_status( $status, $message !== null ? $message : $status );
    }
 
    ## Record a status in gfac.analysis without touching the stage or queue
