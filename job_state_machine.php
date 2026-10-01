@@ -556,7 +556,7 @@ class job_state_machine
          . "status='" . $this->quote( $us3, $stage ) . "', "
          . "statusMsg='" . $this->quote( $us3, $message ) . "' "
          . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
-         . " AND NOT status RLIKE '^(failed|error|canceled)$'" );
+         . " AND NOT status RLIKE '^(failed|error|canceled|complete)$'" );
    }
 
    ## The status the scientist sees; left alone when there is no mapping.
@@ -577,8 +577,10 @@ class job_state_machine
       if ( ! $us3 )
          return;
 
+      ## Never move a finished job back; a sweep may be acting on a stale snapshot.
       $this->exec( $us3,
          "UPDATE " . $this->us3_table( 'HPCAnalysisResult' ) . " SET "
-         . "queueStatus='$queue_status' WHERE gfacID = '{$this->gfacID}'" );
+         . "queueStatus='$queue_status' WHERE gfacID = '{$this->gfacID}'"
+         . " AND queueStatus NOT IN ('completed', 'failed', 'aborted')" );
    }
 }
