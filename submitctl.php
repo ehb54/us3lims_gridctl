@@ -413,15 +413,23 @@ function cancel_stage_job( $gfacID, $cluster_default ) {
         }
     }
 
-    if ( $cluster === '' ) {
-        write_logls( "cannot cancel {$gfacID}: no cluster recorded for it", 0 );
+    ## GUI requests name the LIMS host's own cluster 'localhost'.
+    if ( $cluster === 'localhost' ) {
+        global $default_local_cluster;
+        $cluster = $default_local_cluster ?? '';
+    }
+
+    global $cluster_details;
+    if ( $cluster === '' || ! isset( $cluster_details[ $cluster ] ) ) {
+        write_logls( "cannot cancel {$gfacID}: cluster '{$cluster}' is not configured", 0 );
         return;
     }
 
     write_logls( "canceling gfac job {$gfacID} on {$cluster}", 1 );
 
     $ok = cluster_probe_cancel_job( $cluster, $gfacID,
-        function ( $m ) { write_logls( $m, 1 ); } );
+        function ( $m ) { write_logls( $m, 1 ); },
+        array( 'retries' => 0, 'timeout' => 15 ) );
 
     if ( ! $ok ) {
         ## The only trace that a job may still be running on the cluster.

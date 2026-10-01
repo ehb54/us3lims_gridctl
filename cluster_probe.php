@@ -157,12 +157,13 @@ function cluster_probe_normalise_state( $jstat, $log_fn = null )
 }
 
 /** Cancel a job on the cluster. True only if scancel was actually delivered. */
-function cluster_probe_cancel_job( $cluster, $gfacID, $log_fn = null )
+function cluster_probe_cancel_job( $cluster, $gfacID, $log_fn = null, $opts = array() )
 {
    $log = is_callable( $log_fn ) ? $log_fn : 'error_log';
 
    $rx  = cluster_probe_remote( $cluster, $log );
-   $res = $rx->run( "scancel " . escapeshellarg( $gfacID ), array( 'label' => "scancel $gfacID" ) );
+   $res = $rx->run( "scancel " . escapeshellarg( $gfacID ),
+                    array_merge( array( 'label' => "scancel $gfacID" ), $opts ) );
 
    if ( $res[ 'ok' ] )
    {
