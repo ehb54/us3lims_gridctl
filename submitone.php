@@ -223,7 +223,10 @@ register_shutdown_function( function () {
         return;
     }
     mysqli_stmt_close( $statement );
-    if ( strtoupper( $row->{'status'} ) !== 'READY' ) {
+    ## SUBMIT_TIMEOUT (from markAutoflowSubmitFailed) also has no Slurm job, and
+    ## submitctl reads it as still in progress, so it is failed here the same way.
+    $status = strtoupper( $row->{'status'} );
+    if ( $status !== 'READY' && $status !== 'SUBMIT_TIMEOUT' ) {
         return;
     }
 
@@ -232,7 +235,7 @@ register_shutdown_function( function () {
             ? "submitone.php exited without submitting the job"
             : "submitone.php aborted: " . $last[ 'message' ];
 
-    write_logl( "$self: {$id_field} {$ID} still READY at shutdown, marking FAILED: $msg", 0 );
+    write_logl( "$self: {$id_field} {$ID} still $status at shutdown, marking FAILED: $msg", 0 );
 
     $statement = mysqli_prepare( $db_handle,
         "UPDATE autoflowAnalysis SET status = 'FAILED', statusMsg = ? WHERE requestID = ?" );
