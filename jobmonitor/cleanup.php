@@ -39,10 +39,12 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    ## job_cleanup() imports with plain INSERTs, so only the claim holder runs it.
    $claim = cleanup_claim_path( $us3_db, $gfacID );
 
+   ## 0, not 1: the claim may be left from a killed worker, and a caller that
+   ## stopped here would leave the job unfinished until the claim goes stale.
    if ( ! cleanup_claim_acquire( $claim, $log_fn ) )
    {
-      $log_fn( "cleanup already claimed for $gfacID by another worker; skipping" );
-      return 1;
+      $log_fn( "cleanup already claimed for $gfacID by another worker; will retry" );
+      return 0;
    }
 
    try

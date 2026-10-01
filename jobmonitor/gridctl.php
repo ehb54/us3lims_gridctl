@@ -84,8 +84,8 @@ function check_job() {
 
         ## A job that finished and is waiting for its output to be collected.
         case "DATA":
-            complete( $gfacID );
-            return true;
+            ## 0: not finalized yet (e.g. cluster unreachable); keep monitoring.
+            return complete( $gfacID ) !== 0;
 
         case "COMPLETED":
             case "COMPLETE":
@@ -104,14 +104,13 @@ function check_job() {
             case "FAILED":
             write_logld( "  $status gfacID=$gfacID" );
             ## Passed through: cancelled is 'aborted' to the user, failed 'failed'.
-            failed( $status );
-            return true;
+            ## 0: the output could not be fetched yet (cluster unreachable); keep monitoring.
+            return failed( $status ) !== 0;
             break;
 
         case "FINISHED":
             case "DONE":
-            complete( $gfacID );
-            return true;
+            return complete( $gfacID ) !== 0;
         
         case "PROCESSING":
         default:
