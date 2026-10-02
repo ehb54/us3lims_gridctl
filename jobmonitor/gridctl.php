@@ -64,10 +64,14 @@ function check_job() {
             submitted( $update_epoch );
             break;  
 
-        case "SUBMIT_TIMEOUT": 
+        ## Keep monitoring: submit_timeout() is the second window. It has to be
+        ## re-entered until it either reconciles the job or escalates to FAILED,
+        ## which is what collects the results and tells the user. Returning true
+        ## here ended the monitor after one call and left the row stranded, which
+        ## only the gridctl.php cron sweep used to pick up.
+        case "SUBMIT_TIMEOUT":
             submit_timeout( $update_epoch );
-            return true;
-            break;  
+            break;
 
         case "RUNNING":
         case "STARTED":
@@ -77,9 +81,9 @@ function check_job() {
             running( $update_epoch, $queue_msg );
             break;
 
+        ## Same as SUBMIT_TIMEOUT: the second window needs re-entering.
         case "RUN_TIMEOUT":
             run_timeout( $update_epoch );
-            return true;
             break;
 
         ## A job that finished and is waiting for its output to be collected.
