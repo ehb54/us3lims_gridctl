@@ -420,7 +420,13 @@ function cancel_stage_job( $gfacID, $cluster_default ) {
     }
 
     global $cluster_details;
-    if ( $cluster === '' || ! isset( $cluster_details[ $cluster ] ) ) {
+    ## Two different problems: nothing was recorded for the job, or what was
+    ## recorded is not a cluster this host knows. "cluster ''" reads like a bug.
+    if ( $cluster === '' ) {
+        write_logls( "cannot cancel {$gfacID}: no cluster recorded for it", 0 );
+        return;
+    }
+    if ( ! isset( $cluster_details[ $cluster ] ) ) {
         write_logls( "cannot cancel {$gfacID}: cluster '{$cluster}' is not configured", 0 );
         return;
     }
