@@ -10,10 +10,14 @@ $cfgfile     = "$home/.us3lims.ini";
 $configs     = parse_ini_file( $cfgfile, true );
 $submit_dir  = '/srv/www/htdocs/uslims3/uslims3_data'; // LIMS submit files dir
 $listen_port = 12233;
-//$dbhost      = "uslims.uleth.ca";
 $dbhost      = "localhost";
-$servhost    = "uslims.uleth.ca";
-$host_name   = "uslims.uleth.ca";                      // this host, in notification emails
+// Placeholders. Ansible substitutes these from {{ hostname }}, and
+// uslims_upgrade.php carries the host's existing values across, so a deployed
+// file never keeps them. A real hostname as the default meant that a host which
+// somehow escaped both would address its notification mail, and its gfac
+// connections, to someone else's production LIMS.
+$servhost    = "CHANGE-ME.example.org";
+$host_name   = "CHANGE-ME.example.org";                // this host, in notification emails
 $self        = basename( $_SERVER['PHP_SELF'] );
 $class_dir   = '/srv/www/htdocs/common/class/';
 
