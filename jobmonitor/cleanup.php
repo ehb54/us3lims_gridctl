@@ -14,7 +14,7 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-## Called by both the cron sweep's and the daemon's cleanup().
+## Called by the daemon's cleanup().
 ## Returns -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
 {
@@ -35,8 +35,9 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       return 1;          ## gfacID no longer tracked: nothing to do
    }
 
-   ## The cron sweep and the daemon both reach here for the same job, and
    ## job_cleanup() imports with plain INSERTs, so only the claim holder runs it.
+   ## One monitor per job is the rule, but --restart decides what is unmonitored by
+   ## reading the process table, which has misread it before.
    $claim = cleanup_claim_path( $us3_db, $gfacID );
 
    ## 0, not 1: the claim may be left from a killed worker, and a caller that
@@ -56,7 +57,18 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       }
 
       $log_fn( "calling job_cleanup() reqID=$requestID" );
-      return job_cleanup( $us3_db, $requestID, $db_handle );
+      $outcome = job_cleanup( $us3_db, $requestID, $db_handle );
+
+      ## Terminal either way means the stage has been written, so the finalizing
+      ## span is over. One place rather than every exit path in job_cleanup: what
+      ## matters is that the marker survives only when the worker dies mid-span,
+      ## and a death skips this as surely as it skips the release below.
+      if ( $outcome !== 0 )
+      {
+         cleanup_finalizing_end( $us3_db, $gfacID );
+      }
+
+      return $outcome;
    }
    finally
    {
@@ -65,7 +77,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 }
 
 ## Per-job directory under the job log tree; jobmonitor.php's $lock_dir.
-## The cron sweep does not set $ll_base_dir, hence the fallback.
+## uslims_jobs.php, which scans these directories, does not set $ll_base_dir.
 function cleanup_job_dir( $us3_db, $gfacID )
 {
    global $ll_base_dir;
@@ -78,9 +90,67 @@ function cleanup_job_dir( $us3_db, $gfacID )
 }
 
 ## Directory used as the cross-worker cleanup claim for one job.
+## The files a job keeps in its own directory. Declared in one place so the set is
+## discoverable and a call site cannot invent a fourth by typo: three of these grew
+## separately, each with its own hand-built path.
+##
+## The values are the names on disk and must not change. A running cleanup holds
+## its claim by filename, so renaming one during an upgrade would let a second
+## worker take the claim and import the same results twice.
+function job_state_files()
+{
+   return array(
+      'claim'         => 'cleanup.claim',   ## only this worker may finalize the job
+      'finalizing'    => 'finalizing',      ## the row is gone, the stage is not written yet
+      'complete_seen' => 'complete_seen',   ## when cleanup first found the job unfinalizable
+   );
+}
+
+## The path of one of them. An unknown name is a programming error, not input.
+function job_state_path( $us3_db, $gfacID, $what )
+{
+   $files = job_state_files();
+
+   if ( ! isset( $files[ $what ] ) )
+   {
+      throw new InvalidArgumentException(
+         "unknown job state file '$what'; known: " . implode( ', ', array_keys( $files ) ) );
+   }
+
+   return cleanup_job_dir( $us3_db, $gfacID ) . '/' . $files[ $what ];
+}
+
 function cleanup_claim_path( $us3_db, $gfacID )
 {
-   return cleanup_job_dir( $us3_db, $gfacID ) . "/cleanup.claim";
+   return job_state_path( $us3_db, $gfacID, 'claim' );
+}
+
+## Marker for the span between deleting the gfac.analysis row and writing the
+## job's final stage status. In that span the job has no row, so nothing restarts
+## a monitor for it, and the stage would sit at 'running' for ever if the worker
+## died. The marker records what a later run needs to close the stage out.
+function cleanup_finalizing_path( $us3_db, $gfacID )
+{
+   return job_state_path( $us3_db, $gfacID, 'finalizing' );
+}
+
+function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID )
+{
+   $path = cleanup_finalizing_path( $us3_db, $gfacID );
+   @mkdir( dirname( $path ), 0770, true );
+   @file_put_contents( $path, json_encode( array(
+      'us3_db'             => $us3_db,
+      'gfacID'             => $gfacID,
+      'autoflowAnalysisID' => (int) $autoflowAnalysisID,
+      'requestID'          => (int) $requestID,
+      'pid'                => getmypid(),
+      'started'            => time(),
+   ) ) );
+}
+
+function cleanup_finalizing_end( $us3_db, $gfacID )
+{
+   @unlink( cleanup_finalizing_path( $us3_db, $gfacID ) );
 }
 
 ## Seconds since cleanup first found this job not yet finalizable. The first
@@ -132,6 +202,37 @@ function cleanup_claim_release( $claim )
    @rmdir( $claim );
 }
 
+## When the process at $pid started, as an opaque string, or '' when it cannot be
+## told. A PID on its own is not an identity: PIDs are reused, and a claim whose
+## owner had died could be held by an unrelated process for as long as that
+## process lived, which on a long-running host is indefinitely.
+function cleanup_process_start( $pid )
+{
+   $stat = @file_get_contents( "/proc/$pid/stat" );
+   if ( $stat !== false )
+   {
+      ## Field 22 is starttime in clock ticks since boot. The comm field can
+      ## contain spaces and brackets, so count from the last ')'.
+      $rest   = substr( $stat, (int) strrpos( $stat, ')' ) + 2 );
+      $fields = preg_split( '/\s+/', trim( $rest ) );
+      if ( isset( $fields[ 19 ] ) )
+      {
+         return (string) $fields[ 19 ];
+      }
+   }
+
+   ## No procfs: ask ps. Empty means the caller falls back to the age rule.
+   $out = @shell_exec( 'ps -o lstart= -p ' . (int) $pid . ' 2>/dev/null' );
+
+   return $out === null ? '' : trim( (string) $out );
+}
+
+## "<pid> <start>", the tag written into a claim.
+function cleanup_claim_owner_tag( $pid )
+{
+   return $pid . ' ' . cleanup_process_start( $pid );
+}
+
 function cleanup_claim_acquire( $claim, $log_fn )
 {
    $stale_seconds = 3600;
@@ -139,15 +240,33 @@ function cleanup_claim_acquire( $claim, $log_fn )
    if ( @mkdir( $claim, 0770, true ) )
    {
       ## Owner tag: a live owner keeps its claim however long a copy takes.
-      @file_put_contents( "$claim/owner", getmypid() );
+      @file_put_contents( "$claim/owner", cleanup_claim_owner_tag( getmypid() ) );
       return true;
    }
 
    ## Already claimed -- take it over only if it is clearly abandoned.
-   $owner = (int) @file_get_contents( "$claim/owner" );
+   $tag   = trim( (string) @file_get_contents( "$claim/owner" ) );
+   $parts = $tag === '' ? array() : explode( ' ', $tag, 2 );
+   $owner = isset( $parts[ 0 ] ) ? (int) $parts[ 0 ] : 0;
+   $start = isset( $parts[ 1 ] ) ? trim( $parts[ 1 ] ) : '';
    if ( $owner > 0 )
    {
-      $abandoned = function_exists( 'posix_kill' ) ? ! @posix_kill( $owner, 0 ) : ! file_exists( "/proc/$owner" );
+      $alive = function_exists( 'posix_kill' ) ? (bool) @posix_kill( $owner, 0 )
+                                               : file_exists( "/proc/$owner" );
+      ## Alive at that PID is not enough: it has to be the same process. A tag
+      ## written before this check existed has no start time, so it is trusted
+      ## as before and the age rule still catches it.
+      if ( $alive && $start !== '' )
+      {
+         $now   = cleanup_process_start( $owner );
+         $alive = $now === '' || $now === $start;
+         if ( ! $alive )
+         {
+            $log_fn( "cleanup claim $claim names pid $owner, but that pid is now a"
+                     . " different process; treating the claim as abandoned" );
+         }
+      }
+      $abandoned = ! $alive;
    }
    else
    {

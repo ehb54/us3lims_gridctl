@@ -320,7 +320,12 @@ while( 1 ) {
                 } else {
                     write_logls( "success updating table {$submit_request_table_name} {$id_field} {$ID} statusJson.", 2 );
                 }
-                $cmd = "php {$home}/bin/submitone.php $lims_db $ID >> {$home}/etc/submit.log 2>&1 &";
+                ## Quoted: $lims_db comes from the instance list and $ID from a
+                ## table row, so neither is typed by a user here, but both reach a
+                ## shell and a database name is operator-supplied upstream.
+                $cmd = "php " . escapeshellarg( "{$home}/bin/submitone.php" ) . " "
+                       . escapeshellarg( $lims_db ) . " " . escapeshellarg( $ID )
+                       . " >> " . escapeshellarg( "{$home}/etc/submit.log" ) . " 2>&1 &";
                 write_logls( "running $cmd" );
                 shell_exec( $cmd );
                 $work_done = 1;

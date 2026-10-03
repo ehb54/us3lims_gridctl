@@ -7,7 +7,16 @@
  *
  */
 
-$us3bin = exec( "ls -d ~us3/lims/bin" );
+## Production resolves the installed us3 checkout. Tests may supply an explicit
+## bin directory so this file can run from a controller checkout without a
+## local us3 account; keep that override and fall back to this checkout when
+## the appliance account is unavailable.
+if ( !isset( $us3bin ) || $us3bin === '' ) {
+   $us3bin = trim( (string) exec( "ls -d ~us3/lims/bin 2>/dev/null" ) );
+}
+if ( $us3bin === '' ) {
+   $us3bin = dirname( __DIR__, 2 );
+}
 require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 
 $me              = 'cleanup_job.php';
@@ -151,7 +160,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## Stage the results into the job-tracking row. An unreachable cluster (-1)
    ## is retried until the ceiling, then the job is failed; -2 fails it now.
-   $seen_file     = cleanup_job_dir( $db, $gfacID ) . "/complete_seen";
+   $seen_file     = job_state_path( $db, $gfacID, 'complete_seen' );
    $fetch_failure = '';
 
    $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
@@ -332,6 +341,12 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    ## move to end (where we email the user)
    ## update_autoflow_status( $status, $queue_msg );
 
+   ## From here to the final update_autoflow_status() the job has no gfac.analysis
+   ## row, so nothing would restart a monitor for it. Record enough to close the
+   ## stage out if this worker dies in that span; uslims_jobs.php --restart looks
+   ## for these.
+   cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID );
+
    ## Delete the completed central job-tracking records.
    $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
 
@@ -390,6 +405,9 @@ write_logld( "$me: *messages.txt written" );
 
    if ( ! $has_results )
    {
+      ## No stage write here: the fetch failure above already set it to FAILED,
+      ## before the row was deleted. A second write would report the same failure
+      ## twice.
       mail_to_user( "fail", $fetch_failure );
       return( -1 );
    }
@@ -405,7 +423,36 @@ write_logld( "$me: *messages.txt written" );
       return( -1 );
    }
 
-   if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
+   ## The work directory is named after the scheduler's job ID, which is reused
+   ## after a controller restart, and it is not removed when a job finishes (see
+   ## the disabled cleanup near the end of this function). A leftover directory
+   ## would keep any file this job's tar does not overwrite, and those files are
+   ## then imported as this job's results, so start from an empty one.
+   ##
+   ## The name is checked first because the next line is an rm -rf: an empty or
+   ## slash-bearing gfacID would otherwise name $work itself, or somewhere else.
+   if ( $gfacID === '' || strpos( (string) $gfacID, '/' ) !== false )
+   {
+      update_autoflow_status( 'FAILED', "Refusing to stage results for an unusable job id" );
+      write_logld( "$me: refusing to stage results: unusable gfacID '$gfacID'" );
+      mail_to_user( "fail", "Results could not be staged" );
+      return( -1 );
+   }
+
+   if ( is_dir( "$work/$gfacID" ) )
+   {
+      write_logld( "$me: clearing a leftover work directory $work/$gfacID" );
+      exec( 'rm -rf ' . escapeshellarg( "$work/$gfacID" ) );
+   }
+
+   if ( ! is_dir( "$work/$gfacID" ) && ! @mkdir( "$work/$gfacID", 0770 ) )
+   {
+      update_autoflow_status( 'FAILED', "Could not create the work directory for the results" );
+      write_logld( "$me: could not create $work/$gfacID" );
+      mail_to_user( "fail", "Results could not be staged" );
+      return( -1 );
+   }
+
    chdir( "$work/$gfacID" );
 
    $f = fopen( "analysis-results.tar", "w" );

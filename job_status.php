@@ -57,11 +57,33 @@ const JOB_STATUS_STAGE_CANCELED = 'canceled';   ## stop the pipeline
 const JOB_STATUS_STAGE_RUNNING  = 'running';    ## no match: still in progress
 const JOB_STATUS_STAGE_QUEUED   = 'submitted';  ## no match: still in progress
 
+## The stage words that stop the pipeline. A stage already carrying one of these
+## has been reported to the scientist, so nothing may quietly put it back in
+## progress. A later, better-informed terminal verdict is a different matter: see
+## stage_status_is_terminal().
+const JOB_STATUS_STAGE_TERMINAL = array( JOB_STATUS_STAGE_COMPLETE,
+                                         JOB_STATUS_STAGE_FAILED,
+                                         JOB_STATUS_STAGE_CANCELED,
+                                         'error' );
+
 ## --------------------------------------------------------------------- ##
 ## Layer 4: USER. HPCAnalysisResult.queueStatus, an ENUM.
 ## --------------------------------------------------------------------- ##
 
 const JOB_STATUS_USER = array( 'queued', 'running', 'aborted', 'failed', 'completed' );
+
+## Is this stage word one that stops the pipeline?
+function stage_status_is_terminal( $stage )
+{
+   return in_array( strtolower( (string) $stage ), JOB_STATUS_STAGE_TERMINAL, true );
+}
+
+## The same set as a MySQL RLIKE body, so the SQL guard and the test above cannot
+## drift apart. The words are the fixed vocabulary above, not user input.
+function stage_status_terminal_regex()
+{
+   return '^(' . implode( '|', JOB_STATUS_STAGE_TERMINAL ) . ')$';
+}
 
 /**
  * Normalise a SCHEDULER or JOB status, or an alias, into the JOB vocabulary.

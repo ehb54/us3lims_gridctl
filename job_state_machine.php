@@ -150,15 +150,45 @@ class job_state_machine
    ## Asking the cluster                                                 ##
    ## ----------------------------------------------------------------- ##
 
+   ## One poll's probe answers, keyed by cluster and job. check_job() asks for the
+   ## status and then a stall path asks again through reconcile(), which was two SSH
+   ## round trips per poll for the same question. Queued jobs are the population that
+   ## reaches thousands, so the second call is the one that costs. Cleared once per
+   ## poll by reset_status_cache(), since a new machine is built for every call.
+   private static $status_cache = array();
+
+   public static function reset_status_cache()
+   {
+      self::$status_cache = array();
+   }
+
    ## May return GRIDCTL_UNREACHABLE, which is not a job state: leave the job alone.
    public function get_local_status()
    {
-      $log    = $this->log;
-      $status = cluster_probe_job_status( $this->cluster, $this->gfacID, $log );
+      $key = $this->cluster . '/' . $this->gfacID;
+      if ( array_key_exists( $key, self::$status_cache ) )
+      {
+         $this->logf( "get_local_status( {$this->gfacID} ) on {$this->cluster} = "
+                      . self::$status_cache[ $key ] . " (this poll's answer)" );
+         return self::$status_cache[ $key ];
+      }
+
+      $status = $this->probe_job_status();
 
       $this->logf( "get_local_status( {$this->gfacID} ) on {$this->cluster} = $status" );
 
+      self::$status_cache[ $key ] = $status;
+
       return $status;
+   }
+
+   ## The probe itself, separate from the caching above so a test can count the
+   ## round trips the cache is there to save. Overridable for tests.
+   protected function probe_job_status()
+   {
+      $log = $this->log;
+
+      return cluster_probe_job_status( $this->cluster, $this->gfacID, $log );
    }
 
    ## Is the cluster answering at all? Overridable for tests.
@@ -292,11 +322,15 @@ class job_state_machine
          return;
 
       ## Inside the window, or no window (#864): just check whether the job has moved on.
-      if ( $window <= 0 || $updatetime + $window > time() )
-      {
-         $this->reconcile( self::QUEUED_STATES, 'submitted', $updatetime );
+      ## Inside the window or past it, the cluster is asked first. Past the window
+      ## that is what stops a job the cluster has since moved on from being
+      ## cancelled on the strength of a stale gfac.analysis row alone. The answer
+      ## is this poll's cached one, so asking costs nothing extra.
+      if ( $this->reconcile( self::QUEUED_STATES, 'submitted', $updatetime ) )
          return;
-      }
+
+      if ( $window <= 0 || $updatetime + $window > time() )
+         return;
 
       $this->fire_stall( $updatetime, $window, 'SUBMIT_TIMEOUT', 'submit timeout',
          "Job listed submitted longer than $hours hours" );
@@ -327,11 +361,14 @@ class job_state_machine
       if ( $updatetime + self::SETTLE_SECONDS > time() )
          return;
 
-      if ( $window <= 0 || $updatetime + $window > time() )
-      {
-         $this->reconcile( self::RUNNING_STATES, 'running', $updatetime );
+      ## Same as submitted(): never scancel without asking the cluster about the job
+      ## in this poll. A job the cluster still calls running stays in $live_states, so
+      ## reconcile() reports no news and the stall still fires.
+      if ( $this->reconcile( self::RUNNING_STATES, 'running', $updatetime ) )
          return;
-      }
+
+      if ( $window <= 0 || $updatetime + $window > time() )
+         return;
 
       $this->fire_stall( $updatetime, $window, 'RUN_TIMEOUT', 'run timeout',
          "Job listed running longer than $hours hours" );
@@ -554,12 +591,24 @@ class job_state_machine
       if ( $stage === null )
          return;
 
+      ## A terminal stage has been reported to the scientist, so nothing may put it
+      ## back in progress: that guard stays. It used to apply to every write, which
+      ## also blocked the corrections that matter, a stage wrongly failed by a
+      ## premature timeout and then finished, or completed and then found to have
+      ## bad results. A later terminal verdict is allowed to replace an earlier one.
+      $guard = stage_status_is_terminal( $stage )
+             ? ''
+             : " AND NOT status RLIKE '" . stage_status_terminal_regex() . "'";
+
+      if ( $guard === '' )
+         $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
+
       $this->exec( $us3,
          "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
          . "status='" . $this->quote( $us3, $stage ) . "', "
          . "statusMsg='" . $this->quote( $us3, $message ) . "' "
          . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
-         . " AND NOT status RLIKE '^(failed|error|canceled|complete)$'" );
+         . $guard );
    }
 
    ## The status the scientist sees; left alone when there is no mapping.
@@ -580,10 +629,35 @@ class job_state_machine
       if ( ! $us3 )
          return;
 
+      $table = $this->us3_table( 'HPCAnalysisResult' );
+
+      ## gfacID is the scheduler's job ID, which is reused, so it can match more
+      ## than one row: get_us3_data() already resolves that by taking the newest.
+      ## Keying the update on gfacID alone instead rewrote the older rows too,
+      ## moving a long-finished analysis back to running. Resolve the live row
+      ## first and update it by its own key.
+      ##
+      ## Resolved rather than done with ORDER BY and LIMIT on the UPDATE: the
+      ## WHERE runs first, so if the newest row is already terminal the limit
+      ## would fall through to the stale row, which is the bug again.
+      $found = $this->exec( $us3,
+         "SELECT HPCAnalysisResultID FROM $table"
+         . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+
+      if ( ! $found || $this->num_rows( $found ) < 1 )
+         return;
+
+      $row = $this->fetch_row( $found );
+
+      if ( ! is_array( $row ) || ! isset( $row[ 0 ] ) )
+         return;
+
+      $result_id = (int) $row[ 0 ];
+
       ## Never move a finished job back; a sweep may be acting on a stale snapshot.
       $this->exec( $us3,
-         "UPDATE " . $this->us3_table( 'HPCAnalysisResult' ) . " SET "
-         . "queueStatus='$queue_status' WHERE gfacID = '{$this->gfacID}'"
+         "UPDATE $table SET "
+         . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
          . " AND queueStatus NOT IN ('completed', 'failed', 'aborted')" );
    }
 }
