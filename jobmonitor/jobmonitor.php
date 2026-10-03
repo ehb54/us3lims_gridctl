@@ -223,6 +223,10 @@ while( 1 ) {
         error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
     }
 
+    ## One probe answer per poll: check_job() and the stall paths ask the same
+    ## question, and the cache is what keeps that to a single SSH call.
+    job_state_machine::reset_status_cache();
+
     $status                         = $res_analysis->{"status"};
     $queue_msg                      = $res_analysis->{"queue_msg"};
     $update_epoch                   = $res_analysis->{"update_epoch"};
