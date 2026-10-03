@@ -321,7 +321,7 @@ class job_state_machine
       if ( $updatetime + self::SETTLE_SECONDS > time() )
          return;
 
-      ## Inside the window, or no window (#864): just check whether the job has moved on.
+      ## Inside the window, or with the timer disabled: just check whether the job has moved on.
       ## Inside the window or past it, the cluster is asked first. Past the window
       ## that is what stops a job the cluster has since moved on from being
       ## cancelled on the strength of a stale gfac.analysis row alone. The answer
@@ -352,7 +352,7 @@ class job_state_machine
    /** Job is RUNNING. First stall window. */
    public function running( $updatetime, $queue_msg )
    {
-      $hours  = $this->stall_hours( 'global_max_run_time_hours', 24 );
+      $hours  = $this->stall_hours( 'global_max_run_time_hours', 0 );
       $window = $hours * 3600;
 
       $this->get_us3_data();
@@ -377,7 +377,7 @@ class job_state_machine
    /** Job is in RUN_TIMEOUT. Second window, then give up. */
    public function run_timeout( $updatetime )
    {
-      $hours = $this->stall_hours( 'global_max_run_time_hours', 24 );
+      $hours = $this->stall_hours( 'global_max_run_time_hours', 0 );
 
       if ( $this->reconcile( self::RUNNING_STATES, 'run timeout', $updatetime ) )
          return;

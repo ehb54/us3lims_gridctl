@@ -423,37 +423,21 @@ write_logld( "$me: *messages.txt written" );
       return( -1 );
    }
 
-   ## The work directory is named after the scheduler's job ID, which is reused
-   ## after a controller restart, and it is not removed when a job finishes (see
-   ## the disabled cleanup near the end of this function). A leftover directory
-   ## would keep any file this job's tar does not overwrite, and those files are
-   ## then imported as this job's results, so start from an empty one.
-   ##
-   ## The name is checked first because the next line is an rm -rf: an empty or
-   ## slash-bearing gfacID would otherwise name $work itself, or somewhere else.
-   if ( $gfacID === '' || strpos( (string) $gfacID, '/' ) !== false )
-   {
-      update_autoflow_status( 'FAILED', "Refusing to stage results for an unusable job id" );
-      write_logld( "$me: refusing to stage results: unusable gfacID '$gfacID'" );
-      mail_to_user( "fail", "Results could not be staged" );
-      return( -1 );
-   }
+   ## This is the directory get_local_files() staged the fetched results into, so
+   ## it must not be emptied here: a reused job ID is dealt with before the fetch,
+   ## in job_staging_dir_prepare(). The id is still checked, since the path is
+   ## composed from it.
+   $staging = job_staging_dir( $work, $gfacID );
 
-   if ( is_dir( "$work/$gfacID" ) )
-   {
-      write_logld( "$me: clearing a leftover work directory $work/$gfacID" );
-      exec( 'rm -rf ' . escapeshellarg( "$work/$gfacID" ) );
-   }
-
-   if ( ! is_dir( "$work/$gfacID" ) && ! @mkdir( "$work/$gfacID", 0770 ) )
+   if ( $staging === null || ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) ) )
    {
       update_autoflow_status( 'FAILED', "Could not create the work directory for the results" );
-      write_logld( "$me: could not create $work/$gfacID" );
+      write_logld( "$me: could not stage results for job id '$gfacID'" );
       mail_to_user( "fail", "Results could not be staged" );
       return( -1 );
    }
 
-   chdir( "$work/$gfacID" );
+   chdir( $staging );
 
    $f = fopen( "analysis-results.tar", "w" );
    fwrite( $f, $tarfile );

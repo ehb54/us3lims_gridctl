@@ -97,6 +97,53 @@ function cleanup_job_dir( $us3_db, $gfacID )
 ## The values are the names on disk and must not change. A running cleanup holds
 ## its claim by filename, so renaming one during an upgrade would let a second
 ## worker take the claim and import the same results twice.
+## The local staging directory for one job's fetched results. Named after the
+## scheduler job ID, which the scheduler reuses, so the path is composed from an
+## id that must be checked first: empty or containing a slash it would name the
+## work root or escape it, and this directory gets emptied.
+function job_staging_dir( $work, $gfacID )
+{
+   if ( (string) $gfacID === '' || strpos( (string) $gfacID, '/' ) !== false )
+   {
+      return null;
+   }
+
+   return "$work/$gfacID";
+}
+
+/**
+ * Empty it before staging into it. A reused job ID means files from the previous
+ * job of that ID are still there, and anything the new tar does not overwrite
+ * would be imported as this job's results. Cleared here rather than once the
+ * results are in hand, because by then this is the directory holding them.
+ */
+function job_staging_dir_prepare( $work, $gfacID, $log = null )
+{
+   $dir = job_staging_dir( $work, $gfacID );
+
+   if ( $dir === null )
+   {
+      return null;
+   }
+
+   if ( is_dir( $dir ) )
+   {
+      if ( is_callable( $log ) )
+      {
+         $log( "clearing a leftover staging directory $dir" );
+      }
+
+      exec( 'rm -rf ' . escapeshellarg( $dir ) );
+   }
+
+   if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0770, true ) )
+   {
+      return null;
+   }
+
+   return $dir;
+}
+
 function job_state_files()
 {
    return array(
@@ -549,9 +596,18 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
    $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
    write_logld( "$me:  remoteDir=$remoteDir" );
 
-   ## Local staging directory
-   if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
-   chdir( "$work/$gfacID" );
+   ## Local staging directory, emptied first so a reused job ID cannot leave one
+   ## job's files to be imported as another's.
+   $staging = job_staging_dir_prepare( $work, $gfacID,
+                                       function ( $m ) use ( $me ) { write_logld( "$me: $m" ); } );
+
+   if ( $staging === null )
+   {
+      write_logld( "$me: refusing to stage results: unusable job id '$gfacID'" );
+      return 1;
+   }
+
+   chdir( $staging );
 
    ## us_mpi_analysis writes the tar at the top of the work directory;
    ## output/ is a fallback for older layouts.
