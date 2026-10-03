@@ -20,8 +20,7 @@ if ( count( $argv ) != 5 ) {
 }
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
-include "$class_dir/experiment_status.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 
 # ********* start user defines *************
 
