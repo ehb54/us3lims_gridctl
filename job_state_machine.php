@@ -2,11 +2,12 @@
 /*
  * job_state_machine.php
  *
- * Job-state policy shared by gridctl.php (the per-minute cron sweep) and
- * jobmonitor/gridctl.php (the per-job daemon). Both act on the same rows, so
- * the policy lives here; connections, logger and mailer are constructor
- * arguments. Each entry file exposes the methods as global one-line shims for
- * the shared cleanup code.
+ * Job-state policy for jobmonitor/gridctl.php, the per-job daemon that is now
+ * the only thing acting on these rows (the per-minute cron sweep this was
+ * once shared with is gone). The policy lives here anyway, with connections,
+ * logger and mailer as constructor arguments, rather than back in gridctl.php,
+ * which exposes the methods as global one-line shims for the shared cleanup
+ * code.
  */
 
 ## Guarded so a test process that already loaded cluster_probe.php does not reload it.
@@ -93,8 +94,8 @@ class job_state_machine
       call_user_func( $this->mailer, $type, $msg );
    }
 
-   ## In the sweep the us3 schemas need their own connection (the gfac user has
-   ## no rights on them). Opened lazily, on first use.
+   ## The us3 schemas need their own connection (the gfac user has no rights
+   ## on them). Opened lazily, on first use.
    private function us3()
    {
       if ( is_callable( $this->us3 ) )
@@ -654,10 +655,26 @@ class job_state_machine
 
       $result_id = (int) $row[ 0 ];
 
-      ## Never move a finished job back; a sweep may be acting on a stale snapshot.
+      ## Terminal does not mean immutable: the two transitions below are real
+      ## outcomes, not a stale sweep rewriting a finished row (the sweep this
+      ## guard was written against is gone; only this per-job daemon, reading
+      ## its own fresh probe, calls this now).
+      ##
+      ##  - completed -> failed: the scheduler reported the job finished, but
+      ##    importing its results then failed. The scientist needs to see
+      ##    that, not a queueStatus stuck at "completed" for data that never
+      ##    arrived.
+      ##  - aborted -> completed: a cancel was recorded, but the job actually
+      ##    finished anyway (the cancel lost the race, or never reached the
+      ##    scheduler in time). The result exists and should be shown.
+      ##
+      ## Every other terminal-to-terminal move stays blocked: once genuinely
+      ## failed or completed-then-failed, nothing moves it again.
       $this->exec( $us3,
          "UPDATE $table SET "
          . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
-         . " AND queueStatus NOT IN ('completed', 'failed', 'aborted')" );
+         . " AND ( queueStatus NOT IN ('completed', 'failed', 'aborted')"
+         . "       OR ( queueStatus = 'completed' AND '$queue_status' = 'failed' )"
+         . "       OR ( queueStatus = 'aborted'   AND '$queue_status' = 'completed' ) )" );
    }
 }
