@@ -23,9 +23,12 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
    if ( ! $result )
    {
-      $log_fn( "Query failed $query - " . mysqli_error( $db_handle ) );
+      ## Retry, not terminal: a query failure here says nothing about whether
+      ## gfacID is still tracked, and returning -1 (terminal) is what used to
+      ## end the monitor on a transient database error.
+      $log_fn( "Query failed $query - " . mysqli_error( $db_handle ) . " - will retry" );
       mail_to_admin( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
-      return -1;
+      return 0;
    }
 
    list( $count ) = mysqli_fetch_array( $result );
@@ -327,7 +330,10 @@ function cleanup_claim_acquire( $claim, $log_fn )
       cleanup_claim_release( $claim );
       if ( @mkdir( $claim, 0770, true ) )
       {
-         @file_put_contents( "$claim/owner", getmypid() );
+         ## Same tag the normal acquire path writes: a bare PID here is what
+         ## let the next contender fall back to "alive means still owned, no
+         ## age limit" instead of verifying it is the same process.
+         @file_put_contents( "$claim/owner", cleanup_claim_owner_tag( getmypid() ) );
          return true;
       }
    }
@@ -571,7 +577,17 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
       return -2;
    }
 
-   $rx = cluster_probe_remote( $cluster, 'write_logld' );
+   ## Guarded like cluster_probe_job_status(): common's remote_exec validates
+   ## ssh_host_key_policy (and the rest of the ssh options) in the
+   ## constructor, so a bad cluster entry throws here rather than at run().
+   ## The probe path already catches that; this, the results fetch, did not,
+   ## and a thrown exception is otherwise fatal and kills the monitor.
+   try {
+      $rx = cluster_probe_remote( $cluster, 'write_logld' );
+   } catch ( Throwable $e ) {
+      write_logld( "$me cluster $cluster configuration rejected: " . $e->getMessage() . "; will retry" );
+      return -1;
+   }
 
    ## Resolve the job's work directory on the cluster.
    $lworkdir = isset( $cluster_details[ $cluster ][ 'workdir' ] )
