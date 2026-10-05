@@ -282,8 +282,34 @@ class job_state_machine
       $this->update_db( $message );
       $this->update_autoflow_status( $enum_status, $message );
 
-      ## 'proceed' means the cluster just answered, so the cancel can land.
-      $this->cancel_local_job();
+      ## 'proceed' means the cluster just answered, so the cancel should land.
+      ## This is the only place a cancel is sent for a stalled job: the status
+      ## above is already terminal, and nothing downstream retries scancel, so
+      ## an unchecked, undelivered cancel here left the job running on the
+      ## cluster indefinitely while LIMS believed it was done.
+      $delivered = $this->cancel_local_job();
+
+      for ( $attempt = 2; ! $delivered && $attempt <= 3; $attempt++ )
+      {
+         $this->logf( "$what: scancel did not land for {$this->gfacID}, retrying (attempt $attempt)" );
+         $this->pause( 5 );
+         $delivered = $this->cancel_local_job();
+      }
+
+      if ( ! $delivered )
+      {
+         $message = "$what: scancel for {$this->gfacID} on {$this->cluster} was never"
+                    . " confirmed delivered after 3 attempts; the job may still be running"
+                    . " on the cluster despite being marked $enum_status";
+         $this->logf( $message );
+         $this->mail_admin( "fail", $message );
+      }
+   }
+
+   ## Seconds to wait between cancel retries. Overridable for tests.
+   protected function pause( $seconds )
+   {
+      sleep( $seconds );
    }
 
    ## Record the cluster's answer unless it is one of $live_states ("no news").
