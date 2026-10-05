@@ -85,7 +85,7 @@ function stop() {
 }
 
 function start() {
-    global $cmd;
+    global $cmd, $us3bin;
     echo "starting services...\n";
 
     foreach ( $cmd as $k => $v ) {
@@ -98,6 +98,16 @@ function start() {
         exec( "nohup $run > /dev/null 2>&1&" );
     }
     sleep( SLEEPTIME );
+
+    ## No monitor restarts on its own: one runs only from submit_slurm at
+    ## submission time, or from this call. After a reboot every monitor that
+    ## was running died with it, so this is the only thing that picks their
+    ## jobs back up; without it a job submitted before the reboot sits
+    ## unmonitored until someone notices and runs --restart by hand.
+    $restart = "$us3bin/uslims_jobs.php";
+    if ( is_file( $restart ) ) {
+        exec( "/usr/bin/php $restart --restart > /dev/null 2>&1" );
+    }
 }
 
 function status( $doprint = true ) {
