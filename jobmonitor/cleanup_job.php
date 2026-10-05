@@ -123,13 +123,15 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
-      return( -1 );
+      ## A failed query is not the same claim as "this request has no result
+      ## row": it is retryable, not terminal, and marking the job FAILED here
+      ## would make a transient database error look like the job's own
+      ## failure. 0 means retry, per resolve_and_cleanup_job()'s contract.
+      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      return( 0 );
    }
 
-   list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
+   list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result );
 
    ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, id FROM gfac.analysis " .
