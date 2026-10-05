@@ -190,7 +190,12 @@ function local_status() {
         }
 
         if ( !isset( $v["status"] ) ) {
-            error_exit( "cluster $clname does not contain a status command" );
+            ## Report and move on, not error_exit(): this ran before any row
+            ## was written for any cluster, so one misconfigured entry greyed
+            ## out every active cluster's web-tier status, not just its own.
+            fwrite( STDERR, "cluster_status: cluster $clname does not contain a"
+                            . " status command, skipping it\n" );
+            continue;
         }
 
         $probe = run_probe(
