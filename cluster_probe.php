@@ -2,7 +2,7 @@
 /*
  * cluster_probe.php
  *
- * Asking a cluster about a job, shared by the cron sweep and the daemon.
+ * Asking a cluster about a job, for the per-job daemon.
  *
  * A failure to reach the cluster is reported as UNREACHABLE, never as a job
  * state. Callers treat it as "no information" and change nothing.
@@ -59,7 +59,7 @@ function cluster_probe_job_status( $cluster, $gfacID, $log_fn = null )
       $res = $rx->run( "squeue -h -o %T -t all -j " . escapeshellarg( $gfacID ),
                        array( 'label' => "status $gfacID" ) );
    } catch ( Throwable $e ) {
-      ## A bad cluster entry must not abort the whole sweep; nothing was learned.
+      ## A bad cluster entry must not kill this job's monitor; nothing was learned.
       $log( "cluster_probe: cluster '$cluster' configuration rejected: " . $e->getMessage() );
       return GRIDCTL_UNREACHABLE;
    }
