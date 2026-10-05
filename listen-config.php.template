@@ -34,8 +34,8 @@ $user        = "us3php";
 $passwd      = $configs[ 'us3php' ][ 'password' ];
 
 $org_name    = "UltraScan3 Admin";
-$org_domain  = "uleth.ca";
-$admin_email = "us3-admin@biophysics.uleth.ca";
+$org_domain  = "CHANGE-ME.example.org";
+$admin_email = "us3-admin@CHANGE-ME.example.org";
 
 date_default_timezone_set( 'America/Chicago' );
 
