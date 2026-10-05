@@ -52,6 +52,22 @@ function open_db() {
     if ( ! $db_handle ) error_exit( "Cannot connect to database at $dbhost" );
 }
 
+## Like open_db(), but a failed connect retries instead of exiting: for a
+## long-running poller, a database restart is a reason to wait, not a reason
+## to die and leave the job it was watching unmonitored until someone runs
+## --restart by hand.
+function open_db_or_retry() {
+    global $db_handle, $dbhost, $user, $passwd, $poll_sleep_seconds;
+    while ( true ) {
+        $db_handle = @mysqli_connect( $dbhost, $user, $passwd );
+        if ( $db_handle ) {
+            return;
+        }
+        write_logld( timestamp( "cannot connect to database at $dbhost, retrying" ) );
+        sleep( $poll_sleep_seconds / 2 );
+    }
+}
+
 // Not db_obj_result(): submitone.php declares its own and includes this file.
 function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false ) {
     $result = mysqli_query( $db_handle, $query );

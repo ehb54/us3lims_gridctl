@@ -194,31 +194,39 @@ write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
 
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
-    open_db();
+    open_db_or_retry();
     while ( !mysqli_ping( $db_handle ) ) {
         write_logld( "mysql server has gone away" );
         sleep( $poll_sleep_seconds / 2 );
         write_logld( "attempting to reconnect" );
-        open_db();
+        open_db_or_retry();
         if ( mysqli_ping( $db_handle ) ) {
             write_logld( "reconnected - success" );
-        }            
+        }
     }
-    
-    if (
-        false ===
-        ( $res_analysis =
-          listen_db_obj_result( $db_handle
-                         ,"select"
-                         . " status"
-                         . " ,queue_msg"
-                         . " ,UNIX_TIMESTAMP(time) AS update_epoch"
-                         . " ,time"
-                         . " from gfac.analysis"
-                         . " where gfacID = \"$gfacID\""
-                         ,false
-                         ,true
-          ) ) ) {
+
+    $poll_result = mysqli_query( $db_handle, "select"
+                     . " status"
+                     . " ,queue_msg"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
+                     . " ,time"
+                     . " from gfac.analysis"
+                     . " where gfacID = \"$gfacID\"" );
+
+    if ( $poll_result === false ) {
+        ## The query itself failed, not "no such row": a connection that went
+        ## bad between the ping above and this statement, or a transient
+        ## server error. Retry the poll instead of treating a database hiccup
+        ## as the job's row having vanished.
+        write_logld( timestamp( "poll query failed: " . mysqli_error( $db_handle ) . ", will retry" ) );
+        mysqli_close( $db_handle );
+        sleep( $poll_sleep_seconds );
+        continue;
+    }
+
+    $res_analysis = mysqli_fetch_object( $poll_result );
+
+    if ( $res_analysis === null ) {
         mysqli_close( $db_handle );
         error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
     }
@@ -232,7 +240,17 @@ while( 1 ) {
     $update_epoch                   = $res_analysis->{"update_epoch"};
     $updateTime                     = $res_analysis->{"time"};
 
-    if ( check_job() ) {
+    ## An uncaught exception here (e.g. common's remote_exec rejecting a bad
+    ## cluster policy) is otherwise a fatal error: the monitor dies with no
+    ## sweep to notice, and the job it was watching is stranded silently.
+    try {
+        $job_done = check_job();
+    } catch ( Throwable $e ) {
+        write_logld( timestamp( "check_job() threw: " . $e->getMessage() . ", will retry" ) );
+        $job_done = false;
+    }
+
+    if ( $job_done ) {
         write_logld( "jobmonitor.php exiting" );
         mysqli_close( $db_handle );
         exit(0);
