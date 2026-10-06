@@ -18,6 +18,29 @@ if ( ! function_exists( 'cluster_probe_job_status' ) )
 
 require_once __DIR__ . '/job_status.php';
 
+## round-5 fix: a failed query here used to retry forever regardless of why
+## it failed, mailing the admin on every poll for a permanent error (a
+## dropped database, a missing table, revoked grants) that a retry could
+## never fix -- about 2,880 mails a day per job until someone killed the
+## monitor by hand. Only a connection-class errno is worth retrying; these
+## are mysqli's/MariaDB's "the server or network, not the query, is the
+## problem" codes:
+##   2002 CR_CONNECTION_ERROR      2006 CR_SERVER_GONE_ERROR
+##   2013 CR_SERVER_LOST           1040 ER_CON_COUNT_ERROR (max_connections)
+##   1203 ER_TOO_MANY_USER_CONNECTIONS
+##   1226 ER_USER_LIMIT_REACHED    1205 ER_LOCK_WAIT_TIMEOUT
+##   1213 ER_LOCK_DEADLOCK
+## Anything else (unknown table/column, access denied for this query, a
+## syntax error from an older schema) says the query itself cannot succeed no
+## matter how many times it is retried, and is treated as terminal instead,
+## matching the behavior this file had before 0c8086c made every failure here
+## retry.
+function db_error_is_connection_class( $errno )
+{
+   return in_array( (int) $errno,
+      array( 2002, 2006, 2013, 1040, 1203, 1226, 1205, 1213 ), true );
+}
+
 class job_state_machine
 {
    ## Probe answers that carry no news. UNKNOWN: the cluster has no record.
@@ -130,6 +153,21 @@ class job_state_machine
       return mysqli_real_escape_string( $handle, $value );
    }
 
+   ## Overridable alongside exec()/quote()/fetch_row()/num_rows(): $handle
+   ## here is whatever us3_link() returns, which a test double is free to
+   ## make something other than a real mysqli link (RecordingJobStateMachine
+   ## returns a bare true), so get_us3_data() must not call mysqli_errno()/
+   ## mysqli_error() on it directly.
+   protected function errno( $handle )
+   {
+      return mysqli_errno( $handle );
+   }
+
+   protected function error( $handle )
+   {
+      return mysqli_error( $handle );
+   }
+
    ## All database access goes through exec(), quote(), fetch_row() and
    ## num_rows(), so a test double can replace the database.
    protected function fetch_row( $result )
@@ -205,10 +243,23 @@ class job_state_machine
    ## is not proof the controller is up), so without this a breaker left
    ## open by an unrelated earlier failure would refuse this scancel
    ## locally even though the cluster just answered.
+   ##
+   ## retries => 0: remote_exec's default retry budget (3 attempts, backing
+   ## off) was meant for a cold call with no other information, not this
+   ## one, which already knows the cluster just answered a ping -- without
+   ## this a single scancel failure here could retry for close to 26
+   ## minutes on a flapping cluster before fire_stall() gets an answer back.
+   ##
+   ## round-5 nit, not yet addressed: breaker => false also skips the
+   ## breaker's bookkeeping, not just the gate that would otherwise refuse
+   ## this call -- a real scancel failure here never counts against the
+   ## cluster. remote_exec (common) would need a way to bypass only the gate
+   ## and still record the outcome; its current 'breaker' option controls
+   ## both together.
    public function cancel_local_job()
    {
       return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log,
-                                       array( 'breaker' => false ) );
+                                       array( 'breaker' => false, 'retries' => 0 ) );
    }
 
    ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see
@@ -569,9 +620,14 @@ class job_state_machine
    }
 
    ## This job's HPCAnalysisRequestID, 0 when there genuinely is no such row,
-   ## or null when the database could not answer (retryable, not the same as
-   ## "not found" -- a caller that treated the two alike used to end the
-   ## monitor on a connection blip instead of trying again next poll).
+   ## null when the database could not answer for a connection-class reason
+   ## (retryable, not the same as "not found" -- a caller that treated the
+   ## two alike used to end the monitor on a connection blip instead of
+   ## trying again next poll), or false when the query itself can never
+   ## succeed (round-5 fix: retrying that forever just mailed the admin on
+   ## every poll for a problem no retry could fix -- see
+   ## db_error_is_connection_class()). The caller's contract (cleanup.php's
+   ## resolve_and_cleanup_job()) already distinguishes all three.
    public function get_us3_data()
    {
       $us3 = $this->us3_link();
@@ -586,8 +642,10 @@ class job_state_machine
 
       if ( ! $result )
       {
-         $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}" );
-         return null;
+         $connection_class = db_error_is_connection_class( $this->errno( $us3 ) );
+         $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}"
+            . ( $connection_class ? '' : ' (permanent: ' . $this->error( $us3 ) . ')' ) );
+         return $connection_class ? null : false;
       }
 
       ## Duplicate gfacIDs happen; the most recent row is the live one.
@@ -597,7 +655,7 @@ class job_state_machine
             . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
       if ( ! $result )
-         return null;
+         return db_error_is_connection_class( $this->errno( $us3 ) ) ? null : false;
 
       $row = $this->fetch_row( $result );
 

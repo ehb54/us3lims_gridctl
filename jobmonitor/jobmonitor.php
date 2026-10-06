@@ -148,7 +148,12 @@ pcntl_signal(SIGHUP,  "sig_handler");
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 
 # open db
-open_db();
+## round-5 nit: a plain open_db() here used to exit outright on a MariaDB
+## blip, including a monitor the boot restart (services.php) had just
+## launched to pick a job back up right after an unclean shutdown -- exactly
+## when a blip is most likely. The main loop below already uses
+## open_db_or_retry() for this reason; the startup connect now does too.
+open_db_or_retry();
 
 write_logld( "db opened" );
 
@@ -175,7 +180,7 @@ if (
                      ,true
       ) ) ) {
     mysqli_close( $db_handle );
-    error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+    error_exit( "gfacID $gfacID not found in gfac.analysis" );
 }
 
 $cluster            = $res_analysis->{"cluster"};
@@ -238,7 +243,7 @@ while( 1 ) {
 
     if ( $res_analysis === null ) {
         mysqli_close( $db_handle );
-        error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+        error_exit( "gfacID $gfacID not found in gfac.analysis" );
     }
 
     ## One probe answer per poll: check_job() and the stall paths ask the same
@@ -271,4 +276,4 @@ while( 1 ) {
 }
 
 mysqli_close( $db_handle );
-error_exit( timestamp( "dropped out of main loop, this should not happen" ) );
+error_exit( "dropped out of main loop, this should not happen" );

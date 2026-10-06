@@ -23,12 +23,18 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
    if ( ! $result )
    {
-      ## Retry, not terminal: a query failure here says nothing about whether
-      ## gfacID is still tracked, and returning -1 (terminal) is what used to
-      ## end the monitor on a transient database error.
-      $log_fn( "Query failed $query - " . mysqli_error( $db_handle ) . " - will retry" );
-      mail_to_admin( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
-      return 0;
+      ## A connection-class failure says nothing about whether gfacID is
+      ## still tracked, so it is retried rather than treated as terminal.
+      ## Anything else (round-5 fix) is a query that can never succeed --
+      ## retrying it forever just mailed the admin every poll for a problem
+      ## no retry could fix. mail_to_admin_once() dedupes the mail either
+      ## way, so a real outage that does eventually clear is still only one
+      ## 'fail' mail per job, not one per poll.
+      $connection_class = db_error_is_connection_class( mysqli_errno( $db_handle ) );
+      $log_fn( "Query failed $query - " . mysqli_error( $db_handle )
+              . ( $connection_class ? " - will retry" : " - permanent, giving up" ) );
+      mail_to_admin_once( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
+      return $connection_class ? 0 : -1;
    }
 
    list( $count ) = mysqli_fetch_array( $result );
@@ -56,9 +62,15 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       $requestID = get_us3_data();
       if ( $requestID === null )
       {
-         ## The database could not answer, not "no such row": retry rather
-         ## than ending the monitor on a connection blip.
+         ## The database could not answer for a connection-class reason, not
+         ## "no such row": retry rather than ending the monitor on a blip.
          return 0;
+      }
+      if ( $requestID === false )
+      {
+         ## round-5 fix: a permanent query failure (get_us3_data() already
+         ## mailed it, deduped). Retrying this forever cannot help.
+         return -1;
       }
       if ( $requestID == 0 )
       {
