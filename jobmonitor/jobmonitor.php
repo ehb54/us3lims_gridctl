@@ -205,13 +205,23 @@ while( 1 ) {
         }
     }
 
-    $poll_result = mysqli_query( $db_handle, "select"
+    $poll_statement = mysqli_prepare( $db_handle, "select"
                      . " status"
                      . " ,queue_msg"
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
-                     . " where gfacID = \"" . mysqli_real_escape_string( $db_handle, $gfacID ) . "\"" );
+                     . " where gfacID = ?" );
+
+    $poll_result = $poll_statement
+                 && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
+                 && mysqli_stmt_execute( $poll_statement )
+                 ? mysqli_stmt_get_result( $poll_statement )
+                 : false;
+
+    if ( $poll_statement ) {
+        mysqli_stmt_close( $poll_statement );
+    }
 
     if ( $poll_result === false ) {
         ## The query itself failed, not "no such row": a connection that went
