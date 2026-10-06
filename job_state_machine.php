@@ -250,16 +250,17 @@ class job_state_machine
    ## this a single scancel failure here could retry for close to 26
    ## minutes on a flapping cluster before fire_stall() gets an answer back.
    ##
-   ## round-5 nit, not yet addressed: breaker => false also skips the
-   ## breaker's bookkeeping, not just the gate that would otherwise refuse
-   ## this call -- a real scancel failure here never counts against the
-   ## cluster. remote_exec (common) would need a way to bypass only the gate
-   ## and still record the outcome; its current 'breaker' option controls
-   ## both together.
+   ## breaker_gate => false (not plain breaker => false): skips only the
+   ## open-breaker check that would otherwise refuse this call on an
+   ## unrelated earlier failure, despite the ping moments ago. A real
+   ## scancel failure here still counts against the cluster -- round-5 fix;
+   ## the previous 'breaker' => false bypassed that bookkeeping too, so a
+   ## cluster that started actually failing scancels specifically was never
+   ## recorded as failing at all.
    public function cancel_local_job()
    {
       return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log,
-                                       array( 'breaker' => false, 'retries' => 0 ) );
+                                       array( 'breaker_gate' => false, 'retries' => 0 ) );
    }
 
    ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see

@@ -20,6 +20,18 @@ include_once "$us3jm/cleanup_job.php";
 # the polling interval
 $poll_sleep_seconds = 30;
 
+## ultrascan-tickets#1120: +/-20% jitter on the steady-state poll, never
+## below 1s. Many monitors (one per job) start close together -- a batch
+## submission, or services.php's own boot restart relaunching several at
+## once -- and without this they stay in lockstep every $poll_sleep_seconds
+## for as long as they keep running, all hitting the DB and the cluster at
+## the same instant instead of spread across the interval.
+function jobmonitor_poll_sleep_seconds( $base ) {
+   $base   = max( 1, (int) $base );
+   $jitter = (int) round( $base * 0.2 );
+   return $jitter <= 0 ? $base : max( 1, $base + random_int( -$jitter, $jitter ) );
+}
+
 # logging_level 
 # 0 : minimal messages (expected value for production)
 # 1 : add some db messages
@@ -272,7 +284,7 @@ while( 1 ) {
     }
 
     mysqli_close( $db_handle );
-    sleep( $poll_sleep_seconds );
+    sleep( jobmonitor_poll_sleep_seconds( $poll_sleep_seconds ) );
 }
 
 mysqli_close( $db_handle );
