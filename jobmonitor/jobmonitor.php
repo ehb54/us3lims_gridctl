@@ -211,7 +211,7 @@ while( 1 ) {
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
-                     . " where gfacID = \"$gfacID\"" );
+                     . " where gfacID = \"" . mysqli_real_escape_string( $db_handle, $gfacID ) . "\"" );
 
     if ( $poll_result === false ) {
         ## The query itself failed, not "no such row": a connection that went
