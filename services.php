@@ -3,8 +3,10 @@
 
 define( "SLEEPTIME", 10 );
 
-$us3bin = exec( "ls -d ~us3/lims/bin" );
-$us3etc = exec( "ls -d ~us3/lims/etc" );
+$us3bin  = exec( "ls -d ~us3/lims/bin" );
+$us3etc  = exec( "ls -d ~us3/lims/etc" );
+## uslims_jobs.php ships with dbutils, not in lims/bin with the rest of this file.
+$us3util = exec( "ls -d ~us3/lims/database/utils" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 
 if ( !file_exists( $lock_dir ) ) {
@@ -85,7 +87,7 @@ function stop() {
 }
 
 function start() {
-    global $cmd, $us3bin;
+    global $cmd, $us3bin, $us3util, $us3etc;
     echo "starting services...\n";
 
     foreach ( $cmd as $k => $v ) {
@@ -104,9 +106,29 @@ function start() {
     ## was running died with it, so this is the only thing that picks their
     ## jobs back up; without it a job submitted before the reboot sits
     ## unmonitored until someone notices and runs --restart by hand.
-    $restart = "$us3bin/uslims_jobs.php";
+    $restart = "$us3util/uslims_jobs.php";
     if ( is_file( $restart ) ) {
-        exec( "/usr/bin/php $restart --restart > /dev/null 2>&1" );
+        ## uslims_jobs.php reads db_config.php from the current directory, so
+        ## it has to run from $us3util; this unit (us3-listen.service) runs
+        ## from /, not from lims/bin like the rest of this file assumes.
+        ## It also isn't ordered after mariadb.service, so right after a
+        ## crash this can run before MariaDB has finished recovering --
+        ## retry instead of giving up on the first failure, and log what
+        ## happened instead of discarding it to /dev/null.
+        $restart_log = "$us3etc/services-restart.log";
+        $restart_cmd = "cd " . escapeshellarg( $us3util ) . " && /usr/bin/php "
+                     . escapeshellarg( $restart ) . " --restart 2>&1";
+        for ( $try = 1; $try <= 6; $try++ ) {
+            $output = array();
+            exec( $restart_cmd, $output, $rc );
+            file_put_contents( $restart_log,
+                "[" . date( 'c' ) . "] uslims_jobs.php --restart attempt $try exited $rc\n"
+                . implode( "\n", $output ) . "\n", FILE_APPEND );
+            if ( $rc === 0 ) {
+                break;
+            }
+            sleep( SLEEPTIME );
+        }
     }
 }
 
