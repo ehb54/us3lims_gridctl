@@ -198,10 +198,17 @@ class job_state_machine
       return cluster_probe_reachable( $this->cluster, $this->log );
    }
 
-   ## True only when scancel was actually delivered.
+   ## True only when scancel was actually delivered. breaker => false: the
+   ## only caller is fire_stall(), after outage_timeout_verdict() already
+   ## got 'proceed' from a ping that just confirmed the cluster is reachable
+   ## right now. ping() itself never closes the breaker (bare reachability
+   ## is not proof the controller is up), so without this a breaker left
+   ## open by an unrelated earlier failure would refuse this scancel
+   ## locally even though the cluster just answered.
    public function cancel_local_job()
    {
-      return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log );
+      return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log,
+                                       array( 'breaker' => false ) );
    }
 
    ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see
