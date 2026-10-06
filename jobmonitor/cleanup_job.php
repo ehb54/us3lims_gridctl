@@ -81,8 +81,12 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## Retryable: a failed SELECT says nothing about the job itself.
+      ## Retryable: a failed SELECT says nothing about the job itself. Close
+      ## $us3_link first: this now recurs every poll during an outage
+      ## instead of ending the job's monitoring once, so leaving it open
+      ## would leak one connection per poll instead of one connection total.
       write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      mysqli_close( $us3_link );
       return( 0 );
    }
 
@@ -103,8 +107,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## Retryable: a failed SELECT says nothing about the job itself.
+      ## Retryable, and closed for the same reason as the SELECT above.
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) . " - will retry" );
+      mysqli_close( $us3_link );
       return( 0 );
    }
 
@@ -130,6 +135,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
       ## would make a transient database error look like the job's own
       ## failure. 0 means retry, per resolve_and_cleanup_job()'s contract.
       write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      mysqli_close( $us3_link );
       return( 0 );
    }
 
