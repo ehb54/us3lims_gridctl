@@ -63,7 +63,7 @@ function open_db_or_retry() {
         if ( $db_handle ) {
             return;
         }
-        write_logld( timestamp( "cannot connect to database at $dbhost, retrying" ) );
+        write_logld( "cannot connect to database at $dbhost, retrying" );
         sleep( $poll_sleep_seconds / 2 );
     }
 }

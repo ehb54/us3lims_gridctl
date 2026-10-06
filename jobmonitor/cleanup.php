@@ -54,6 +54,12 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    try
    {
       $requestID = get_us3_data();
+      if ( $requestID === null )
+      {
+         ## The database could not answer, not "no such row": retry rather
+         ## than ending the monitor on a connection blip.
+         return 0;
+      }
       if ( $requestID == 0 )
       {
          return -1;
@@ -204,7 +210,7 @@ function cleanup_finalizing_end( $us3_db, $gfacID )
 }
 
 ## Seconds since cleanup first found this job not yet finalizable. The first
-## call starts the clock, persisted in $seen_file across polls and sweeps.
+## call starts the clock, persisted in $seen_file across polls.
 function cleanup_pending_seconds( $seen_file )
 {
    $seen = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
@@ -303,11 +309,9 @@ function cleanup_claim_acquire( $claim, $log_fn )
    {
       $alive = function_exists( 'posix_kill' ) ? (bool) @posix_kill( $owner, 0 )
                                                : file_exists( "/proc/$owner" );
-      ## Alive at that PID is not enough: it has to be the same process. A tag
-      ## written before this check existed has no start time, so it is trusted
-      ## as before and the age rule still catches it.
       if ( $alive && $start !== '' )
       {
+         ## Alive at that PID is not enough: it has to be the same process.
          $now   = cleanup_process_start( $owner );
          $alive = $now === '' || $now === $start;
          if ( ! $alive )
@@ -315,6 +319,16 @@ function cleanup_claim_acquire( $claim, $log_fn )
             $log_fn( "cleanup claim $claim names pid $owner, but that pid is now a"
                      . " different process; treating the claim as abandoned" );
          }
+      }
+      elseif ( $alive )
+      {
+         ## A tag written before start times were recorded has no $start to
+         ## check against, so "alive" alone cannot tell this owner apart from
+         ## an unrelated process that was later given the same PID. Fall back
+         ## to the same age limit the no-tag-at-all case below uses, rather
+         ## than trusting a live PID indefinitely.
+         $mtime = @filemtime( $claim );
+         $alive = $mtime === false || ( time() - $mtime ) <= $stale_seconds;
       }
       $abandoned = ! $alive;
    }

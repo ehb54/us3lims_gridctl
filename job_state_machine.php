@@ -114,7 +114,7 @@ class job_state_machine
       return $this->us3_db . '.' . $name;
    }
 
-   ## Best-effort: log a failed statement rather than abort the sweep or daemon.
+   ## Best-effort: log a failed statement rather than abort the daemon.
    protected function exec( $handle, $query )
    {
       $result = mysqli_query( $handle, $query );
@@ -238,8 +238,11 @@ class job_state_machine
       $this->logf( "$message - id: {$this->gfacID}" );
       $this->mail_admin( "hang", "$message - id: {$this->gfacID}" );
 
+      ## time=NOW() too, same reason as fire_stall() below: so a cluster
+      ## that stays unreachable re-enters this abandon path on its own
+      ## cadence rather than every poll.
       $this->exec( $this->gfac,
-         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status'"
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
          . " WHERE gfacID='{$this->gfacID}'" );
 
       $this->update_queue_messages( $message );
@@ -274,8 +277,13 @@ class job_state_machine
       $this->logf( "$message - id: {$this->gfacID}" );
       $this->mail_admin( "hang", "$message - id: {$this->gfacID}" );
 
+      ## time=NOW() too: rewriting the same status without it never moved
+      ## $updatetime, so with the probe still reporting the job queued or
+      ## active -- the case that keeps routing back through this same
+      ## window check -- the window never restarts and this fires on every
+      ## poll instead of once per window.
       $this->exec( $this->gfac,
-         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status'"
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
          . " WHERE gfacID='{$this->gfacID}'" );
 
       $this->update_queue_messages( $message );
@@ -302,7 +310,10 @@ class job_state_machine
                     . " confirmed delivered after 3 attempts; the job may still be running"
                     . " on the cluster despite being marked $enum_status";
          $this->logf( $message );
-         $this->mail_admin( "fail", $message );
+         ## Its own type, not plain "fail": that type also covers unrelated
+         ## query failures elsewhere, and deduplicating those alongside this
+         ## alert would risk going quiet on a later, different failure.
+         $this->mail_admin( "scancel_fail", $message );
       }
    }
 
@@ -550,13 +561,16 @@ class job_state_machine
          . "WHERE gfacID = '{$this->gfacID}' AND HPCAnalysisRequestID = '$requestID'" );
    }
 
-   ## This job's HPCAnalysisRequestID, or 0 when it cannot be found.
+   ## This job's HPCAnalysisRequestID, 0 when there genuinely is no such row,
+   ## or null when the database could not answer (retryable, not the same as
+   ## "not found" -- a caller that treated the two alike used to end the
+   ## monitor on a connection blip instead of trying again next poll).
    public function get_us3_data()
    {
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
-         return 0;
+         return null;
 
       $table  = $this->us3_table( 'HPCAnalysisResult' );
       $result = $this->exec( $us3,
@@ -566,7 +580,7 @@ class job_state_machine
       if ( ! $result )
       {
          $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}" );
-         return 0;
+         return null;
       }
 
       ## Duplicate gfacIDs happen; the most recent row is the live one.
@@ -576,7 +590,7 @@ class job_state_machine
             . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
       if ( ! $result )
-         return 0;
+         return null;
 
       $row = $this->fetch_row( $result );
 

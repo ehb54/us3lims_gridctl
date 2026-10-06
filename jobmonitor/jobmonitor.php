@@ -228,7 +228,7 @@ while( 1 ) {
         ## bad between the ping above and this statement, or a transient
         ## server error. Retry the poll instead of treating a database hiccup
         ## as the job's row having vanished.
-        write_logld( timestamp( "poll query failed: " . mysqli_error( $db_handle ) . ", will retry" ) );
+        write_logld( "poll query failed: " . mysqli_error( $db_handle ) . ", will retry" );
         mysqli_close( $db_handle );
         sleep( $poll_sleep_seconds );
         continue;
@@ -256,7 +256,7 @@ while( 1 ) {
     try {
         $job_done = check_job();
     } catch ( Throwable $e ) {
-        write_logld( timestamp( "check_job() threw: " . $e->getMessage() . ", will retry" ) );
+        write_logld( "check_job() threw: " . $e->getMessage() . ", will retry" );
         $job_done = false;
     }
 

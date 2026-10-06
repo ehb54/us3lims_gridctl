@@ -151,10 +151,13 @@ function job_machine()
    return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID );
 }
 
-/** One "job is hung" mail per job, not one per poll. 'fail' mails all go out. */
+/** One "job is hung" and one "scancel never landed" mail per job, not one per
+ *  poll. Other 'fail' mails (e.g. a query failure) are unrelated problems and
+ *  still all go out, so they are not deduplicated here. */
 function mail_to_admin_once( $type, $msg )
 {
    global $timeout_email_sent;
+   global $scancel_fail_email_sent;
 
    if ( $type === 'hang' )
    {
@@ -162,6 +165,13 @@ function mail_to_admin_once( $type, $msg )
          return;
 
       $timeout_email_sent = true;
+   }
+   elseif ( $type === 'scancel_fail' )
+   {
+      if ( isset( $scancel_fail_email_sent ) )
+         return;
+
+      $scancel_fail_email_sent = true;
    }
 
    mail_to_admin( $type, $msg );

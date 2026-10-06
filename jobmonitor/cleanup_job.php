@@ -60,15 +60,18 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $db = $us3_db;
    write_logld( "$me: debug db=$db; requestID=$requestID" );
 
-   ## LIMS tables over their own connection as $user: the cron sweep passes a
-   ## gfac-user handle, which has no rights on them. $db_handle is for gfac only.
+   ## LIMS tables over their own connection as $user: the caller's $db_handle
+   ## is a gfac-user handle, which has no rights on them.
    $us3_link = mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 
    if ( ! $us3_link )
    {
-      write_logld( "$me: Could not connect to DB $dbhost : $us3_db" );
-      update_autoflow_status( 'FAILED', "Internal error - cleanup could not connect to DB $us3_db" );
-      return( -1 );
+      ## Retryable, not the job's own failure: a connect failure (e.g.
+      ## MariaDB at max_connections) says nothing about whether the job
+      ## finished. The caller's own connection ($db_handle) can still mark
+      ## the stage FAILED below; don't do it here on a transient blip.
+      write_logld( "$me: Could not connect to DB $dbhost : $us3_db - will retry" );
+      return( 0 );
    }
 
    ## First get basic info for email messages
@@ -78,10 +81,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
-      return( -1 );
+      ## Retryable: a failed SELECT says nothing about the job itself.
+      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      return( 0 );
    }
 
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
@@ -101,9 +103,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
-      return( -1 );
+      ## Retryable: a failed SELECT says nothing about the job itself.
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) . " - will retry" );
+      return( 0 );
    }
 
    if ( mysqli_num_rows( $result ) == 0 )
@@ -140,10 +142,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $result = mysqli_query( $db_handle, $query );
    if ( ! $result )
    {
-      write_logld( "$me: Could not select GFAC status for $gfacID" );
-      mail_to_user( "fail", "Could not select GFAC status for $gfacID" );
-      update_autoflow_status( 'FAILED', "Could not select GFAC status for $gfacID" );
-      return( -1 );
+      ## Retryable: a failed SELECT says nothing about the job itself.
+      write_logld( "$me: Could not select GFAC status for $gfacID - will retry" );
+      return( 0 );
    }
 
    $num_rows = mysqli_num_rows( $result );
@@ -192,10 +193,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      mail_to_user( "fail", "Internal error " . mysqli_error( $db_handle ) );
-      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $db_handle ) );
-      return( -1 );
+      ## Retryable: a failed SELECT says nothing about the job itself.
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) . " - will retry" );
+      return( 0 );
    }
 
    $num_rows = mysqli_num_rows( $result );
@@ -462,7 +462,8 @@ write_logld( "$me: *messages.txt written" );
    }
 ##write_logld( "$me: tar files extracted" );
 
-   ## Explicit rather than jobmonitor.php's globals, which the cron sweep lacks.
+   ## Explicit rather than jobmonitor.php's globals, which joblinkjson.php
+   ## lacks: it calls in through gridctl.php without jobmonitor.php's includes.
    $autoflow = get_autoflow_type_id( $us3_link, $us3_db, $autoflowAnalysisID );
 
    ## Insert the model files and noise files
