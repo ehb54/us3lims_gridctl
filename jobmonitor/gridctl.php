@@ -11,15 +11,27 @@ require_once __DIR__ . '/../job_state_machine.php';
 ## live probe answer ($status), or whether the probe's answer should be used.
 ## get_local_status() only ever returns a plain cluster state (SUBMITTED/
 ## ACTIVE/COMPLETED/...), never one of LIMS's own escalation markers
-## (SUBMIT_TIMEOUT/RUN_TIMEOUT). While squeue still lists the job as queued/
-## running, that plain answer used to overwrite the marker, routing
-## check_job()'s switch back into submitted()/running() -- the *first* stall
-## window -- instead of re-entering submit_timeout()/run_timeout(), the
-## second window that actually decides (via reconcile()) whether to fail the
-## job. The marker has to survive a "still alive" answer the same way
-## COMPLETE/UNKNOWN/UNREACHABLE already did, or it never reaches FAILED and
-## refires every window instead.
+## (SUBMIT_TIMEOUT/RUN_TIMEOUT/FAILED-via-fire_stall). While squeue still
+## lists the job as queued/running, that plain answer used to overwrite the
+## marker, routing check_job()'s switch back into submitted()/running() --
+## the *first* stall window -- instead of re-entering submit_timeout()/
+## run_timeout(), the second window that actually decides (via reconcile())
+## whether to fail the job. The marker has to survive a "still alive" answer
+## the same way COMPLETE/UNKNOWN/UNREACHABLE already did, or it never reaches
+## FAILED and refires every window instead.
+##
+## FAILED needs the same protection, but not unconditionally: fire_stall()
+## writes FAILED directly (bypassing this function on the way in), and the
+## very next poll's "still alive" probe answer then overwrote it right back
+## to RUN_TIMEOUT/SUBMIT_TIMEOUT here, alternating forever with a scancel
+## every window and never finalizing while squeue still lists the job
+## (round-6 nit). Keep FAILED against the still-alive answers; let a
+## COMPLETED or CANCELED answer through, since those are the cluster
+## reporting a different, equally genuine terminal outcome.
 function reconcile_probed_status( $status_gw, $status ) {
+    if ( $status_gw === 'FAILED' ) {
+        return in_array( $status, [ 'COMPLETED', 'CANCELED' ], true ) ? $status : 'FAILED';
+    }
     if ( $status_gw === 'COMPLETE'  ||  $status_gw === 'SUBMIT_TIMEOUT'  ||  $status_gw === 'RUN_TIMEOUT'
          ||  $status === 'UNKNOWN'  ||  $status === GRIDCTL_UNREACHABLE ) {
         return $status_gw;
