@@ -477,7 +477,7 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    Job Type        : $jobtype
    Job Status      : $status
    Job Message     : $gfac_message
-$aira_details   Stdout          : $stdout
+   Stdout          : $stdout
    ";
 
    if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
