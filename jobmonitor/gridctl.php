@@ -7,6 +7,26 @@ require_once __DIR__ . '/../job_state_machine.php';
 
 ## returns true when job processing is done (regardless error or success)
 
+## Pure: decides whether the stored status ($status_gw) must survive a fresh
+## live probe answer ($status), or whether the probe's answer should be used.
+## get_local_status() only ever returns a plain cluster state (SUBMITTED/
+## ACTIVE/COMPLETED/...), never one of LIMS's own escalation markers
+## (SUBMIT_TIMEOUT/RUN_TIMEOUT). While squeue still lists the job as queued/
+## running, that plain answer used to overwrite the marker, routing
+## check_job()'s switch back into submitted()/running() -- the *first* stall
+## window -- instead of re-entering submit_timeout()/run_timeout(), the
+## second window that actually decides (via reconcile()) whether to fail the
+## job. The marker has to survive a "still alive" answer the same way
+## COMPLETE/UNKNOWN/UNREACHABLE already did, or it never reaches FAILED and
+## refires every window instead.
+function reconcile_probed_status( $status_gw, $status ) {
+    if ( $status_gw === 'COMPLETE'  ||  $status_gw === 'SUBMIT_TIMEOUT'  ||  $status_gw === 'RUN_TIMEOUT'
+         ||  $status === 'UNKNOWN'  ||  $status === GRIDCTL_UNREACHABLE ) {
+        return $status_gw;
+    }
+    return $status;
+}
+
 function check_job() {
     write_logld( "check_job()" );
     global $gfacID;
@@ -24,11 +44,7 @@ function check_job() {
 
     // Get local job status
     $status_gw  = $status;
-    $status     = get_local_status( $gfacID );
-    ## UNREACHABLE: we could not ask, so keep the recorded status.
-    if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN'  ||  $status == GRIDCTL_UNREACHABLE ) {
-        $status     = $status_gw;
-    }
+    $status     = reconcile_probed_status( $status_gw, get_local_status( $gfacID ) );
     write_logld( "Local status=$status status_gw=$status_gw" );
     
     # Sometimes during testing, the us3_db entry is not set
