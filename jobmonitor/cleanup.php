@@ -651,8 +651,9 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    chdir( $staging );
 
-   ## us_mpi_analysis writes the tar at the top of the work directory;
-   ## output/ is a fallback for older layouts.
+   ## us_mpi_analysis changes into output/ and archives into that
+   ## directory (us_mpi_analysis.cpp:340, :2515-2516); the top-level name
+   ## is tried too in case a layout ever puts it there.
    $tar_candidates = array(
       "$remoteDir/analysis-results.tar",
       "$remoteDir/output/analysis-results.tar",

@@ -178,12 +178,13 @@ function job_machine()
    return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID );
 }
 
-/** One "job is hung", one "scancel never landed" and one "fail" mail per job,
- *  not one per poll. 'fail' used to go out unconditionally every time (e.g. a
- *  query failure during an outage): a permanent error now retried instead of
- *  failing the job (round-5 fix: db_error_is_connection_class()) meant the
- *  same 'fail' repeating ~2,880 times a day until someone killed the
- *  monitor by hand. */
+/** One "job is hung" and one "scancel never landed" mail per job, not one per
+ *  poll. 'fail' is deduped per distinct message text instead: a blip
+ *  followed by a different, permanent failure still gets two mails, but the
+ *  same 'fail' text is sent only once. 'fail' used to go out unconditionally
+ *  every time (e.g. a query failure during an outage), which meant the same
+ *  text repeating ~2,880 times a day until someone killed the monitor by
+ *  hand. */
 function mail_to_admin_once( $type, $msg )
 {
    global $timeout_email_sent;

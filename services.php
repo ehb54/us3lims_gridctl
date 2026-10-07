@@ -41,9 +41,22 @@ $cmd[ "submit"    ] = "$us3bin/submitctl.php";
 $cmd[ "esign"     ] = "$us3bin/esign.php";
 
 function stop() {
-    global $lock;
+    global $lock, $us3etc;
 
     echo "stopping services...\n";
+
+    ## A pending start()'s background restart retry (monitor_restart_background())
+    ## is not one of $lock's own services, so without this it keeps retrying
+    ## after a stop and can start monitors for services this call just stopped,
+    ## once MariaDB finally comes back.
+    $retry_pidfile = "$us3etc/services-restart-retry.pid";
+    if ( is_file( $retry_pidfile ) ) {
+        $retry_pid = (int) trim( (string) file_get_contents( $retry_pidfile ) );
+        if ( $retry_pid > 0 && file_exists( "/proc/$retry_pid" ) ) {
+            posix_kill( $retry_pid, SIGTERM );
+        }
+        @unlink( $retry_pidfile );
+    }
 
     clearstatcache();
 
@@ -108,6 +121,20 @@ function monitor_restart_is_connection_class_failure( $output ) {
         'has exceeded the',
         'Lock wait timeout',
         'Deadlock found',
+        ## mysqlnd's own wording for a missing socket after a clean stop
+        ## (as opposed to the stale-socket case above, which still prints
+        ## "Connection refused"): a reboot or `systemctl restart mariadb`
+        ## leaves no socket file at all for up to ~20s while mariadb starts,
+        ## and without this the restart gave up in ~10s even though MariaDB
+        ## came up on its own a few seconds later.
+        '(HY000/2002)',
+        ## 2006: the connection was accepted and then dropped mid-query, as
+        ## MariaDB can do while still finishing its own startup.
+        'gone away',
+        ## 1053 (ER_SERVER_SHUTDOWN): seen here if --restart itself raced a
+        ## shutdown, not just the cleanup-query case job_state_machine.php's
+        ## db_error_is_connection_class() already retries.
+        'Server shutdown',
     ) as $pattern ) {
         if ( stripos( $text, $pattern ) !== false ) {
             return true;
@@ -127,25 +154,23 @@ function monitor_restart_attempt( $restart_cmd, $restart_log, $attempt ) {
     return array( $rc, $output );
 }
 
-## Keeps retrying `uslims_jobs.php --restart` well past what start() can wait
-## for in the foreground (round-5 fix: see start()'s own comment for why
-## this runs as a detached child instead). $next_attempt is the attempt
-## number to log next (the foreground already logged attempt 1). A fresh
-## attempt here decides whether this looks connection-class: that failure
-## gets the full extended budget (EL8's mariadb.service alone allows itself
-## up to 300s to recover from an unclean shutdown), a permanent one (a
-## missing db_config.php, bad credentials) gets only a couple of quick extra
-## tries before giving up -- waiting minutes for a config error to fix
-## itself on its own helps no one. Mails $admin_email and syslogs once, only
-## on final failure.
 ## A thin wrapper around sleep(), so a test can replace it with a no-op
 ## instead of actually waiting out a real retry budget (up to ~300s for the
-## connection-class case). gridctl_extract_functions() skips redeclaring any
-## name the caller already defined -- see support/gridctl/load-services.php.
+## connection-class case).
 function monitor_restart_sleep( $seconds ) {
     sleep( $seconds );
 }
 
+## Keeps retrying `uslims_jobs.php --restart` well past what start() can wait
+## for in the foreground (see start()'s own comment for why this runs as a
+## detached child instead). $next_attempt is the attempt number to log next
+## (the foreground already logged attempt 1). A fresh attempt here decides
+## whether this looks connection-class: that failure gets the full extended
+## budget (EL8's mariadb.service alone allows itself up to 300s to recover
+## from an unclean shutdown), a permanent one (a missing db_config.php, bad
+## credentials) gets only a couple of quick extra tries before giving up --
+## waiting minutes for a config error to fix itself on its own helps no
+## one. Mails $admin_email and syslogs once, only on final failure.
 function monitor_restart_background( $restart_cmd, $restart_log, $next_attempt ) {
     global $admin_email, $org_name;
 
@@ -214,11 +239,14 @@ function start() {
     ## unmonitored until someone notices and runs --restart by hand.
     $restart = "$us3util/uslims_jobs.php";
     if ( is_file( $restart ) ) {
-        ## uslims_jobs.php reads db_config.php from the current directory, so
-        ## it has to run from $us3util; this unit (us3-listen.service) runs
-        ## from /, not from lims/bin like the rest of this file assumes.
-        ## It also isn't ordered after mariadb.service, so right after a
-        ## crash this can run before MariaDB has finished recovering.
+        ## uslims_jobs.php finds db_config.php next to itself now regardless
+        ## of cwd, so the cd below is harmless rather than required; kept so
+        ## uslims_jobs.php's own relative-path assumptions elsewhere (e.g.
+        ## its own help text, other scripts invoked the same way) still see
+        ## the directory they expect. This unit (us3-listen.service) runs
+        ## from /, not from lims/bin like the rest of this file assumes, and
+        ## isn't ordered after mariadb.service, so right after a crash this
+        ## can run before MariaDB has finished recovering.
         $restart_log = "$us3etc/services-restart.log";
         $restart_cmd = "cd " . escapeshellarg( $us3util ) . " && /usr/bin/php "
                      . escapeshellarg( $restart ) . " --restart 2>&1";
@@ -228,7 +256,7 @@ function start() {
         if ( $rc === 0 ) {
             echo "monitor restart: ok\n";
         } else {
-            ## round-5 fix: the rest of the retry budget runs in a detached
+            ## The rest of the retry budget runs in a detached
             ## child instead of here, so this call -- and the systemd unit
             ## (and multi-user.target) waiting on it -- does not hold for
             ## however long that takes. The old foreground budget (6 tries,
@@ -238,9 +266,15 @@ function start() {
             ## start/restart/reload for nothing, holding the unit each time.
             echo "monitor restart: attempt 1 failed (exit $rc); retrying in the"
                . " background, see $restart_log\n";
+            ## $! captured right after the '&' into a pidfile stop() can read:
+            ## without it, a stop that lands mid-retry has no way to reach
+            ## this child at all, and it keeps running and can start monitors
+            ## after the services it was retrying for have been stopped.
+            $retry_pidfile = "$us3etc/services-restart-retry.pid";
             $bg = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __FILE__ )
                 . ' _restart-retry-background ' . escapeshellarg( $restart_cmd ) . ' '
-                . escapeshellarg( $restart_log ) . ' > /dev/null 2>&1 &';
+                . escapeshellarg( $restart_log ) . ' > /dev/null 2>&1 & echo $! > '
+                . escapeshellarg( $retry_pidfile );
             exec( $bg );
         }
     }
@@ -293,6 +327,11 @@ if ( !isset( $argv[ 1 ] ) ) {
 switch( $argv[ 1 ] ) {
     ## Internal: start()'s own detached child, not a documented entry point.
     case "_restart-retry-background" : {
+        if ( !isset( $argv[ 2 ], $argv[ 3 ] ) ) {
+            fwrite( STDERR, "_restart-retry-background needs <restart_cmd> <restart_log>;"
+                          . " it is started by start() and not meant to be run directly\n" );
+            exit( 1 );
+        }
         monitor_restart_background( $argv[ 2 ], $argv[ 3 ], 2 );
         exit;
     }

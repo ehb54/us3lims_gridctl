@@ -39,10 +39,10 @@ function db_error_is_connection_class( $errno )
 {
    return in_array( (int) $errno,
       ## 1053 (ER_SERVER_SHUTDOWN, SQLSTATE 08S01): MariaDB stopping mid-query.
-      ## Round-6 should-fix -- without it, a cleanup query in flight during a
-      ## restart both failed to mail (the type is 'fail', not retried) and
-      ## failed to persist FAILED (the same shutdown refused that write too),
-      ## ending the monitor with no record of what happened.
+      ## Without it, a cleanup query in flight during a restart mailed the
+      ## user but could not persist FAILED (the same shutdown refused that
+      ## write too), leaving the job's own status wrong even though the user
+      ## was told.
       array( 2002, 2006, 2013, 1040, 1203, 1226, 1205, 1213, 1053 ), true );
 }
 
