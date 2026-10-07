@@ -2,7 +2,6 @@
 
 # functions for jobmonitor.php
 
-## joblinkjson.php includes this file without jobmonitor.php's includes.
 require_once __DIR__ . '/../job_state_machine.php';
 
 ## returns true when job processing is done (regardless error or success)
@@ -189,7 +188,7 @@ function mail_to_admin_once( $type, $msg )
 {
    global $timeout_email_sent;
    global $scancel_fail_email_sent;
-   global $fail_email_sent;
+   global $fail_email_sent_messages;
 
    if ( $type === 'hang' )
    {
@@ -207,10 +206,22 @@ function mail_to_admin_once( $type, $msg )
    }
    elseif ( $type === 'fail' )
    {
-      if ( isset( $fail_email_sent ) )
+      ## Keyed on the message, not a single flag (round-6 nit): a retryable
+      ## connection blip and a later, genuinely different permanent failure
+      ## both come through as type 'fail' (job_state_machine.php's one call
+      ## site), and a single boolean let the first one's mail silently
+      ## swallow the second's -- the mail that actually mattered, since a
+      ## permanent failure is the one that ends the monitor. The *same*
+      ## message repeating (the real spam case this dedup exists for) is
+      ## still deduped.
+      if ( ! is_array( $fail_email_sent_messages ) )
+      {
+         $fail_email_sent_messages = array();
+      }
+      if ( in_array( $msg, $fail_email_sent_messages, true ) )
          return;
 
-      $fail_email_sent = true;
+      $fail_email_sent_messages[] = $msg;
    }
 
    mail_to_admin( $type, $msg );

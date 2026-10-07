@@ -516,10 +516,14 @@ write_logld( "$me: *messages.txt written" );
    }
 ##write_logld( "$me: tar files extracted" );
 
-   ## Explicit rather than jobmonitor.php's globals: get_autoflow_type_id()
-   ## is also called directly by joblinkjson.php (through gridctl.php,
-   ## without jobmonitor.php's includes), not only from here through
-   ## job_cleanup(), so it cannot rely on jobmonitor.php's globals existing.
+   ## Explicit rather than jobmonitor.php's globals (round-6 nit: not because
+   ## joblinkjson.php calls this -- it doesn't; it only requires
+   ## gridctl_bootstrap.php and runs its own query directly): job_cleanup()
+   ## can be called from contexts other than jobmonitor.php's own main loop,
+   ## where $GLOBALS['db_handle']/['us3_db']/['autoflowAnalysisID'] are not
+   ## guaranteed to be set, so get_autoflow_type_id()'s global fallback
+   ## (used only when called with no arguments, e.g. from jobmonitor.php
+   ## itself) is not relied on here.
    $autoflow = get_autoflow_type_id( $us3_link, $us3_db, $autoflowAnalysisID );
 
    ## Insert the model files and noise files
