@@ -651,12 +651,14 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    chdir( $staging );
 
-   ## us_mpi_analysis changes into output/ and archives into that
-   ## directory (us_mpi_analysis.cpp:340, :2515-2516); the top-level name
-   ## is tried too in case a layout ever puts it there.
+   ## us_mpi_analysis changes into output/ and archives into that directory
+   ## (us_mpi_analysis.cpp:340, :2515-2516) -- that is where it is on every
+   ## normal job, so it goes first to avoid a guaranteed-failed scp attempt
+   ## against the top-level path before falling back to the real one. The
+   ## top-level name is still tried second in case a layout ever puts it there.
    $tar_candidates = array(
-      "$remoteDir/analysis-results.tar",
       "$remoteDir/output/analysis-results.tar",
+      "$remoteDir/analysis-results.tar",
    );
 
    $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );
