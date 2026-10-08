@@ -40,24 +40,35 @@ $cmd[ "manage"    ] = "$us3bin/manage-us3-pipe.php";
 $cmd[ "submit"    ] = "$us3bin/submitctl.php";
 $cmd[ "esign"     ] = "$us3bin/esign.php";
 
+## A pending start()'s background restart retry (monitor_restart_background())
+## is not one of $lock's own services, so without this it keeps retrying
+## after a stop and can start monitors for services this call just stopped,
+## once MariaDB finally comes back. Called unconditionally by both the
+## "stop" and "restart" cases below, not only from inside stop() itself
+## (round 8 nit): those cases only call stop() when a $lock daemon is
+## actually running, but a pending retry child can exist with every $lock
+## daemon down (e.g. a prior start() left one retrying with MariaDB still
+## unreachable) -- that child would otherwise never be reached at all.
+##
+## Matched by command line (round 8 should-fix), not a pidfile: nothing
+## ever removed a pidfile when the child exited on its own (a clean retry
+## success, or the FINAL give-up), so a later, unrelated process that
+## reused the same pid could be the one a pidfile-based kill hit instead --
+## observed with the pid reused by another us3 process, and separately by
+## another root process after the root-run variant. pkill -f also
+## naturally covers two concurrent retries (two start()s racing with
+## MariaDB down each spawn one): a single pidfile could only ever name one
+## of them, leaving the other to survive a stop.
+function kill_pending_restart_retry() {
+    exec( 'pkill -f ' . escapeshellarg( __FILE__ . ' _restart-retry-background' ) );
+}
+
 function stop() {
-    global $lock, $us3etc;
+    global $lock;
 
     echo "stopping services...\n";
 
-    ## A pending start()'s background restart retry (monitor_restart_background())
-    ## is not one of $lock's own services, so without this it keeps retrying
-    ## after a stop and can start monitors for services this call just stopped,
-    ## once MariaDB finally comes back.
-    $retry_pidfile = "$us3etc/services-restart-retry.pid";
-    if ( is_file( $retry_pidfile ) ) {
-        $retry_pid = (int) trim( (string) file_get_contents( $retry_pidfile ) );
-        if ( $retry_pid > 0 && file_exists( "/proc/$retry_pid" ) ) {
-            posix_kill( $retry_pid, SIGTERM );
-        }
-        @unlink( $retry_pidfile );
-    }
-
+    kill_pending_restart_retry();
     clearstatcache();
 
     foreach ( $lock as $k => $v ) {
@@ -143,6 +154,27 @@ function monitor_restart_is_connection_class_failure( $output ) {
     return false;
 }
 
+## The restart command and its log path, computed the same way by both
+## start() and the detached retry child (round 8 nit, replacing argv
+## passing between them): _restart-retry-background used to take these as
+## arguments, so a junk or missing argument (even '' -- isset() alone does
+## not catch that) reached exec() with an empty command, crashing 8.2 with
+## an uncaught ValueError and sending a false "monitor restart failed" mail
+## on 7.2. Computing them here, in the child itself, needs no arguments to
+## validate at all.
+function restart_command_and_log() {
+    global $us3util, $us3etc;
+
+    $restart     = "$us3util/uslims_jobs.php";
+    $restart_log = "$us3etc/services-restart.log";
+    ## See start()'s own comment on the cd: harmless, not required, kept for
+    ## uslims_jobs.php's own relative-path assumptions elsewhere.
+    $restart_cmd = "cd " . escapeshellarg( $us3util ) . " && /usr/bin/php "
+                 . escapeshellarg( $restart ) . " --restart 2>&1";
+
+    return array( $restart_cmd, $restart_log );
+}
+
 ## One attempt at `uslims_jobs.php --restart`, logged either way. Returns the
 ## exit code.
 function monitor_restart_attempt( $restart_cmd, $restart_log, $attempt ) {
@@ -195,9 +227,16 @@ function monitor_restart_background( $restart_cmd, $restart_log, $next_attempt )
         if ( $rc === 0 ) {
             return;
         }
-        if ( !$connection_class && !monitor_restart_is_connection_class_failure( $output ) ) {
-            ## Still looks permanent; no point burning the rest of the
-            ## connection-class budget on it.
+        ## This attempt's own output, not the first attempt's $connection_class
+        ## (round 8 nit): checking only the original classification meant that
+        ## once attempt $next_attempt looked connection-class, nothing any
+        ## later attempt's output said could ever break the loop early, since
+        ## "!$connection_class" was already false for the rest of the run. A
+        ## wrong password discovered partway through the extended budget (say,
+        ## MariaDB came back but the stored credentials are now bad) used to
+        ## burn the full ~26-minute budget with no mail until it finally gave
+        ## up. Each attempt's own output decides now, independently.
+        if ( !monitor_restart_is_connection_class_failure( $output ) ) {
             break;
         }
         $wait = min( $wait * 2, 60 );
@@ -237,19 +276,17 @@ function start() {
     ## was running died with it, so this is the only thing that picks their
     ## jobs back up; without it a job submitted before the reboot sits
     ## unmonitored until someone notices and runs --restart by hand.
-    $restart = "$us3util/uslims_jobs.php";
-    if ( is_file( $restart ) ) {
-        ## uslims_jobs.php finds db_config.php next to itself now regardless
-        ## of cwd, so the cd below is harmless rather than required; kept so
-        ## uslims_jobs.php's own relative-path assumptions elsewhere (e.g.
-        ## its own help text, other scripts invoked the same way) still see
-        ## the directory they expect. This unit (us3-listen.service) runs
-        ## from /, not from lims/bin like the rest of this file assumes, and
-        ## isn't ordered after mariadb.service, so right after a crash this
-        ## can run before MariaDB has finished recovering.
-        $restart_log = "$us3etc/services-restart.log";
-        $restart_cmd = "cd " . escapeshellarg( $us3util ) . " && /usr/bin/php "
-                     . escapeshellarg( $restart ) . " --restart 2>&1";
+    ##
+    ## uslims_jobs.php finds db_config.php next to itself now regardless of
+    ## cwd, so restart_command_and_log()'s cd is harmless rather than
+    ## required; kept so uslims_jobs.php's own relative-path assumptions
+    ## elsewhere (e.g. its own help text, other scripts invoked the same
+    ## way) still see the directory they expect. This unit (us3-listen.service)
+    ## runs from /, not from lims/bin like the rest of this file assumes, and
+    ## isn't ordered after mariadb.service, so right after a crash this can
+    ## run before MariaDB has finished recovering.
+    if ( is_file( "$us3util/uslims_jobs.php" ) ) {
+        list( $restart_cmd, $restart_log ) = restart_command_and_log();
 
         list( $rc, $output ) = monitor_restart_attempt( $restart_cmd, $restart_log, 1 );
 
@@ -266,15 +303,15 @@ function start() {
             ## start/restart/reload for nothing, holding the unit each time.
             echo "monitor restart: attempt 1 failed (exit $rc); retrying in the"
                . " background, see $restart_log\n";
-            ## $! captured right after the '&' into a pidfile stop() can read:
-            ## without it, a stop that lands mid-retry has no way to reach
-            ## this child at all, and it keeps running and can start monitors
-            ## after the services it was retrying for have been stopped.
-            $retry_pidfile = "$us3etc/services-restart-retry.pid";
+            ## No pidfile and no arguments (round 8 should-fix/nit): stop()
+            ## finds this child by matching its command line with pkill -f
+            ## instead (see stop()'s own comment for why a pidfile could not
+            ## reliably name it), and the child recomputes the restart
+            ## command/log itself via restart_command_and_log() instead of
+            ## receiving them as arguments, so there is nothing for a junk
+            ## or missing argument to crash on either.
             $bg = escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __FILE__ )
-                . ' _restart-retry-background ' . escapeshellarg( $restart_cmd ) . ' '
-                . escapeshellarg( $restart_log ) . ' > /dev/null 2>&1 & echo $! > '
-                . escapeshellarg( $retry_pidfile );
+                . ' _restart-retry-background > /dev/null 2>&1 &';
             exec( $bg );
         }
     }
@@ -326,13 +363,12 @@ if ( !isset( $argv[ 1 ] ) ) {
 
 switch( $argv[ 1 ] ) {
     ## Internal: start()'s own detached child, not a documented entry point.
+    ## Takes no arguments (round 8 nit): restart_command_and_log() computes
+    ## the same restart command/log start() already used for attempt 1, so
+    ## there is nothing left for a junk or missing argument to crash on.
     case "_restart-retry-background" : {
-        if ( !isset( $argv[ 2 ], $argv[ 3 ] ) ) {
-            fwrite( STDERR, "_restart-retry-background needs <restart_cmd> <restart_log>;"
-                          . " it is started by start() and not meant to be run directly\n" );
-            exit( 1 );
-        }
-        monitor_restart_background( $argv[ 2 ], $argv[ 3 ], 2 );
+        list( $restart_cmd, $restart_log ) = restart_command_and_log();
+        monitor_restart_background( $restart_cmd, $restart_log, 2 );
         exit;
     }
 
@@ -341,6 +377,7 @@ switch( $argv[ 1 ] ) {
             stop();
         } else {
             echo "no services are currently running\n";
+            kill_pending_restart_retry();
         }
         status();
         exit;
@@ -351,6 +388,7 @@ switch( $argv[ 1 ] ) {
             stop();
         } else {
             echo "services are not currently all running\n";
+            kill_pending_restart_retry();
         }
         start();
         system( "/usr/bin/php " . __FILE__ . " status" );

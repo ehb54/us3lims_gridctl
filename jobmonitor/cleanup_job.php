@@ -68,10 +68,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    {
       ## Retryable only for a connection-class reason (e.g. MariaDB at
       ## max_connections), which says nothing about whether the job
-      ## finished. Anything else (round-5 fix) is a connection that will
-      ## never succeed (bad credentials, unknown database) -- restores the
-      ## terminal handling this had before 0c8086c made every failure here
-      ## retry forever.
+      ## finished. Anything else is a connection that will never succeed
+      ## (bad credentials, unknown database) and must be treated as
+      ## terminal, not retried forever.
       if ( db_error_is_connection_class( mysqli_connect_errno() ) )
       {
          write_logld( "$me: Could not connect to DB $dbhost : $us3_db - will retry" );
@@ -157,7 +156,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    {
       ## A connection-class failure is not the same claim as "this request
       ## has no result row": it is retryable, not terminal. Anything else
-      ## (round-5 fix) is a query that can never succeed. 0/-1 per
+      ## is a query that can never succeed. 0/-1 per
       ## resolve_and_cleanup_job()'s contract.
       if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
       {
@@ -516,10 +515,10 @@ write_logld( "$me: *messages.txt written" );
    }
 ##write_logld( "$me: tar files extracted" );
 
-   ## Explicit rather than jobmonitor.php's globals (round-6 nit: not because
-   ## joblinkjson.php calls this -- it doesn't; it only requires
-   ## gridctl_bootstrap.php and runs its own query directly): job_cleanup()
-   ## can be called from contexts other than jobmonitor.php's own main loop,
+   ## Explicit rather than jobmonitor.php's globals -- not because
+   ## joblinkjson.php calls this (it doesn't; it only requires
+   ## gridctl_bootstrap.php and runs its own query directly), but because
+   ## job_cleanup() can be called from contexts other than jobmonitor.php's own main loop,
    ## where $GLOBALS['db_handle']/['us3_db']/['autoflowAnalysisID'] are not
    ## guaranteed to be set, so get_autoflow_type_id()'s global fallback
    ## (used only when called with no arguments, e.g. from jobmonitor.php

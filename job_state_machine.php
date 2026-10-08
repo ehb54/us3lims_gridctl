@@ -18,10 +18,10 @@ if ( ! function_exists( 'cluster_probe_job_status' ) )
 
 require_once __DIR__ . '/job_status.php';
 
-## round-5 fix: a failed query here used to retry forever regardless of why
-## it failed, mailing the admin on every poll for a permanent error (a
-## dropped database, a missing table, revoked grants) that a retry could
-## never fix -- about 2,880 mails a day per job until someone killed the
+## A failed query here must not retry forever regardless of why it failed:
+## mailing the admin on every poll for a permanent error (a dropped
+## database, a missing table, revoked grants) that a retry could never fix
+## would be about 2,880 mails a day per job until someone killed the
 ## monitor by hand. Only a connection-class errno is worth retrying; these
 ## are mysqli's/MariaDB's "the server or network, not the query, is the
 ## problem" codes:
@@ -258,9 +258,9 @@ class job_state_machine
    ## breaker_gate => false (not plain breaker => false): skips only the
    ## open-breaker check that would otherwise refuse this call on an
    ## unrelated earlier failure, despite the ping moments ago. A real
-   ## scancel failure here still counts against the cluster -- round-5 fix;
-   ## the previous 'breaker' => false bypassed that bookkeeping too, so a
-   ## cluster that started actually failing scancels specifically was never
+   ## scancel failure here still counts against the cluster: a plain
+   ## 'breaker' => false would bypass that bookkeeping too, so a cluster
+   ## that started actually failing scancels specifically would never be
    ## recorded as failing at all.
    public function cancel_local_job()
    {
@@ -630,8 +630,8 @@ class job_state_machine
    ## (retryable, not the same as "not found" -- a caller that treated the
    ## two alike used to end the monitor on a connection blip instead of
    ## trying again next poll), or false when the query itself can never
-   ## succeed (round-5 fix: retrying that forever just mailed the admin on
-   ## every poll for a problem no retry could fix -- see
+   ## succeed (retrying that forever would just mail the admin on every
+   ## poll for a problem no retry could fix -- see
    ## db_error_is_connection_class()). The caller's contract (cleanup.php's
    ## resolve_and_cleanup_job()) already distinguishes all three.
    public function get_us3_data()

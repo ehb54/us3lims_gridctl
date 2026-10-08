@@ -160,11 +160,11 @@ pcntl_signal(SIGHUP,  "sig_handler");
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 
 # open db
-## round-5 nit: a plain open_db() here used to exit outright on a MariaDB
-## blip, including a monitor the boot restart (services.php) had just
-## launched to pick a job back up right after an unclean shutdown -- exactly
-## when a blip is most likely. The main loop below already uses
-## open_db_or_retry() for this reason; the startup connect now does too.
+## A plain open_db() here would exit outright on a MariaDB blip, including a
+## monitor the boot restart (services.php) had just launched to pick a job
+## back up right after an unclean shutdown -- exactly when a blip is most
+## likely. The main loop below already uses open_db_or_retry() for this
+## reason; the startup connect does too.
 open_db_or_retry();
 
 write_logld( "db opened" );

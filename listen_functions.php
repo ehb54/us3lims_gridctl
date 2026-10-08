@@ -63,10 +63,10 @@ function open_db_or_retry() {
         if ( $db_handle ) {
             return;
         }
-        ## errno/error (round-6 nit): without them, a permanent problem (a
-        ## changed password, errno 1045) looked identical in the log to a
-        ## transient one MariaDB restarting would cause, retrying forever
-        ## with no way to tell which from the log alone.
+        ## errno/error logged on every retry: without them, a permanent
+        ## problem (a changed password, errno 1045) looks identical in the
+        ## log to a transient one MariaDB restarting would cause, retrying
+        ## forever with no way to tell which from the log alone.
         write_logld( "cannot connect to database at $dbhost, retrying"
                    . " (errno " . mysqli_connect_errno() . ": " . mysqli_connect_error() . ")" );
         sleep( $poll_sleep_seconds / 2 );

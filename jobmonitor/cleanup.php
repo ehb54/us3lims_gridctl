@@ -25,9 +25,9 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    {
       ## A connection-class failure says nothing about whether gfacID is
       ## still tracked, so it is retried rather than treated as terminal.
-      ## Anything else (round-5 fix) is a query that can never succeed --
-      ## retrying it forever just mailed the admin every poll for a problem
-      ## no retry could fix. mail_to_admin_once() dedupes the mail either
+      ## Anything else is a query that can never succeed -- retrying it
+      ## forever would just mail the admin every poll for a problem no
+      ## retry could fix. mail_to_admin_once() dedupes the mail either
       ## way, so a real outage that does eventually clear is still only one
       ## 'fail' mail per job, not one per poll.
       $connection_class = db_error_is_connection_class( mysqli_errno( $db_handle ) );
@@ -68,8 +68,8 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       }
       if ( $requestID === false )
       {
-         ## round-5 fix: a permanent query failure (get_us3_data() already
-         ## mailed it, deduped). Retrying this forever cannot help.
+         ## A permanent query failure (get_us3_data() already mailed it,
+         ## deduped). Retrying this forever cannot help.
          return -1;
       }
       if ( $requestID == 0 )

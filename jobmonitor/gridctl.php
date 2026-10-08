@@ -23,8 +23,8 @@ require_once __DIR__ . '/../job_state_machine.php';
 ## writes FAILED directly (bypassing this function on the way in), and the
 ## very next poll's "still alive" probe answer then overwrote it right back
 ## to RUN_TIMEOUT/SUBMIT_TIMEOUT here, alternating forever with a scancel
-## every window and never finalizing while squeue still lists the job
-## (round-6 nit). Keep FAILED against the still-alive answers; let a
+## every window and never finalizing while squeue still lists the job.
+## Keep FAILED against the still-alive answers; let a
 ## COMPLETED or CANCELED answer through, since those are the cluster
 ## reporting a different, equally genuine terminal outcome.
 function reconcile_probed_status( $status_gw, $status ) {
@@ -207,7 +207,7 @@ function mail_to_admin_once( $type, $msg )
    }
    elseif ( $type === 'fail' )
    {
-      ## Keyed on the message, not a single flag (round-6 nit): a retryable
+      ## Keyed on the message, not a single flag: a retryable
       ## connection blip and a later, genuinely different permanent failure
       ## both come through as type 'fail' (job_state_machine.php's one call
       ## site), and a single boolean let the first one's mail silently
