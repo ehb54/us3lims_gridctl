@@ -14,6 +14,14 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
+## job_cleanup()'s outcome for a connection-class failure writing a stage
+## inside the finalizing span (after the gfac.analysis row is already
+## deleted). Distinct from -1 ("finalized, give up") so
+## resolve_and_cleanup_job() can tell the two apart: this one must leave the
+## finalizing marker in place for uslims_jobs.php --restart to close out,
+## since the write that marker exists for never actually happened.
+const CLEANUP_FINALIZING_INTERRUPTED = -2;
+
 ## Called by the daemon's cleanup().
 ## Returns -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
@@ -84,7 +92,16 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       ## span is over. One place rather than every exit path in job_cleanup: what
       ## matters is that the marker survives only when the worker dies mid-span,
       ## and a death skips this as surely as it skips the release below.
-      if ( $outcome !== 0 )
+      ##
+      ## CLEANUP_FINALIZING_INTERRUPTED is the one outcome that is terminal for
+      ## this monitor (it must stop polling: the row is already gone) without
+      ## the stage ever having been written -- a connection-class failure
+      ## reads exactly like a real crash to the code that would otherwise
+      ## remove the marker, even though the worker is still alive and running.
+      ## Leaving the marker here is what lets --restart's existing dead-worker
+      ## close-out finish the job instead of it being stranded with no row,
+      ## no marker, and a stage stuck at 'running' forever.
+      if ( $outcome !== 0 && $outcome !== CLEANUP_FINALIZING_INTERRUPTED )
       {
          cleanup_finalizing_end( $us3_db, $gfacID );
       }

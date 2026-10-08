@@ -452,6 +452,20 @@ write_logld( "$me: *messages.txt written" );
 
    if ( ! $result )
    {
+      ## A connection-class failure here (e.g. 1053 "server shutdown in
+      ## progress") says nothing about whether the job itself succeeded --
+      ## gfac.analysis is already deleted above, so this worker cannot
+      ## retry via the live poll loop the way code earlier in this function
+      ## does. Mailing "fail" and letting the caller remove the finalizing
+      ## marker would be wrong either way: the job may be fine, and the
+      ## marker is the only thing that lets --restart notice and close this
+      ## out later. Leave both alone and let the caller see that.
+      if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
+      {
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link )
+                     . " - connection-class, leaving the finalizing marker for --restart" );
+         return( CLEANUP_FINALIZING_INTERRUPTED );
+      }
       update_autoflow_status( 'FAILED', "Could not insert data into HPCAnalysis" );
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $us3_link ) );
