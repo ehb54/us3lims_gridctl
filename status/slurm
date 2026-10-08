@@ -5,7 +5,7 @@
 #
 # one output per line
 #
-# line 1: up|down|warn|down
+# line 1: up|down
 # line 2: running jobs for queue
 # line 3: pending (queued) jobs for queue
 
@@ -16,15 +16,39 @@ fi
 
 QUEUE=$1
 
+## %a is the partition's own admin up/down flag; it stays "up" as long as the
+## partition itself is enabled, regardless of how many individual nodes are
+## down or drained. %F adds per-partition node counts as
+## allocated/idle/other/total. A partition is only really usable when it is
+## admin-up AND has at least one allocated or idle node -- checking %a alone
+## (the old behavior, ultrascan-tickets#343) reported the whole queue down
+## the moment even one node did, while others stayed available.
+##
+## A row with no AVAIL field at all means sinfo matched nothing for this
+## partition (a typo, or a partition that does not exist here), which counts
+## as down. ALL sums every partition sinfo knows about; "up" there means at
+## least one of them is usable, not that every one of them is.
+##
+## Only POSIX-portable awk (no gawk-only extensions) and %F, stable in SLURM
+## since its 2.x releases: this runs over ssh on whatever login node and
+## whatever awk/SLURM build happens to be installed there.
+is_up() {
+  sinfo -h "$@" -o "%a %F" | awk '
+    {
+      split( $2, n, "/" )
+      if ( $1 == "up" && ( n[1] + n[2] ) > 0 ) found = 1
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
 if [[ $QUEUE == "ALL" ]] ; then
-  sinfo -s -a -o "%a" | tail -1 | sed 's/AVAIL/down/' \
-  && squeue -h -a -t running | wc -l \
-  && squeue -h -a -t pending | wc -l
+  if is_up ; then echo up ; else echo down ; fi
+  squeue -h -a -t running | wc -l
+  squeue -h -a -t pending | wc -l
   exit 0
-fi   
+fi
 
-sinfo -s -p $QUEUE -o "%a" | tail -1 | sed 's/AVAIL/down/' \
-&& squeue -h -a -p $QUEUE -t running | wc -l \
-&& squeue -h -a -p $QUEUE -t pending | wc -l
-
-
+if is_up -p "$QUEUE" ; then echo up ; else echo down ; fi
+squeue -h -a -p "$QUEUE" -t running | wc -l
+squeue -h -a -p "$QUEUE" -t pending | wc -l
