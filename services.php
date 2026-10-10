@@ -45,22 +45,55 @@ $cmd[ "esign"     ] = "$us3bin/esign.php";
 ## after a stop and can start monitors for services this call just stopped,
 ## once MariaDB finally comes back. Called unconditionally by both the
 ## "stop" and "restart" cases below, not only from inside stop() itself
-## (round 8 nit): those cases only call stop() when a $lock daemon is
+## those cases only call stop() when a $lock daemon is
 ## actually running, but a pending retry child can exist with every $lock
 ## daemon down (e.g. a prior start() left one retrying with MariaDB still
 ## unreachable) -- that child would otherwise never be reached at all.
 ##
-## Matched by command line (round 8 should-fix), not a pidfile: nothing
-## ever removed a pidfile when the child exited on its own (a clean retry
-## success, or the FINAL give-up), so a later, unrelated process that
-## reused the same pid could be the one a pidfile-based kill hit instead --
-## observed with the pid reused by another us3 process, and separately by
-## another root process after the root-run variant. pkill -f also
-## naturally covers two concurrent retries (two start()s racing with
-## MariaDB down each spawn one): a single pidfile could only ever name one
-## of them, leaving the other to survive a stop.
+## Matched by command line, not a pidfile: nothing ever removed a pidfile
+## when the child exited on its own (a clean retry success, or the FINAL
+## give-up), so a later, unrelated process that reused the same pid could
+## be the one a pidfile-based kill hit instead -- observed with the pid
+## reused by another us3 process, and separately by another root process
+## after the root-run variant. pkill -f also naturally covers two
+## concurrent retries (two start()s racing with MariaDB down each spawn
+## one): a single pidfile could only ever name one of them, leaving the
+## other to survive a stop.
+##
+## Anchored to the child's own exact command line (^...$), not a substring
+## search: unanchored, this also matched -- and killed -- anything merely
+## mentioning the same text, observed killing this call's own `grep` of its
+## log and an unrelated `watch pgrep -af '<pattern>'` and another user's
+## grep. The child is always spawned as a lone background command (see the
+## exec() call below), never wrapped in a larger compound one, so anchoring
+## to its exact three-argument invocation loses nothing real.
+##
+## A separate function so a test can see exactly what will be matched
+## without actually killing anything.
+##
+## posix_ere_quote(), not preg_quote(): pkill -f matches with glibc's POSIX
+## extended regex, a different engine from PCRE with a smaller special-
+## character set (no ':', '=', '!', '<', '>', '-', '#', all of which
+## preg_quote backslash-escapes anyway). That extra escaping is silently a
+## no-op in PCRE but not guaranteed to be in POSIX ERE, confirmed here: a
+## path containing '(', ')' and ':' built with preg_quote() stopped
+## matching at all, while the same path through posix_ere_quote() matched
+## correctly. PHP_BINARY and a real __FILE__ are always plain filesystem
+## paths, never containing any of that either way, which is exactly why
+## this was never seen in production -- but "never seen" is not "cannot
+## happen", and a silently-wrong pattern here is the same class of bug this
+## whole function exists to avoid.
+function posix_ere_quote( $s ) {
+    return preg_replace( '/[.\\\\*+?()\[\]{}|^$]/', '\\\\$0', $s );
+}
+
+function pending_restart_retry_pattern() {
+    return '^' . posix_ere_quote( PHP_BINARY ) . ' ' . posix_ere_quote( __FILE__ )
+         . ' _restart-retry-background$';
+}
+
 function kill_pending_restart_retry() {
-    exec( 'pkill -f ' . escapeshellarg( __FILE__ . ' _restart-retry-background' ) );
+    exec( 'pkill -f ' . escapeshellarg( pending_restart_retry_pattern() ) );
 }
 
 function stop() {
@@ -139,12 +172,20 @@ function monitor_restart_is_connection_class_failure( $output ) {
         ## and without this the restart gave up in ~10s even though MariaDB
         ## came up on its own a few seconds later.
         '(HY000/2002)',
-        ## 2006: the connection was accepted and then dropped mid-query, as
-        ## MariaDB can do while still finishing its own startup.
+        ## 2006: a connection accepted and then dropped, as MariaDB can do
+        ## while still finishing its own startup.
         'gone away',
-        ## 1053 (ER_SERVER_SHUTDOWN): seen here if --restart itself raced a
-        ## shutdown, not just the cleanup-query case job_state_machine.php's
-        ## db_error_is_connection_class() already retries.
+        ## 1053 (ER_SERVER_SHUTDOWN): --restart itself connecting right as
+        ## MariaDB begins shutting down.
+        ##
+        ## Both of these only ever reach here from a connect-time failure.
+        ## monitor_restart_background() only looks at $output at all when
+        ## $rc !== 0, and a MariaDB drop mid-restart, after --restart has
+        ## already connected, does not reliably make --restart exit non-
+        ## zero: dbutils' db_obj_result() reads a failed query the same as
+        ## an empty result, so --restart can print nothing wrong and still
+        ## exit 0. That gap is dbutils', not fixable by reading $output
+        ## differently here.
         'Server shutdown',
     ) as $pattern ) {
         if ( stripos( $text, $pattern ) !== false ) {
@@ -155,7 +196,7 @@ function monitor_restart_is_connection_class_failure( $output ) {
 }
 
 ## The restart command and its log path, computed the same way by both
-## start() and the detached retry child (round 8 nit, replacing argv
+## start() and the detached retry child (replacing argv
 ## passing between them): _restart-retry-background used to take these as
 ## arguments, so a junk or missing argument (even '' -- isset() alone does
 ## not catch that) reached exec() with an empty command, crashing 8.2 with
@@ -228,7 +269,7 @@ function monitor_restart_background( $restart_cmd, $restart_log, $next_attempt )
             return;
         }
         ## This attempt's own output, not the first attempt's $connection_class
-        ## (round 8 nit): checking only the original classification meant that
+        ## checking only the original classification meant that
         ## once attempt $next_attempt looked connection-class, nothing any
         ## later attempt's output said could ever break the loop early, since
         ## "!$connection_class" was already false for the rest of the run. A
@@ -303,7 +344,7 @@ function start() {
             ## start/restart/reload for nothing, holding the unit each time.
             echo "monitor restart: attempt 1 failed (exit $rc); retrying in the"
                . " background, see $restart_log\n";
-            ## No pidfile and no arguments (round 8 should-fix/nit): stop()
+            ## No pidfile and no arguments: stop()
             ## finds this child by matching its command line with pkill -f
             ## instead (see stop()'s own comment for why a pidfile could not
             ## reliably name it), and the child recomputes the restart
@@ -363,7 +404,7 @@ if ( !isset( $argv[ 1 ] ) ) {
 
 switch( $argv[ 1 ] ) {
     ## Internal: start()'s own detached child, not a documented entry point.
-    ## Takes no arguments (round 8 nit): restart_command_and_log() computes
+    ## Takes no arguments: restart_command_and_log() computes
     ## the same restart command/log start() already used for attempt 1, so
     ## there is nothing left for a junk or missing argument to crash on.
     case "_restart-retry-background" : {

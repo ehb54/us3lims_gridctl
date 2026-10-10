@@ -259,7 +259,8 @@ while( 1 ) {
     }
 
     ## One probe answer per poll: check_job() and the stall paths ask the same
-    ## question, and the cache is what keeps that to a single SSH call.
+    ## question, and the cache is what keeps that to a single call to the
+    ## cluster -- over ssh, or run directly for a 'localhost' => true one.
     job_state_machine::reset_status_cache();
 
     $status                         = $res_analysis->{"status"};
