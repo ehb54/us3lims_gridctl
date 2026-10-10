@@ -3,28 +3,34 @@
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/jobmonitor";
+$us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
-include "$us3bin/listen-config.php";
-include $class_dir_p . "experiment_status.php";
-include $class_dir_p . "experiment_errors.php";
-include $class_dir_p . "experiment_cancel.php";
-include $class_dir_p . "experiment_resource.php";
-include $class_dir_p . "job_details.php";
-include $class_dir_p . "../global_config.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
+include $class_dir . "../global_config.php";
 
+include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
+include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
-include "$us3jm/cleanup.php";
-include "$us3jm/cleanup_gfac.php";
-
-include "$us3util/utility.php";
+include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
+include_once "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************
 ## some could be pushed to listen-config.php
 
 # the polling interval
-$poll_sleep_seconds = 165 + random_int( 10, 30 );
 $poll_sleep_seconds = 30;
+
+## ultrascan-tickets#1120: +/-20% jitter on the steady-state poll, never
+## below 1s. Many monitors (one per job) start close together -- a batch
+## submission, or services.php's own boot restart relaunching several at
+## once -- and without this they stay in lockstep every $poll_sleep_seconds
+## for as long as they keep running, all hitting the DB and the cluster at
+## the same instant instead of spread across the interval.
+function jobmonitor_poll_sleep_seconds( $base ) {
+   $base   = max( 1, (int) $base );
+   $jitter = (int) round( $base * 0.2 );
+   return $jitter <= 0 ? $base : max( 1, $base + random_int( -$jitter, $jitter ) );
+}
 
 # logging_level 
 # 0 : minimal messages (expected value for production)
@@ -154,11 +160,16 @@ pcntl_signal(SIGHUP,  "sig_handler");
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 
 # open db
-open_db();
+## A plain open_db() here would exit outright on a MariaDB blip, including a
+## monitor the boot restart (services.php) had just launched to pick a job
+## back up right after an unclean shutdown -- exactly when a blip is most
+## likely. The main loop below already uses open_db_or_retry() for this
+## reason; the startup connect does too.
+open_db_or_retry();
 
 write_logld( "db opened" );
 
-# gfac?
+# Load the current central job-tracking row.
 
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
@@ -167,12 +178,12 @@ $loop      = 0;
 if (
     false ===
     ( $res_analysis =
-      db_obj_result( $db_handle
+      listen_db_obj_result( $db_handle
                      ,"select"
                      . " cluster"
                      . " ,status"
                      . " ,queue_msg"
-                     . " ,UNIX_TIMESTAMP(time)"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
@@ -181,13 +192,14 @@ if (
                      ,true
       ) ) ) {
     mysqli_close( $db_handle );
-    error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+    error_exit( "gfacID $gfacID not found in gfac.analysis" );
 }
 
 $cluster            = $res_analysis->{"cluster"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
-$time               = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+## gfac.analysis.time twice: the epoch for the stall clocks, the text for the admin mail.
+$update_epoch       = $res_analysis->{"update_epoch"};
 $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
 
@@ -197,60 +209,84 @@ $autoflowID         = is_object( $type_id_obj ) && isset( $type_id_obj->autoflow
 
 write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
 
-## debugging
-## 
-## debug_json( timestamp("analysis"), $res_analysis );
-## update_autoflow_models(1,2,"00000000-0000-0000-0000-000000000000");
-## update_autoflow_models(3,4,"a71cda5a-a8cb-41a5-9858-10c9296a3e6e");
-## exit(-1);
-
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
-    open_db();
+    open_db_or_retry();
     while ( !mysqli_ping( $db_handle ) ) {
         write_logld( "mysql server has gone away" );
         sleep( $poll_sleep_seconds / 2 );
         write_logld( "attempting to reconnect" );
-        open_db();
+        open_db_or_retry();
         if ( mysqli_ping( $db_handle ) ) {
             write_logld( "reconnected - success" );
-        }            
+        }
     }
-    
-    if (
-        false ===
-        ( $res_analysis =
-          db_obj_result( $db_handle
-                         ,"select"
-                         . " status"
-                         . " ,queue_msg"
-                         . " ,metaschedulerClusterExecuting"
-                         . " ,UNIX_TIMESTAMP(time)"
-                         . " ,time"
-                         . " from gfac.analysis"
-                         . " where gfacID = \"$gfacID\""
-                         ,false
-                         ,true
-          ) ) ) {
+
+    $poll_statement = mysqli_prepare( $db_handle, "select"
+                     . " status"
+                     . " ,queue_msg"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
+                     . " ,time"
+                     . " from gfac.analysis"
+                     . " where gfacID = ?" );
+
+    $poll_result = $poll_statement
+                 && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
+                 && mysqli_stmt_execute( $poll_statement )
+                 ? mysqli_stmt_get_result( $poll_statement )
+                 : false;
+
+    if ( $poll_statement ) {
+        mysqli_stmt_close( $poll_statement );
+    }
+
+    if ( $poll_result === false ) {
+        ## The query itself failed, not "no such row": a connection that went
+        ## bad between the ping above and this statement, or a transient
+        ## server error. Retry the poll instead of treating a database hiccup
+        ## as the job's row having vanished.
+        write_logld( "poll query failed: " . mysqli_error( $db_handle ) . ", will retry" );
         mysqli_close( $db_handle );
-        error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+        sleep( $poll_sleep_seconds );
+        continue;
     }
+
+    $res_analysis = mysqli_fetch_object( $poll_result );
+
+    if ( $res_analysis === null ) {
+        mysqli_close( $db_handle );
+        error_exit( "gfacID $gfacID not found in gfac.analysis" );
+    }
+
+    ## One probe answer per poll: check_job() and the stall paths ask the same
+    ## question, and the cache is what keeps that to a single call to the
+    ## cluster -- over ssh, or run directly for a 'localhost' => true one.
+    job_state_machine::reset_status_cache();
 
     $status                         = $res_analysis->{"status"};
     $queue_msg                      = $res_analysis->{"queue_msg"};
-    $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $update_epoch                   = $res_analysis->{"update_epoch"};
     $updateTime                     = $res_analysis->{"time"};
-    $metascheduler_cluser_executing = $res_analysis->{"metaschedulerClusterExecuting"};
 
-    if ( check_job() ) {
+    ## An uncaught exception here (e.g. common's remote_exec rejecting a bad
+    ## cluster policy) is otherwise a fatal error: the monitor dies with no
+    ## sweep to notice, and the job it was watching is stranded silently.
+    try {
+        $job_done = check_job();
+    } catch ( Throwable $e ) {
+        write_logld( "check_job() threw: " . $e->getMessage() . ", will retry" );
+        $job_done = false;
+    }
+
+    if ( $job_done ) {
         write_logld( "jobmonitor.php exiting" );
         mysqli_close( $db_handle );
         exit(0);
     }
 
     mysqli_close( $db_handle );
-    sleep( $poll_sleep_seconds );
+    sleep( jobmonitor_poll_sleep_seconds( $poll_sleep_seconds ) );
 }
 
 mysqli_close( $db_handle );
-error_exit( timestamp( "dropped out of main loop, this should not happen" ) );
+error_exit( "dropped out of main loop, this should not happen" );

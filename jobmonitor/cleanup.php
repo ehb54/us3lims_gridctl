@@ -2,8 +2,8 @@
 /*
  * cleanup.php
  *
- * functions relating to copying results and cleaning up the gfac DB
- *  where the job used an Airavata interface.
+ * Functions for staging completed Slurm results, importing them into LIMS,
+ * and cleaning up the central job-tracking records.
  *
  */
 
@@ -14,667 +14,376 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
-function aira_cleanup( $us3_db, $reqID, $db_handle )
+## job_cleanup()'s outcome for a connection-class failure writing a stage
+## inside the finalizing span (after the gfac.analysis row is already
+## deleted). Distinct from -1 ("finalized, give up") so
+## resolve_and_cleanup_job() can tell the two apart: this one must leave the
+## finalizing marker in place for uslims_jobs.php --restart to close out,
+## since the write that marker exists for never actually happened.
+const CLEANUP_FINALIZING_INTERRUPTED = -2;
+
+## Called by the daemon's cleanup().
+## Returns -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
+## marker survives for --restart, -1 terminal, 0 retry (not yet finalizable),
+## 1 finalized / nothing to do.
+function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
 {
-   global $org_domain;
-   global $dbhost;
-   global $user;
-   global $passwd;
-   global $db;
-   global $guser;
-   global $gpasswd;
-   global $gDB;
-   global $me;
-   global $work;
-   global $email_address;
-   global $queuestatus;
-   global $jobtype;
-   global $editXMLFilename;
-   global $submittime;
-   global $endtime;
-   global $status;
-   global $stderr;
-   global $stdout;
-   global $tarfile;
-   global $requestID;
-   global $submit_dir;
-   $me        = 'cleanup_aira.php';
-
-   $requestID = $reqID;
-   $db = $us3_db;
-   write_logld( "$me: debug db=$db; requestID=$requestID" );
-
-   ## First get basic info for email messages
-   $query  = "SELECT email, investigatorGUID, editXMLFilename FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID=$requestID";
+   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
    $result = mysqli_query( $db_handle, $query );
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $db_handle ) );
-      return( -1 );
+      ## A connection-class failure says nothing about whether gfacID is
+      ## still tracked, so it is retried rather than treated as terminal.
+      ## Anything else is a query that can never succeed -- retrying it
+      ## forever would just mail the admin every poll for a problem no
+      ## retry could fix. mail_to_admin_once() dedupes the mail either
+      ## way, so a real outage that does eventually clear is still only one
+      ## 'fail' mail per job, not one per poll.
+      $connection_class = db_error_is_connection_class( mysqli_errno( $db_handle ) );
+      $log_fn( "Query failed $query - " . mysqli_error( $db_handle )
+              . ( $connection_class ? " - will retry" : " - permanent, giving up" ) );
+      mail_to_admin_once( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
+      return $connection_class ? 0 : -1;
    }
 
-   list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
+   list( $count ) = mysqli_fetch_array( $result );
 
-   $query  = "SELECT personID FROM ${us3_db}.people " .
-             "WHERE personGUID='$investigatorGUID'";
-   $result = mysqli_query( $db_handle, $query );
-
-   list( $personID ) = mysqli_fetch_array( $result );
-
-   $query  = "SELECT clusterName, submitTime, queueStatus, analType " .
-             "FROM ${us3_db}.HPCAnalysisRequest h, ${us3_db}.HPCAnalysisResult r "        .
-             "WHERE h.HPCAnalysisRequestID=$requestID "               .
-             "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
+   if ( $count == 0 )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      return( -1 );
+      return 1;          ## gfacID no longer tracked: nothing to do
    }
 
-   if ( mysqli_num_rows( $result ) == 0 )
+   ## job_cleanup() imports with plain INSERTs, so only the claim holder runs it.
+   ## One monitor per job is the rule, but --restart decides what is unmonitored by
+   ## reading the process table, which has misread it before.
+   $claim = cleanup_claim_path( $us3_db, $gfacID );
+
+   ## 0, not 1: the claim may be left from a killed worker, and a caller that
+   ## stopped here would leave the job unfinished until the claim goes stale.
+   if ( ! cleanup_claim_acquire( $claim, $log_fn ) )
    {
-      write_logld( "$me: US3 Table error - No records for requestID: $requestID" );
-      return( -1 );
+      $log_fn( "cleanup already claimed for $gfacID by another worker; will retry" );
+      return 0;
    }
 
-   list( $cluster, $submittime, $queuestatus, $jobtype ) = mysqli_fetch_array( $result );
-
-   ## Get the GFAC ID
-   $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM ${us3_db}.HPCAnalysisResult " .
-            "WHERE HPCAnalysisRequestID=$requestID";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
+   try
    {
-      write_logld( "$me: Bad query: $query" );
-      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $db_handle ) );
-      return( -1 );
-   }
-
-   list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result ); 
-
-   ## Get data from global GFAC DB then insert it into US3 DB
-
-/*
-   $result = mysqli_select_db( $db_handle, $gDB );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Could not connect to DB $gDB" );
-      mail_to_user( "fail", "Internal Error $requestID\nCould not connect to DB $gDB" );
-      return( -1 );
-   }
- */
-
-   $query = "SELECT status, cluster, id, autoflowAnalysisID, metaschedulerClusterExecuting FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
-
-   $result = mysqli_query( $db_handle, $query );
-   if ( ! $result )
-   {
-      write_logld( "$me: Could not select GFAC status for $gfacID" );
-      mail_to_user( "fail", "Could not select GFAC status for $gfacID" );
-      return( -1 );
-   }
-   
-   list( $status, $cluster, $id, $autoflowAnalysisID, $metaschedulerClusterExecuting ) = mysqli_fetch_array( $result );
-
-   $is_us3iab  = preg_match( "/us3iab/", $cluster );
-   $is_local   = preg_match( "/-local/", $cluster );
-
-   if ( $is_us3iab  ||  $is_local )
-   {
-         $clushost = $cluster;
-         $clushost = preg_replace( "/\-local/", "", $clushost );
-         get_local_files( $db_handle, $clushost, $requestID, $id, $gfacID );
-   }
-
-
-   $query = "SELECT id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      mail_to_user( "fail", "Internal error " . mysqli_error( $db_handle ) );
-      return( -1 );
-   }
-
-   list( $analysisID ) = mysqli_fetch_array( $result );
-
-   ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
-   
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   list( $requestGUID ) = mysqli_fetch_array( $result );
-   $output_dir = "$submit_dir/$requestGUID";
-
-   ## Get stderr,stdout,tarfile from work directory
-   if ( ! is_dir( "$output_dir" ) ) mkdir( "$output_dir", 0770 );
-   chdir( "$output_dir" );
-##write_logld( "$me: gfacID=$gfacID" );
-##write_logld( "$me: submit_dir=$submit_dir" );
-##write_logld( "$me: requestGUID=$requestGUID" );
-write_logld( "$me: output_dir=$output_dir" );
-
-   $stderr     = "";
-   $stdout     = "";
-   $tarfile    = "";
-   $fn_stderr  = "Ultrascan.stderr";
-   $fn_stdout  = "Ultrascan.stdout";
-   $fn_tarfile = "analysis-results.tar";
-   $secwait    = 10;
-   $num_try    = 0;
-write_logld( "$me: fn_tarfile=$fn_tarfile" );
-   while ( ! file_exists( $fn_tarfile )  &&  $num_try < 3 )
-   {
-      sleep( $secwait );
-      $num_try++;
-      $secwait   *= 2;
-write_logld( "$me:  tar-exists: num_try=$num_try" );
-   }
-
-   $ofiles     = scandir( $output_dir );
-   foreach ( $ofiles as $ofile )
-   {
-      if ( preg_match( "/^.*stderr$/", $ofile ) )
-         $fn_stderr  = $ofile;
-      if ( preg_match( "/^.*stdout$/", $ofile ) )
-         $fn_stdout  = $ofile;
-##write_logld( "$me:    ofile=$ofile" );
-   }
-write_logld( "$me: fn_stderr=$fn_stderr" );
-write_logld( "$me: fn_stdout=$fn_stdout" );
-if (file_exists($fn_tarfile)) write_logld( "$me: fn_tarfile=$fn_tarfile" );
-else                          write_logld( "$me: NOT FOUND: $fn_tarfile" );
-
-   if ( file_exists( $fn_stderr ) )
-   {  ## Reconstruct stderr if too big
-      $lense = filesize( $fn_stderr );
-      if ( $lense > 1000000 )
-      { ## Replace exceptionally large stderr with smaller version
-         exec( "head -n 10000 $fn_stderr >stderr-h", $output, $stat );
-         exec( "tail -n 10000 $fn_stderr >stderr-t", $output, $stat );
-         exec( "mv $fn_stderr stderr-orig",          $output, $stat );
-         exec( "cat stderr-h stderr-t >$fn_stderr",  $output, $stat );
-write_logld( "$me:  stderr reduced from $lense original bytes ." );
-      }
-   }
-
-   $stderr   = '';
-   $stdout   = '';
-   $tarfile  = '';
-   if ( file_exists( $fn_stderr  ) ) $stderr   = file_get_contents( $fn_stderr  );
-   if ( file_exists( $fn_stdout  ) ) $stdout   = file_get_contents( $fn_stdout  );
-   if ( file_exists( $fn_tarfile ) ) $tarfile  = file_get_contents( $fn_tarfile );
-write_logld( "$me(0):  length contents stderr,stdout,tarfile -- "
- . strlen($stderr) . "," . strlen($stdout) . "," . strlen($tarfile) );
-   ## If stdout,stderr have no content, retry after delay
-   if ( strlen( $stdout ) == 0  ||  strlen( $stderr ) == 0 )
-   {
-      sleep( 20 );
-      if ( file_exists( $fn_stderr  ) )
+      $requestID = get_us3_data();
+      if ( $requestID === null )
       {
-         $lense = filesize( $fn_stderr );
-         if ( $lense > 1000000 )
-         { ## Replace exceptionally large stderr with smaller version
-            exec( "head -n 10000 $fn_stderr >stderr-h", $output, $stat );
-            exec( "tail -n 10000 $fn_stderr >stderr-t", $output, $stat );
-            exec( "mv $fn_stderr stderr-orig",          $output, $stat );
-            exec( "cat stderr-h stderr-t >$fn_stderr",  $output, $stat );
-write_logld( "$me:  stderr reduced from $lense original bytes ." );
-         }
-         $stderr   = file_get_contents( $fn_stderr  );
+         ## The database could not answer for a connection-class reason, not
+         ## "no such row": retry rather than ending the monitor on a blip.
+         return 0;
       }
-      if ( file_exists( $fn_stdout  ) )
-         $stdout   = file_get_contents( $fn_stdout  );
-   }
-
-write_logld( "$me:  length contents stderr,stdout,tarfile -- "
- . strlen($stderr) . "," . strlen($stdout) . "," . strlen($tarfile) );
-
-   ## Save queue messages for post-mortem analysis
-   $query = "SELECT message, time FROM gfac.queue_messages " .
-            "WHERE analysisID = $analysisID " .
-            "ORDER BY time ";
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      ## Just log it and continue
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   $now = date( 'Y-m-d H:i:s' );
-   $message_log = "US3 DB: $db\n" .
-                  "RequestID: $requestID\n" .
-                  "GFAC ID: $gfacID\n" .
-                  "Processed: $now\n\n" .
-                  "Queue Messages\n\n" ;
-   if ( mysqli_num_rows( $result ) > 0 )
-   {
-      while ( list( $message, $time ) = mysqli_fetch_array( $result ) )
-         $message_log .= "$time $message\n";
-   }
-
-   $query = "DELETE FROM gfac.queue_messages " .
-            "WHERE analysisID = $analysisID ";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      ## Just log it and continue
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   $query = "SELECT queue_msg FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID' ";
-
-   $result = mysqli_query( $db_handle, $query );
-   list( $queue_msg ) = mysqli_fetch_array( $result );
-
-   ## But let's allow for investigation of other large stdout and/or stderr
-   if ( strlen( $stdout ) > 20480000 ||
-        strlen( $stderr ) > 20480000 )
-      write_logld( "$me: stdout + stderr larger than 20M - $gfacID\n" );
-
-   $message_log .= "\n\n\nStdout Contents\n\n" .
-                   $stdout .
-                   "\n\n\nStderr Contents\n\n" .
-                   $stderr .
-                   "\n\n\nGFAC Status: $status\n" .
-                   "GFAC message field: $queue_msg\n";
-
-   ## Delete data from GFAC DB
-   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      ## Just log it and continue
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-
-   ## Try to create it if necessary, and write the file
-   ## Let's use FILE_APPEND, in case this is the second time around and the 
-   ##  GFAC job status was INSERTed, rather than UPDATEd
-   if ( ! is_dir( $output_dir ) )
-      mkdir( $output_dir, 0775, true );
-   $message_filename = "$output_dir/$db-$requestID-messages.txt";
-   file_put_contents( $message_filename, $message_log, FILE_APPEND );
-  ## mysqli_close( $db_handle );
-
-   ########/
-   ## Insert data into HPCAnalysis
-
-   $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "                              .
-            "stderr='" . mysqli_real_escape_string( $db_handle, $stderr ) . "', " .
-            "stdout='" . mysqli_real_escape_string( $db_handle, $stdout ) . "', " .
-            "queueStatus='completed' " .
-            "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-      return( -1 );
-   }
-
-   ## Delete data from GFAC DB
-   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
-
-   $result = mysqli_query( $db_handle, $query );
-
-   if ( ! $result )
-   {
-      ## Just log it and continue
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-   }
-
-   ## Expand the tar file
-
-   if ( strlen( $tarfile ) == 0 )
-   {
-      write_logld( "$me: No tarfile" );
-      mail_to_user( "fail", "No results" );
-      return( -1 );
-   }
-
-   $tar_out = array();
-   exec( "tar -xf analysis-results.tar 2>&1", $tar_out, $err );
-
-   ## Insert the model files and noise files
-   $files      = file( "analysis_files.txt", FILE_IGNORE_NEW_LINES );
-   $noiseIDs   = array();
-   $modelGUIDs = array();
-   $mrecsIDs   = array();
-   $fns_used   = array();
-
-   foreach ( $files as $file )
-   {
-      $split = explode( ";", $file );
-
-      if ( count( $split ) > 1 )
+      if ( $requestID === false )
       {
-         list( $fn, $meniscus, $mc_iteration, $variance ) = explode( ";", $file );
-      
-         list( $other, $mc_iteration ) = explode( "=", $mc_iteration );
-         list( $other, $variance     ) = explode( "=", $variance );
-         list( $other, $meniscus     ) = explode( "=", $meniscus );
+         ## A permanent query failure (get_us3_data() already mailed it,
+         ## deduped). Retrying this forever cannot help.
+         return -1;
       }
-      else
-         $fn = $file;
-
-      if ( preg_match( "/mdl.tmp$/", $fn ) )
-         continue;
-
-      if ( in_array( $fn, $fns_used ) )
-         continue;
-
-      $fns_used[] = $fn;
-
-      if ( filesize( $fn ) < 100 )
+      if ( $requestID == 0 )
       {
-         write_logld( "$me:fn is invalid $fn size filesize($fn)" );
-         mail_to_user( "fail", "Internal error\n$fn is invalid" );
-         return( -1 );
+         return -1;
       }
 
-      if ( preg_match( "/^job_statistics\.xml$/", $fn ) ) ## Job statistics file
+      $log_fn( "calling job_cleanup() reqID=$requestID" );
+      $outcome = job_cleanup( $us3_db, $requestID, $db_handle );
+
+      ## Terminal either way means the stage has been written, so the finalizing
+      ## span is over. One place rather than every exit path in job_cleanup: what
+      ## matters is that the marker survives only when the worker dies mid-span,
+      ## and a death skips this as surely as it skips the release below.
+      ##
+      ## CLEANUP_FINALIZING_INTERRUPTED is the one outcome that is terminal for
+      ## this monitor (it must stop polling: the row is already gone) without
+      ## the stage ever having been written -- a connection-class failure
+      ## reads exactly like a real crash to the code that would otherwise
+      ## remove the marker, even though the worker is still alive and running.
+      ## Leaving the marker here is what lets --restart's existing dead-worker
+      ## close-out finish the job instead of it being stranded with no row,
+      ## no marker, and a stage stuck at 'running' forever.
+      if ( $outcome !== 0 && $outcome !== CLEANUP_FINALIZING_INTERRUPTED )
       {
-         $xml         = file_get_contents( $fn );
-         $statistics  = parse_xml( $xml, 'statistics' );
-##         $ntries      = 0;
+         cleanup_finalizing_end( $us3_db, $gfacID );
+      }
+
+      return $outcome;
+   }
+   finally
+   {
+      cleanup_claim_release( $claim );
+   }
+}
+
+## Per-job directory under the job log tree; jobmonitor.php's $lock_dir.
+## uslims_jobs.php, which scans these directories, does not set $ll_base_dir.
+function cleanup_job_dir( $us3_db, $gfacID )
+{
+   global $ll_base_dir;
+
+   $base = ( isset( $ll_base_dir ) && $ll_base_dir != "" )
+           ? $ll_base_dir
+           : ( exec( "ls -d ~us3/lims" ) . "/etc/joblog" );
+
+   return "$base/$us3_db/$gfacID";
+}
+
+## Directory used as the cross-worker cleanup claim for one job.
+## The files a job keeps in its own directory. Declared in one place so the set is
+## discoverable and a call site cannot invent a fourth by typo: three of these grew
+## separately, each with its own hand-built path.
 ##
-##         while ( $statistics['cpucount'] < 1  &&  $ntries < 3 )
-##         {  ## job_statistics file not totally copied, so retry
-##            sleep( 10 );
-##            $xml         = file_get_contents( $fn );
-##            $statistics  = parse_xml( $xml, 'statistics' );
-##            $ntries++;
-##write_logld( "$me:jobstats retry $ntries" );
-##         }
-##write_logld( "$me:cputime=$statistics['cputime']" );
-
-         $otherdata   = parse_xml( $xml, 'id' );
-
-         $query = "UPDATE ${us3_db}.HPCAnalysisResult SET "   .
-                  "wallTime = {$statistics['walltime']}, " .
-                  "CPUTime = {$statistics['cputime']}, " .
-                  "CPUCount = {$statistics['cpucount']}, " .
-                  "max_rss = {$statistics['maxmemory']}, " .
-                  "startTime = '{$otherdata['starttime']}', " .
-                  "endTime = '{$otherdata['endtime']}', " .
-                  "mgroupcount = {$otherdata['groupcount']} " .
-                  "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
-         $result = mysqli_query( $db_handle, $query );
-
-         if ( ! $result )
-         {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         }
-
-         file_put_contents( "$output_dir/$fn", $xml );    ## Copy to submit dir
-
-         $file_type = "job_stats";
-         $id        = 1;
-      }
-
-      else if ( preg_match( "/\.noise/", $fn ) > 0 ) ## It's a noise file
-      {
-         $xml        = file_get_contents( $fn );
-         $noise_data = parse_xml( $xml, "noise" );
-         $type       = ( $noise_data[ 'type' ] == "ri" ) ? "ri_noise" : "ti_noise";
-         $desc       = $noise_data[ 'description' ];
-         $modelGUID  = $noise_data[ 'modelGUID' ];
-         $noiseGUID  = $noise_data[ 'noiseGUID' ];
-         $editGUID   = '00000000-0000-0000-0000-000000000000';
-         if ( isset( $model_data[ 'editGUID' ] ) )
-            $editGUID   = $model_data[ 'editGUID' ];
-
-         $query = "INSERT INTO ${us3_db}.noise SET "  .
-                  "noiseGUID='$noiseGUID'," .
-                  "modelGUID='$modelGUID'," .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
-                  "modelID=1, "             .
-                  "noiseType='$type',"      .
-                  "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
-
-         ## Add later after all files are processed: editDataID, modelID
-
-         $result = mysqli_query( $db_handle, $query );
-
-         if ( ! $result )
-         {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            return( -1 );
-         }
-
-         $id        = mysqli_insert_id( $db_handle );
-         $file_type = "noise";
-         $noiseIDs[] = $id;
-
-         ## Keep track of modelGUIDs for later, when we replace them
-         $modelGUIDs[ $id ] = $modelGUID;
-         
-      }
-
-      else if ( preg_match( "/\.mrecs/", $fn ) > 0 )  ## It's an mrecs file
-      {
-         $xml         = file_get_contents( $fn );
-         $mrecs_data  = parse_xml( $xml, "modelrecords" );
-         $desc        = $mrecs_data[ 'description' ];
-         $editGUID    = $mrecs_data[ 'editGUID' ];
-write_logld( "$me:   mrecs file editGUID=$editGUID" );
-         if ( strlen( $editGUID ) < 36 )
-            $editGUID    = "12345678-0123-5678-0123-567890123456";
-         $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
-         $modelGUID   = $mrecs_data[ 'modelGUID' ];
-
-         $query = "INSERT INTO ${us3_db}.pcsa_modelrecs SET "  .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
-                  "modelID=0, "             .
-                  "mrecsGUID='$mrecGUID'," .
-                  "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
-
-         ## Add later after all files are processed: editDataID, modelID
-
-         $result = mysqli_query( $db_handle, $query );
-
-         if ( ! $result )
-         {
-            write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            return( -1 );
-         }
-
-         $id         = mysqli_insert_id( $db_handle );
-         $file_type  = "mrecs";
-         $mrecsIDs[] = $id;
-
-         ## Keep track of modelGUIDs for later, when we replace them
-         $rmodlGUIDs[ $id ] = $modelGUID;
-##write_logld( "$me:   mrecs file inserted into DB : id=$id" );
-      }
-
-      else if ( preg_match( "/\.model/", $fn ) > 0 ) ## It's a model file
-      {
-         $xml         = file_get_contents( $fn );
-         $model_data  = parse_xml( $xml, "model" );
-         $description = $model_data[ 'description' ];
-         $modelGUID   = $model_data[ 'modelGUID' ];
-         $editGUID    = $model_data[ 'editGUID' ];
-
-         if ( $mc_iteration > 1 )
-         {
-            $miter       = sprintf( "_mcN%03d", $mc_iteration );
-            $description = preg_replace( "/_mc[0-9]+/", $miter, $description );
-write_logld( "$me:   MODELUpd: O:description=$description" );
-         }
-
-         $query = "INSERT INTO ${us3_db}.model SET "       .
-                  "modelGUID='$modelGUID',"      .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM ${us3_db}.editedData WHERE editGUID='$editGUID')," .
-                  "description='$description',"  .
-                  "MCIteration='$mc_iteration'," .
-                  "meniscus='$meniscus'," .
-                  "variance='$variance'," .
-                  "xml='" . mysqli_real_escape_string( $db_handle, $xml ) . "'";
-
-         $result = mysqli_query( $db_handle, $query );
-
-         if ( ! $result )
-         {
-            write_logld( "$me: Bad query:\n$query " . mysqli_error( $db_handle ) );
-            mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-            return( -1 );
-         }
-
-         $modelID   = mysqli_insert_id( $db_handle );
-         $id        = $modelID;
-         $file_type = "model";
-
-         $query = "INSERT INTO ${us3_db}.modelPerson SET " .
-                  "modelID=$modelID, personID=$personID";
-         $result = mysqli_query( $db_handle, $query );
-      }
-
-      else      ## Undetermined type:  skip result data update
-         continue;
-
-      $query = "INSERT INTO ${us3_db}.HPCAnalysisResultData SET "       .
-               "HPCAnalysisResultID='$HPCAnalysisResultID', " .
-               "HPCAnalysisResultType='$file_type', "         .
-               "resultID=$id";
-
-      $result = mysqli_query( $db_handle, $query );
-
-      if ( ! $result )
-      {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Internal error\n$query\n" . mysqli_error( $db_handle ) );
-         return( -1 );
-      }
-   }
-
-   ## Now fix up noise entries
-   ## For noise files, there is, at most two: ti_noise and ri_noise
-   ## In this case there will only be one modelID
-
-   foreach ( $noiseIDs as $noiseID )
+## The values are the names on disk and must not change. A running cleanup holds
+## its claim by filename, so renaming one during an upgrade would let a second
+## worker take the claim and import the same results twice.
+## The local staging directory for one job's fetched results. Named after the
+## scheduler job ID, which the scheduler reuses, so the path is composed from an
+## id that must be checked first: empty or containing a slash it would name the
+## work root or escape it, and this directory gets emptied.
+function job_staging_dir( $work, $gfacID )
+{
+   if ( (string) $gfacID === '' || strpos( (string) $gfacID, '/' ) !== false )
    {
-      $modelGUID = $modelGUIDs[ $noiseID ];
-      $query = "UPDATE ${us3_db}.noise SET "                                                 .
-               "editedDataID="                                                     .
-               "(SELECT editedDataID FROM ${us3_db}.model WHERE modelGUID='$modelGUID'),"    .
-               "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
-               "WHERE noiseID=$noiseID";
+      return null;
+   }
 
-      $result = mysqli_query( $db_handle, $query );
+   return "$work/$gfacID";
+}
 
-      if ( ! $result )
+/**
+ * Empty it before staging into it. A reused job ID means files from the previous
+ * job of that ID are still there, and anything the new tar does not overwrite
+ * would be imported as this job's results. Cleared here rather than once the
+ * results are in hand, because by then this is the directory holding them.
+ */
+function job_staging_dir_prepare( $work, $gfacID, $log = null )
+{
+   $dir = job_staging_dir( $work, $gfacID );
+
+   if ( $dir === null )
+   {
+      return null;
+   }
+
+   if ( is_dir( $dir ) )
+   {
+      if ( is_callable( $log ) )
       {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $db_handle ) );
-         return( -1 );
+         $log( "clearing a leftover staging directory $dir" );
+      }
+
+      exec( 'rm -rf ' . escapeshellarg( $dir ) );
+   }
+
+   if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0770, true ) )
+   {
+      return null;
+   }
+
+   return $dir;
+}
+
+function job_state_files()
+{
+   return array(
+      'claim'         => 'cleanup.claim',   ## only this worker may finalize the job
+      'finalizing'    => 'finalizing',      ## the row is gone, the stage is not written yet
+      'complete_seen' => 'complete_seen',   ## when cleanup first found the job unfinalizable
+   );
+}
+
+## The path of one of them. An unknown name is a programming error, not input.
+function job_state_path( $us3_db, $gfacID, $what )
+{
+   $files = job_state_files();
+
+   if ( ! isset( $files[ $what ] ) )
+   {
+      throw new InvalidArgumentException(
+         "unknown job state file '$what'; known: " . implode( ', ', array_keys( $files ) ) );
+   }
+
+   return cleanup_job_dir( $us3_db, $gfacID ) . '/' . $files[ $what ];
+}
+
+function cleanup_claim_path( $us3_db, $gfacID )
+{
+   return job_state_path( $us3_db, $gfacID, 'claim' );
+}
+
+## Marker for the span between deleting the gfac.analysis row and writing the
+## job's final stage status. In that span the job has no row, so nothing restarts
+## a monitor for it, and the stage would sit at 'running' for ever if the worker
+## died. The marker records what a later run needs to close the stage out.
+function cleanup_finalizing_path( $us3_db, $gfacID )
+{
+   return job_state_path( $us3_db, $gfacID, 'finalizing' );
+}
+
+function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID )
+{
+   $path = cleanup_finalizing_path( $us3_db, $gfacID );
+   @mkdir( dirname( $path ), 0770, true );
+   @file_put_contents( $path, json_encode( array(
+      'us3_db'             => $us3_db,
+      'gfacID'             => $gfacID,
+      'autoflowAnalysisID' => (int) $autoflowAnalysisID,
+      'requestID'          => (int) $requestID,
+      'pid'                => getmypid(),
+      'started'            => time(),
+   ) ) );
+}
+
+function cleanup_finalizing_end( $us3_db, $gfacID )
+{
+   @unlink( cleanup_finalizing_path( $us3_db, $gfacID ) );
+}
+
+## Seconds since cleanup first found this job not yet finalizable. The first
+## call starts the clock, persisted in $seen_file across polls.
+function cleanup_pending_seconds( $seen_file )
+{
+   $seen = is_file( $seen_file ) ? (int) trim( @file_get_contents( $seen_file ) ) : 0;
+
+   if ( $seen <= 0 )
+   {
+      $seen = time();
+      @mkdir( dirname( $seen_file ), 0770, true );
+      @file_put_contents( $seen_file, $seen );
+   }
+
+   return time() - $seen;
+}
+
+## How long cleanup retries a job before finalizing it anyway.
+function cleanup_complete_ceiling()
+{
+   global $global_complete_max_seconds;
+
+   return isset( $global_complete_max_seconds ) ? (int) $global_complete_max_seconds : 21600;
+}
+
+## How long to keep retrying results on an unreachable cluster: the outage
+## hold, so a maintenance window does not fail a job whose results are intact.
+function cleanup_unreachable_ceiling()
+{
+   global $global_cluster_abandon_hours;
+
+   $hold = isset( $global_cluster_abandon_hours ) ? (int) $global_cluster_abandon_hours * 3600 : 72 * 3600;
+   return max( cleanup_complete_ceiling(), $hold );
+}
+
+## Keep retrying a job whose cluster is unreachable? True until the outage hold.
+function cleanup_retry_unreachable( $seen_file )
+{
+   return cleanup_pending_seconds( $seen_file ) <= cleanup_unreachable_ceiling();
+}
+
+## Atomically take the claim (mkdir). Returns true if this process now owns
+## it. A claim older than an hour is assumed to be from a crashed worker and
+## taken over; a slow but live cleanup can hold it for minutes.
+function cleanup_claim_release( $claim )
+{
+   @unlink( "$claim/owner" );
+   @rmdir( $claim );
+}
+
+## When the process at $pid started, as an opaque string, or '' when it cannot be
+## told. A PID on its own is not an identity: PIDs are reused, and a claim whose
+## owner had died could be held by an unrelated process for as long as that
+## process lived, which on a long-running host is indefinitely.
+function cleanup_process_start( $pid )
+{
+   $stat = @file_get_contents( "/proc/$pid/stat" );
+   if ( $stat !== false )
+   {
+      ## Field 22 is starttime in clock ticks since boot. The comm field can
+      ## contain spaces and brackets, so count from the last ')'.
+      $rest   = substr( $stat, (int) strrpos( $stat, ')' ) + 2 );
+      $fields = preg_split( '/\s+/', trim( $rest ) );
+      if ( isset( $fields[ 19 ] ) )
+      {
+         return (string) $fields[ 19 ];
       }
    }
 
-   ## Now possibly fix up mrecs entries
+   ## No procfs: ask ps. Empty means the caller falls back to the age rule.
+   $out = @shell_exec( 'ps -o lstart= -p ' . (int) $pid . ' 2>/dev/null' );
 
-   foreach ( $mrecsIDs as $mrecsID )
+   return $out === null ? '' : trim( (string) $out );
+}
+
+## "<pid> <start>", the tag written into a claim.
+function cleanup_claim_owner_tag( $pid )
+{
+   return $pid . ' ' . cleanup_process_start( $pid );
+}
+
+function cleanup_claim_acquire( $claim, $log_fn )
+{
+   $stale_seconds = 3600;
+
+   if ( @mkdir( $claim, 0770, true ) )
    {
-      $modelGUID = $rmodlGUIDs[ $mrecsID ];
-      $query = "UPDATE ${us3_db}.pcsa_modelrecs SET "                                                 .
-               "modelID="                                                          .
-               "(SELECT modelID FROM ${us3_db}.model WHERE modelGUID='$modelGUID')"          .
-               "WHERE mrecsID=$mrecsID";
+      ## Owner tag: a live owner keeps its claim however long a copy takes.
+      @file_put_contents( "$claim/owner", cleanup_claim_owner_tag( getmypid() ) );
+      return true;
+   }
 
-      $result = mysqli_query( $db_handle, $query );
-
-      if ( ! $result )
+   ## Already claimed -- take it over only if it is clearly abandoned.
+   $tag   = trim( (string) @file_get_contents( "$claim/owner" ) );
+   $parts = $tag === '' ? array() : explode( ' ', $tag, 2 );
+   $owner = isset( $parts[ 0 ] ) ? (int) $parts[ 0 ] : 0;
+   $start = isset( $parts[ 1 ] ) ? trim( $parts[ 1 ] ) : '';
+   if ( $owner > 0 )
+   {
+      $alive = function_exists( 'posix_kill' ) ? (bool) @posix_kill( $owner, 0 )
+                                               : file_exists( "/proc/$owner" );
+      if ( $alive && $start !== '' )
       {
-         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-         mail_to_user( "fail", "Bad query\n$query\n" . mysqli_error( $db_handle ) );
-         return( -1 );
+         ## Alive at that PID is not enough: it has to be the same process.
+         $now   = cleanup_process_start( $owner );
+         $alive = $now === '' || $now === $start;
+         if ( ! $alive )
+         {
+            $log_fn( "cleanup claim $claim names pid $owner, but that pid is now a"
+                     . " different process; treating the claim as abandoned" );
+         }
       }
-write_logld( "$me:     mrecs entry updated : mrecsID=$mrecsID" );
+      elseif ( $alive )
+      {
+         ## A tag written before start times were recorded has no $start to
+         ## check against, so "alive" alone cannot tell this owner apart from
+         ## an unrelated process that was later given the same PID. Fall back
+         ## to the same age limit the no-tag-at-all case below uses, rather
+         ## than trusting a live PID indefinitely.
+         $mtime = @filemtime( $claim );
+         $alive = $mtime === false || ( time() - $mtime ) <= $stale_seconds;
+      }
+      $abandoned = ! $alive;
    }
-##write_logld( "$me:     mrecs entries updated" );
-
-   ## Copy results to LIMS submit directory (files there are deleted after 7 days)
-   global $submit_dir; ## LIMS submit files dir
-   
-   ## conditionally update HPCAnalysisRequest
-   if ( strlen( $metaschedulerClusterExecuting ) ) {
-       $query  =
-           "UPDATE ${us3_db}.HPCAnalysisRequest"
-           . " SET clusterName='$metaschedulerClusterExecuting'"
-           . " WHERE HPCAnalysisRequestID = $requestID ";
-       $result = mysqli_query( $db_handle, $query );
-       
-       if ( ! $result )
-       {
-           write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
-       }
-   }
-       
-   ## Get the request guid (LIMS submit dir name)
-   $query  = "SELECT HPCAnalysisRequestGUID FROM ${us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $db_handle, $query );
-   
-   if ( ! $result )
+   else
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+      $mtime     = @filemtime( $claim );
+      $abandoned = $mtime !== false && ( time() - $mtime ) > $stale_seconds;
    }
-   
-##   list( $requestGUID ) = mysqli_fetch_array( $result );
-##   
-##   chdir( "$submit_dir/$requestGUID" );
-##   $f = fopen( "analysis-results.tar", "w" );
-##   fwrite( $f, $tarfile );
-##   fclose( $f );
 
-   ## Clean up
-##   chdir ( $work );
-   ## exec( "rm -rf $gfacID" );
+   if ( $abandoned )
+   {
+      $log_fn( "removing abandoned cleanup claim $claim (owner " . ( $owner ?: 'unknown' ) . ")" );
+      cleanup_claim_release( $claim );
+      if ( @mkdir( $claim, 0770, true ) )
+      {
+         ## Same tag the normal acquire path writes: a bare PID here is what
+         ## let the next contender fall back to "alive means still owned, no
+         ## age limit" instead of verifying it is the same process.
+         @file_put_contents( "$claim/owner", cleanup_claim_owner_tag( getmypid() ) );
+         return true;
+      }
+   }
 
-##   mysqli_close( $db_handle );
-
-   ########/
-   ## Send email
-
-   mail_to_user( "success", "" );
-
-   return 1;
+   return false;
 }
 
 function mail_to_user( $type, $msg )
@@ -704,8 +413,7 @@ function mail_to_user( $type, $msg )
 global $me;
 write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" );
 
-   ## Get GFAC status and message
-   ## function get_gfac_message() also sets global $status
+   ## Read the stored job status and message.
    $gfac_message = get_gfac_message( $gfacID );
    if ( $gfac_message === false ) $gfac_message = "Job Finished";
       
@@ -723,11 +431,6 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
 
       case "FAILED":
          $subj_status = 'failed';
-         if ( preg_match( "/^US3-A/i", $gfacID ) )
-         {  ## For A/Thrift FAIL, get error message
-            $gfac_message = getExperimentErrors( $gfacID );
-##$gfac_message .= "Test ERROR MESSAGE";
-         }
          break;
 
       case "ERROR":
@@ -752,32 +455,6 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
          else if ( isset( $servhost ) )
             $limshost    = $servhost;
       }
-      if ( preg_match( "/lims4.noval/", $limshost ) )
-      {  # simplify name of vm on jetstream
-         $limshost    = "uslims4.aucsolutions.com";
-      }
-   }
-
-   $aria_details = "";
-   if ( is_aira_job( $gfacID ) ) {
-       $jobDetails = getJobDetails( $gfacID );
-       if ( $jobDetails ) {
-           if ( $jobDetails === ' No Job Details ' ) {
-               $jdstdout = $jobDetails;
-               $jdstderr = $jobDetails;
-               
-           } else {
-               $jdstdout = isset( $jobDetails->stdOut ) ? trim( $jobDetails->stdOut ) : "n/a";
-               $jdstderr = isset( $jobDetails->stdErr ) ? trim( $jobDetails->stdErr ) : "n/a";
-           }
-       } else {
-           $jdstdout = "failed to get job details";
-           $jdstderr = "failed to get job details";
-       }
-       $aira_details =
-           sprintf(   "   Airavata stdout : %s\n", $jdstdout )
-           . sprintf( "   Airavata stderr : %s\n", $jdstderr )
-           ;
    }
 
    ## Parse the editXMLFilename
@@ -785,10 +462,8 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
       explode( ".", $editXMLFilename );
 
    $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
-### not RFC5322 compliant to have multiple duplicate headers
-   $headers .= "Cc: $org_name Admin<$admin_email>, $org_name Admin<gegorbet@gmail.com>\n";
-#   $headers .= "CC: $org_name Admin<alexsav.science@gmail.com>"       . "\n";
-#   $headers .= "CC: $org_name Admin<gegorbet@gmail.com>"       . "\n";
+   ## One Cc header, to the configured admin address only.
+   $headers .= "Cc: $org_name Admin<$admin_email>\n";
 
    ## Set the reply address
    $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
@@ -819,9 +494,9 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    Status          : $queuestatus
    Cluster         : $cluster
    Job Type        : $jobtype
-   GFAC Status     : $status
-   GFAC Message    : $gfac_message
-$aira_details   Stdout          : $stdout
+   Job Status      : $status
+   Job Message     : $gfac_message
+   Stdout          : $stdout
    ";
 
    if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
@@ -857,7 +532,7 @@ function parse_xml( $xml, $type )
    return $results;
 }
 
-## Function to get information about the current job GFAC
+## Recognises externally assigned analysis IDs.
 function get_gfac_message( $gfacID )
 {
   global $serviceURL;
@@ -867,7 +542,7 @@ function get_gfac_message( $gfacID )
   if ( ! preg_match( "/^US3-Experiment/i", $gfacID ) &&
        ! preg_match( "/^US3-$hex{8}-$hex{4}-$hex{4}-$hex{4}-$hex{12}$/", $gfacID ) )
    {
-      ## Then it's not a GFAC job
+      ## Not an external analysis-ID format.
       return false;
    }
 
@@ -905,165 +580,139 @@ function parse_message( $xml )
    return $gfac_message;
 }
 
+## Ask a cluster where its work directory is.
+## Returns array( 'class' => 'OK' | 'UNREACHABLE' | 'MISSING', 'path', 'detail' ).
+## UNREACHABLE: we learned nothing, retry. MISSING: the cluster answered and
+## there is no such directory. remote_exec::run() fences stdout, so login
+## banners cannot pollute the path.
+function resolve_remote_workdir( $rx, $lworkdir )
+{
+   $res = $rx->run( "ls -d " . escapeshellarg( $lworkdir ), array( 'label' => 'resolve workdir' ) );
+
+   if ( remote_exec_infra_fault( $res ) )
+      return array( 'class' => 'UNREACHABLE', 'path' => '', 'detail' => $res[ 'class' ] );
+
+   if ( ! $res[ 'ok' ] || trim( $res[ 'text' ] ) === '' )
+      return array( 'class' => 'MISSING', 'path' => '', 'detail' => $res[ 'stderr' ] );
+
+   return array( 'class' => 'OK', 'path' => trim( $res[ 'text' ] ), 'detail' => '' );
+}
+
+## Stage a job's stderr, stdout and results tar into its gfac.analysis row.
+## Returns 1 staged (or the cluster confirmed there is nothing to stage),
+## -1 cluster unreachable, so not known yet: do not finalize on this,
+## -2 can never be staged (cluster not configured, or the row rejects the tar).
 function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 {
    global $work;
    global $work_remote;
    global $me;
    global $db;
-   global $dbhost;
-   global $servhost;
-   global $org_domain;
-   global $status;
-   
+   global $cluster_details;
+
    write_logld( "$me get_local_files(): $cluster, $requestID, $id, $gfacID" );
 
-   $is_us3iab  = preg_match( "/us3iab/", $cluster );
-   $is_jetstr  = preg_match( "/jetstream/", $cluster );
-
-   $limshost   = $dbhost;
    $stderr     = '';
    $stdout     = '';
    $tarfile    = '';
 
-   if ( $limshost == 'localhost' )
+   if ( ! isset( $cluster_details[ $cluster ] ) || ! isset( $cluster_details[ $cluster ][ 'name' ] ) )
    {
-      $limshost    = gethostname();
-      if ( ! preg_match( "/\./", $limshost ) )
-      {  ## no domain in hostname
-         if ( isset( $org_domain ) )
-            $limshost    = $limshost . "." . $org_domain;
-         else if ( isset( $servhost ) )
-            $limshost    = $servhost;
-      }
+      write_logld( "$me cluster $cluster missing from global_config.php \$cluster_details" );
+      return -2;
    }
 
-   if ( preg_match( "/alamo/", $limshost )  &&
-        preg_match( "/alamo/", $cluster  ) )
-   {  ## If both LIMS and cluster are alamo, set up local transfers
-      $is_us3iab   = 1;
-      if ( ! preg_match( "/\/local/", $work_remote ) )
-         $work_remote = $work_remote . "/local";
+   ## Guarded like cluster_probe_job_status(): common's remote_exec validates
+   ## ssh_host_key_policy (and the rest of the ssh options) in the
+   ## constructor, so a bad cluster entry throws here rather than at run().
+   ## The probe path already catches that; this, the results fetch, did not,
+   ## and a thrown exception is otherwise fatal and kills the monitor.
+   try {
+      $rx = cluster_probe_remote( $cluster, 'write_logld' );
+   } catch ( Throwable $e ) {
+      write_logld( "$me cluster $cluster configuration rejected: " . $e->getMessage() . "; will retry" );
+      return -1;
    }
 
-   ## Figure out job's remote (or local) work directory
-   $remoteDir = sprintf( "$work_remote/$db-%06d", $requestID );
-   $ruser     = "us3";
-##write_logld( "$me: is_us3iab=$is_us3iab  remoteDir=$remoteDir" );
+   ## Resolve the job's work directory on the cluster.
+   $lworkdir = isset( $cluster_details[ $cluster ][ 'workdir' ] )
+               ? $cluster_details[ $cluster ][ 'workdir' ]
+               : "$work/local";
 
-   ## Get stdout, stderr, output/analysis-results.tar
-   $output = array();
+   $resolved = resolve_remote_workdir( $rx, $lworkdir );
 
-   $used_scp = ( $is_us3iab == 0 || $cluster == "us3iab-node1" );
-
-   if ( $used_scp )
+   if ( $resolved[ 'class' ] === 'UNREACHABLE' )
    {
-       write_logld( "$me get_local_files(): scp to get files" );
-
-      ## For "-local", recompute remote work directory
-      $clushost = "$cluster.hs.umt.edu";
-      $lworkdir = "~us3/lims/work/local";
-      if ( preg_match( "/jetstream/", $cluster ) )
-      {
-         $clushost = "js-169-137.jetstream-cloud.org";
-         $lworkdir = "/N/us3_cluster/work/local";
-      }
-      
-      if ( preg_match( "/chinook/", $cluster ) )
-      {
-         $clushost = "chinook.hs.umt.edu";
-         $lworkdir = "/home/us3/lims/work"; 
-      }
-      if ( preg_match( "/umontana/", $cluster ) )
-      {
-         $clushost = "login.gscc.umt.edu";
-         $ruser    = "bd142854e";
-         $lworkdir = "/home/bd142854e/cluster/work";
-      }
-      if ( preg_match( "/demeler9/", $cluster ) )
-      {
-         $clushost = "demeler9.uleth.ca";
-         $lworkdir = "/home/us3/lims/work"; 
-      }
-      if ( preg_match( "/demeler1/", $cluster ) )
-      {
-         $clushost = "demeler1.uleth.ca";
-         $lworkdir = "/home/us3/lims/work";
-      }
-
-      if ( preg_match( "/us3iab-node1/", $cluster ) )
-      {
-         $clushost = "lims2.zentriforce.com";
-         $lworkdir = "/home/us3/lims/work";
-      }
-
-      $cmd         = "ssh $ruser@$clushost 'ls -d $lworkdir' 2>/dev/null";
-      exec( $cmd, $output, $stat );
-      $work_remote = $output[ 0 ];
-      $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
-write_logld( "$me:  -LOCAL: remoteDir=$remoteDir" );
-
-      ## Figure out local working directory
-      if ( ! is_dir( "$work/$gfacID" ) ) mkdir( "$work/$gfacID", 0770 );
-      $pwd = chdir( "$work/$gfacID" );
-
-      $tarcmd = "scp $ruser@$clushost:$remoteDir/output/analysis-results.tar . 2>&1";
-
-      exec( $tarcmd, $output, $stat );
-      if ( $stat != 0 )
-      {
-         write_logld( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
-         sleep( 10 );
-         write_logld( "$me: RETRY" );
-         exec( $tarcmd, $output, $stat );
-         if ( $stat != 0 )
-            write_logld( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
-      }
-
-      $cmd = "scp $ruser@$clushost:$remoteDir/stdout . 2>&1";
-
-      exec( $cmd, $output, $stat );
-      if ( $stat != 0 )
-      {
-         write_logld( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-         sleep( 10 );
-         write_logld( "$me: RETRY" );
-         exec( $cmd, $output, $stat );
-         if ( $stat != 0 )
-            write_logld( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-      }
-
-      $cmd = "scp $ruser@$clushost:$remoteDir/stderr . 2>&1";
-
-      exec( $cmd, $output, $stat );
-      if ( $stat != 0 )
-      {
-         write_logld( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-         sleep( 10 );
-         write_logld( "$me: RETRY" );
-         exec( $cmd, $output, $stat );
-         if ( $stat != 0 )
-            write_logld( "$me: Bad exec:\n$cmd\n" . implode( "\n", $output ) );
-      }
-   }
-   else
-   { ## Is US3IAB or alamo-to-alamo, so just change to local work directory
-      $pwd = chdir( "$remoteDir" );
-write_logld( "$me: IS US3IAB: pwd=$pwd $remoteDir");
+      write_logld( "$me: cluster $cluster unreachable resolving workdir ({$resolved['detail']}); will retry" );
+      return -1;
    }
 
+   if ( $resolved[ 'class' ] === 'MISSING' )
+   {
+      write_logld( "$me: cluster $cluster has no work directory $lworkdir: {$resolved['detail']}" );
+      return 1;   ## a real answer: there is nothing to fetch
+   }
 
-   ## Write the files to gfacDB
+   $work_remote = $resolved[ 'path' ];
+   $remoteDir   = sprintf( "$work_remote/$db-%06d", $requestID );
+   write_logld( "$me:  remoteDir=$remoteDir" );
 
-   $secwait    = 10;
-   $num_try    = 0;
-   while ( ! file_exists( "stderr" )  &&  $num_try < 3 )
-   {  ## Do waits and retries to let stderr appear
+   ## Local staging directory, emptied first so a reused job ID cannot leave one
+   ## job's files to be imported as another's.
+   $staging = job_staging_dir_prepare( $work, $gfacID,
+                                       function ( $m ) use ( $me ) { write_logld( "$me: $m" ); } );
+
+   if ( $staging === null )
+   {
+      write_logld( "$me: refusing to stage results: unusable job id '$gfacID'" );
+      return 1;
+   }
+
+   chdir( $staging );
+
+   ## us_mpi_analysis changes into output/ and archives into that directory
+   ## (us_mpi_analysis.cpp:340, :2515-2516) -- that is where it is on every
+   ## normal job, so it goes first to avoid a guaranteed-failed scp attempt
+   ## against the top-level path before falling back to the real one. The
+   ## top-level name is still tried second in case a layout ever puts it there.
+   $tar_candidates = array(
+      "$remoteDir/output/analysis-results.tar",
+      "$remoteDir/analysis-results.tar",
+   );
+
+   $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );
+
+   ## The tar may still be being written; retry while the cluster answers.
+   $secwait = 10;
+   $num_try = 0;
+   while ( $tar[ 'class' ] === 'MISSING' && $num_try < 3 )
+   {
       sleep( $secwait );
       $num_try++;
-      $secwait   *= 2;
-write_logld( "$me:  not-exist-stderr: num_try=$num_try" );
+      $secwait *= 2;
+      write_logld( "$me:  tarfile not present yet: retry $num_try" );
+      $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );
    }
+
+   if ( $tar[ 'class' ] === 'UNREACHABLE' )
+   {
+      write_logld( "$me: cluster $cluster unreachable fetching results for $gfacID; will retry" );
+      return -1;
+   }
+
+   ## Missing stdout/stderr is fine; an unreachable cluster is not.
+   foreach ( array( 'stdout', 'stderr' ) as $fn )
+   {
+      $one = fetch_first_remote( $rx, array( "$remoteDir/$fn" ), $fn, $fn );
+
+      if ( $one[ 'class' ] === 'UNREACHABLE' )
+      {
+         write_logld( "$me: cluster $cluster unreachable fetching $fn for $gfacID; will retry" );
+         return -1;
+      }
+   }
+
+   ## Store the staged files in the central job-tracking database.
 
    $lense = 0;
    if ( file_exists( "stderr"  ) )
@@ -1085,35 +734,11 @@ write_logld( "$me:  not-exist-stderr: num_try=$num_try" );
 
    if ( file_exists( "stdout" ) ) $stdout  = file_get_contents( "stdout" );
 
-   $fn1_tarfile = "analysis-results.tar";
-   $fn2_tarfile = "output/" . $fn1_tarfile;
+   ## Both remote candidates land at this one local name.
+   $fn_tarfile = "analysis-results.tar";
 
-   ## The remote job may finish writing stdout/stderr before it finishes
-   ## writing/closing analysis-results.tar, so the earlier scp of the tar
-   ## can race ahead of the result being ready.  Retry with backoff before
-   ## giving up, separately from the stderr wait above.
-   $secwait = 10;
-   $num_try = 0;
-   while ( ! file_exists( $fn1_tarfile )  &&  ! file_exists( $fn2_tarfile )  &&  $num_try < 3 )
-   {
-      sleep( $secwait );
-      if ( $used_scp )
-      {
-         exec( $tarcmd, $output, $stat );
-         if ( $stat != 0 )
-         {
-            write_logld( "$me: Bad exec:\n$tarcmd\n" . implode( "\n", $output ) );
-         }
-      }
-      $num_try++;
-      $secwait *= 2;
-write_logld( "$me:  not-exist-tarfile: num_try=$num_try" );
-   }
-
-   if ( file_exists( $fn1_tarfile ) )
-      $tarfile = file_get_contents( $fn1_tarfile );
-   else if ( file_exists( $fn2_tarfile ) )
-      $tarfile = file_get_contents( $fn2_tarfile );
+   if ( file_exists( $fn_tarfile ) )
+      $tarfile = file_get_contents( $fn_tarfile );
 
 ##   $lense = strlen( $stderr );
 ##   if ( $lense > 1000000 )
@@ -1152,7 +777,63 @@ write_logld( "$me:  es-tarfile size: $lenf");
    {
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
       echo "Bad query\n";
-      return( -1 );
+      return( -2 );
    }
+
+   return 1;
+}
+
+## Fetch the first of $candidates that exists on the cluster, landing it at
+## $local_name in the current directory.
+##
+## Returns [ 'class' => 'OK' | 'MISSING' | 'UNREACHABLE' ]: MISSING means the
+## cluster answered that it is not there, UNREACHABLE that we do not know.
+##
+## Downloads to ".part" and renames only when scp succeeds, so an interrupted
+## transfer never leaves a truncated file under the real name.
+function fetch_first_remote( $rx, $candidates, $local_name, $label )
+{
+   global $me;
+
+   $part = "$local_name.part";
+
+   ## Discard anything left by an interrupted earlier attempt.
+   @unlink( $part );
+
+   $saw_missing = false;
+
+   foreach ( $candidates as $path )
+   {
+      $res = $rx->copy_from( $path, $part, array( 'label' => "fetch $label" ) );
+
+      if ( $res[ 'ok' ] && file_exists( $part ) )
+      {
+         @unlink( $local_name );
+
+         if ( ! rename( $part, $local_name ) )
+         {
+            write_logld( "$me: could not move $part into place as $local_name" );
+            @unlink( $part );
+            return array( 'class' => 'UNREACHABLE' );
+         }
+
+         write_logld( "$me: fetched $label from $path" );
+         return array( 'class' => 'OK' );
+      }
+
+      @unlink( $part );
+
+      if ( remote_exec_infra_fault( $res ) )
+      {
+         write_logld( "$me: $label fetch from $path: {$res['class']} after {$res['attempts']} attempt(s)" );
+         return array( 'class' => 'UNREACHABLE' );
+      }
+
+      ## A reachable cluster saying "No such file" is a real answer.
+      $saw_missing = true;
+      write_logld( "$me: $label not at $path: {$res['stderr']}" );
+   }
+
+   return array( 'class' => $saw_missing ? 'MISSING' : 'UNREACHABLE' );
 }
 ?>

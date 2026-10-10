@@ -1,0 +1,813 @@
+<?php
+/*
+ * job_state_machine.php
+ *
+ * Job-state policy for jobmonitor/gridctl.php, the per-job daemon that is now
+ * the only thing acting on these rows (the per-minute cron sweep this was
+ * once shared with is gone). The policy lives here anyway, with connections,
+ * logger and mailer as constructor arguments, rather than back in gridctl.php,
+ * which exposes the methods as global one-line shims for the shared cleanup
+ * code.
+ */
+
+## Guarded so a test process that already loaded cluster_probe.php does not reload it.
+if ( ! function_exists( 'cluster_probe_job_status' ) )
+{
+   require_once __DIR__ . '/cluster_probe.php';
+}
+
+require_once __DIR__ . '/job_status.php';
+
+## A failed query here must not retry forever regardless of why it failed:
+## mailing the admin on every poll for a permanent error (a dropped
+## database, a missing table, revoked grants) that a retry could never fix
+## would be about 2,880 mails a day per job until someone killed the
+## monitor by hand. Only a connection-class errno is worth retrying; these
+## are mysqli's/MariaDB's "the server or network, not the query, is the
+## problem" codes:
+##   2002 CR_CONNECTION_ERROR      2006 CR_SERVER_GONE_ERROR
+##   2013 CR_SERVER_LOST           1040 ER_CON_COUNT_ERROR (max_connections)
+##   1203 ER_TOO_MANY_USER_CONNECTIONS
+##   1226 ER_USER_LIMIT_REACHED    1205 ER_LOCK_WAIT_TIMEOUT
+##   1213 ER_LOCK_DEADLOCK
+## Anything else (unknown table/column, access denied for this query, a
+## syntax error from an older schema) says the query itself cannot succeed no
+## matter how many times it is retried, and is treated as terminal instead,
+## matching the behavior this file had before 0c8086c made every failure here
+## retry.
+function db_error_is_connection_class( $errno )
+{
+   return in_array( (int) $errno,
+      ## 1053 (ER_SERVER_SHUTDOWN, SQLSTATE 08S01): MariaDB stopping mid-query.
+      ## Without it, a cleanup query in flight during a restart mailed the
+      ## user but could not persist FAILED (the same shutdown refused that
+      ## write too), leaving the job's own status wrong even though the user
+      ## was told.
+      array( 2002, 2006, 2013, 1040, 1203, 1226, 1205, 1213, 1053 ), true );
+}
+
+class job_state_machine
+{
+   ## Probe answers that carry no news. UNKNOWN: the cluster has no record.
+   ## GRIDCTL_UNREACHABLE: we could not ask.
+   const QUEUED_STATES  = array( 'SUBMITTED', 'INITIALIZED', 'PENDING', 'UNKNOWN', GRIDCTL_UNREACHABLE );
+   const RUNNING_STATES = array( 'ACTIVE', 'RUNNING', 'STARTED', 'UNKNOWN', GRIDCTL_UNREACHABLE );
+
+   ## A job touched within this window is never judged stalled.
+   const SETTLE_SECONDS = 600;
+
+   private $gfac;         ## mysqli reaching the gfac tables
+   private $us3;          ## mysqli or callable returning one, for the us3 tables
+   private $gfac_prefix;  ## '' when $gfac is connected to the gfac db, else 'gfac.'
+   private $log;          ## callable( string )
+   private $mailer;       ## callable( $type, $msg ); the entry point handles dedup
+
+   ## Per job, set by for_job().
+   private $gfacID     = '';
+   private $cluster    = '';
+   private $us3_db     = '';
+   private $autoflowID = 0;
+
+   public function __construct( $gfac, $us3, $gfac_prefix, $log, $mailer )
+   {
+      $this->gfac        = $gfac;
+      $this->us3         = $us3;
+      $this->gfac_prefix = $gfac_prefix;
+      $this->log         = $log;
+      $this->mailer      = $mailer;
+   }
+
+   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID )
+   {
+      $this->gfacID     = $gfacID;
+      $this->cluster    = $cluster;
+      $this->us3_db     = $us3_db;
+      $this->autoflowID = (int) $autoflowID;
+
+      return $this;
+   }
+
+   public function cluster() { return $this->cluster; }
+
+   ## ----------------------------------------------------------------- ##
+   ## Configuration                                                      ##
+   ## ----------------------------------------------------------------- ##
+
+   ## Hours a job may sit in one state before the stall clock fires.
+   ## Zero or negative disables the timeout.
+   private function stall_hours( $global_key, $default )
+   {
+      $hours = isset( $GLOBALS[ $global_key ] ) ? $GLOBALS[ $global_key ] : $default;
+
+      return (int) $hours;
+   }
+
+   private function abandon_hours()
+   {
+      return isset( $GLOBALS[ 'global_cluster_abandon_hours' ] )
+             ? (int) $GLOBALS[ 'global_cluster_abandon_hours' ] : 72;
+   }
+
+   ## ----------------------------------------------------------------- ##
+   ## Plumbing                                                           ##
+   ## ----------------------------------------------------------------- ##
+
+   private function logf( $msg )
+   {
+      call_user_func( $this->log, $msg );
+   }
+
+   private function mail_admin( $type, $msg )
+   {
+      call_user_func( $this->mailer, $type, $msg );
+   }
+
+   ## The us3 schemas need their own connection (the gfac user has no rights
+   ## on them). Opened lazily, on first use.
+   private function us3()
+   {
+      if ( is_callable( $this->us3 ) )
+         $this->us3 = call_user_func( $this->us3 );
+
+      return $this->us3;
+   }
+
+   private function gfac_table( $name )
+   {
+      return $this->gfac_prefix . $name;
+   }
+
+   private function us3_table( $name )
+   {
+      return $this->us3_db . '.' . $name;
+   }
+
+   ## Best-effort: log a failed statement rather than abort the daemon.
+   protected function exec( $handle, $query )
+   {
+      $result = mysqli_query( $handle, $query );
+
+      if ( ! $result )
+         $this->logf( "Query failed $query - " . mysqli_error( $handle ) );
+
+      return $result;
+   }
+
+   protected function quote( $handle, $value )
+   {
+      return mysqli_real_escape_string( $handle, $value );
+   }
+
+   ## Overridable alongside exec()/quote()/fetch_row()/num_rows(): $handle
+   ## here is whatever us3_link() returns, which a test double is free to
+   ## make something other than a real mysqli link (RecordingJobStateMachine
+   ## returns a bare true), so get_us3_data() must not call mysqli_errno()/
+   ## mysqli_error() on it directly.
+   protected function errno( $handle )
+   {
+      return mysqli_errno( $handle );
+   }
+
+   protected function error( $handle )
+   {
+      return mysqli_error( $handle );
+   }
+
+   ## All database access goes through exec(), quote(), fetch_row() and
+   ## num_rows(), so a test double can replace the database.
+   protected function fetch_row( $result )
+   {
+      return mysqli_fetch_array( $result );
+   }
+
+   protected function num_rows( $result )
+   {
+      return mysqli_num_rows( $result );
+   }
+
+   protected function us3_link()
+   {
+      return $this->us3();
+   }
+
+   ## ----------------------------------------------------------------- ##
+   ## Asking the cluster                                                 ##
+   ## ----------------------------------------------------------------- ##
+
+   ## One poll's probe answers, keyed by cluster and job. check_job() asks for the
+   ## status and then a stall path asks again through reconcile(), which was two SSH
+   ## round trips per poll for the same question. Queued jobs are the population that
+   ## reaches thousands, so the second call is the one that costs. Cleared once per
+   ## poll by reset_status_cache(), since a new machine is built for every call.
+   private static $status_cache = array();
+
+   public static function reset_status_cache()
+   {
+      self::$status_cache = array();
+   }
+
+   ## May return GRIDCTL_UNREACHABLE, which is not a job state: leave the job alone.
+   public function get_local_status()
+   {
+      $key = $this->cluster . '/' . $this->gfacID;
+      if ( array_key_exists( $key, self::$status_cache ) )
+      {
+         $this->logf( "get_local_status( {$this->gfacID} ) on {$this->cluster} = "
+                      . self::$status_cache[ $key ] . " (this poll's answer)" );
+         return self::$status_cache[ $key ];
+      }
+
+      $status = $this->probe_job_status();
+
+      $this->logf( "get_local_status( {$this->gfacID} ) on {$this->cluster} = $status" );
+
+      self::$status_cache[ $key ] = $status;
+
+      return $status;
+   }
+
+   ## The probe itself, separate from the caching above so a test can count the
+   ## round trips the cache is there to save. Overridable for tests.
+   protected function probe_job_status()
+   {
+      $log = $this->log;
+
+      return cluster_probe_job_status( $this->cluster, $this->gfacID, $log );
+   }
+
+   ## Is the cluster answering at all? Overridable for tests.
+   protected function reachable()
+   {
+      return cluster_probe_reachable( $this->cluster, $this->log );
+   }
+
+   ## True only when scancel was actually delivered. breaker => false: the
+   ## only caller is fire_stall(), after outage_timeout_verdict() already
+   ## got 'proceed' from a ping that just confirmed the cluster is reachable
+   ## right now. ping() itself never closes the breaker (bare reachability
+   ## is not proof the controller is up), so without this a breaker left
+   ## open by an unrelated earlier failure would refuse this scancel
+   ## locally even though the cluster just answered.
+   ##
+   ## retries => 0: remote_exec's default retry budget (3 attempts, backing
+   ## off) was meant for a cold call with no other information, not this
+   ## one, which already knows the cluster just answered a ping -- without
+   ## this a single scancel failure here could retry for close to 26
+   ## minutes on a flapping cluster before fire_stall() gets an answer back.
+   ##
+   ## breaker_gate => false (not plain breaker => false): skips only the
+   ## open-breaker check that would otherwise refuse this call on an
+   ## unrelated earlier failure, despite the ping moments ago. A real
+   ## scancel failure here still counts against the cluster: a plain
+   ## 'breaker' => false would bypass that bookkeeping too, so a cluster
+   ## that started actually failing scancels specifically would never be
+   ## recorded as failing at all.
+   public function cancel_local_job()
+   {
+      return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log,
+                                       array( 'breaker_gate' => false, 'retries' => 0 ) );
+   }
+
+   ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see
+   ## cluster_probe_outage_verdict().
+   public function outage_timeout_verdict( $what, $updatetime )
+   {
+      $verdict = cluster_probe_outage_verdict(
+         $this->reachable(), $updatetime, $this->abandon_hours(), time()
+      );
+
+      if ( $verdict !== 'defer' )
+         return $verdict;
+
+      $message = "$what deferred: cluster {$this->cluster} is not reachable,"
+                 . " so elapsed time does not indicate a hung job";
+
+      $this->logf( "$message - id: {$this->gfacID}" );
+      $this->update_queue_messages( $message );
+
+      return 'defer';
+   }
+
+   ## Close out a job whose cluster has been unreachable past the ceiling.
+   ## $enum_status is SUBMIT_TIMEOUT or RUN_TIMEOUT (the ENUM has no
+   ## UNREACHABLE); the message says what really happened. No cancel: there is
+   ## no cluster to send it to.
+   public function abandon_for_outage( $enum_status, $what )
+   {
+      $hours   = $this->abandon_hours();
+      $message = "$what abandoned: cluster {$this->cluster} has not answered for over $hours hours."
+                 . " The job's true state is unknown, it may have completed, failed, or still be queued."
+                 . " Resubmit once {$this->cluster} is available again.";
+
+      $this->logf( "$message - id: {$this->gfacID}" );
+      $this->mail_admin( "hang", "$message - id: {$this->gfacID}" );
+
+      ## time=NOW() too, same reason as fire_stall() below: so a cluster
+      ## that stays unreachable re-enters this abandon path on its own
+      ## cadence rather than every poll.
+      $this->exec( $this->gfac,
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
+         . " WHERE gfacID='{$this->gfacID}'" );
+
+      $this->update_queue_messages( $message );
+      $this->update_db( $message );
+      $this->update_autoflow_status( $enum_status, $message );
+   }
+
+   ## ----------------------------------------------------------------- ##
+   ## The stall clocks                                                   ##
+   ## ----------------------------------------------------------------- ##
+
+   ## Shared by the four stall paths: close the job out once its window has
+   ## passed, unless the window is disabled or the outage verdict defers.
+   private function fire_stall( $updatetime, $window_seconds, $enum_status, $what, $message )
+   {
+      if ( $window_seconds <= 0 )
+         return;
+
+      if ( $updatetime + $window_seconds > time() )
+         return;
+
+      switch ( $this->outage_timeout_verdict( $what, $updatetime ) )
+      {
+         case 'defer':
+            return;
+
+         case 'abandon':
+            $this->abandon_for_outage( $enum_status, $what );
+            return;
+      }
+
+      $this->logf( "$message - id: {$this->gfacID}" );
+      $this->mail_admin( "hang", "$message - id: {$this->gfacID}" );
+
+      ## time=NOW() too: rewriting the same status without it never moved
+      ## $updatetime, so with the probe still reporting the job queued or
+      ## active -- the case that keeps routing back through this same
+      ## window check -- the window never restarts and this fires on every
+      ## poll instead of once per window.
+      $this->exec( $this->gfac,
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
+         . " WHERE gfacID='{$this->gfacID}'" );
+
+      $this->update_queue_messages( $message );
+      $this->update_db( $message );
+      $this->update_autoflow_status( $enum_status, $message );
+
+      ## 'proceed' means the cluster just answered, so the cancel should land.
+      ## This is the only place a cancel is sent for a stalled job: the status
+      ## above is already terminal, and nothing downstream retries scancel, so
+      ## an unchecked, undelivered cancel here left the job running on the
+      ## cluster indefinitely while LIMS believed it was done.
+      $delivered = $this->cancel_local_job();
+
+      for ( $attempt = 2; ! $delivered && $attempt <= 3; $attempt++ )
+      {
+         $this->logf( "$what: scancel did not land for {$this->gfacID}, retrying (attempt $attempt)" );
+         $this->pause( 5 );
+         $delivered = $this->cancel_local_job();
+      }
+
+      if ( ! $delivered )
+      {
+         $message = "$what: scancel for {$this->gfacID} on {$this->cluster} was never"
+                    . " confirmed delivered after 3 attempts; the job may still be running"
+                    . " on the cluster despite being marked $enum_status";
+         $this->logf( $message );
+         ## Its own type, not plain "fail": that type also covers unrelated
+         ## query failures elsewhere, and deduplicating those alongside this
+         ## alert would risk going quiet on a later, different failure.
+         $this->mail_admin( "scancel_fail", $message );
+      }
+   }
+
+   ## Seconds to wait between cancel retries. Overridable for tests.
+   protected function pause( $seconds )
+   {
+      sleep( $seconds );
+   }
+
+   ## Record the cluster's answer unless it is one of $live_states ("no news").
+   ## Returns true when the job has moved on and the caller should stop.
+   private function reconcile( $live_states, $what, $updatetime )
+   {
+      $job_status = $this->get_local_status();
+
+      ## A configured cluster that answers but no longer lists the job: it ended
+      ## and aged out of squeue (e.g. its 'Finished' UDP was lost). Finish it like
+      ## any completed job; cleanup then fails it if the results are missing.
+      if ( $job_status === GRIDCTL_UNKNOWN
+           && isset( $GLOBALS[ 'cluster_details' ][ $this->cluster ] )
+           && $updatetime + self::SETTLE_SECONDS <= time() )
+      {
+         $this->logf( "$what: job no longer listed by the cluster; collecting results" );
+         $this->update_job_status( 'COMPLETED' );
+         return true;
+      }
+
+      if ( in_array( $job_status, $live_states ) )
+         return false;
+
+      $this->logf( "$what: job_status=$job_status" );
+      $this->update_job_status( $job_status );
+
+      return true;
+   }
+
+   /** Job has been sitting in SUBMITTED. First stall window. */
+   public function submitted( $updatetime )
+   {
+      $hours  = $this->stall_hours( 'global_max_queue_time_hours', 0 );
+      $window = $hours * 3600;
+
+      if ( $updatetime + self::SETTLE_SECONDS > time() )
+         return;
+
+      ## Inside the window, or with the timer disabled: just check whether the job has moved on.
+      ## Inside the window or past it, the cluster is asked first. Past the window
+      ## that is what stops a job the cluster has since moved on from being
+      ## cancelled on the strength of a stale gfac.analysis row alone. The answer
+      ## is this poll's cached one, so asking costs nothing extra.
+      if ( $this->reconcile( self::QUEUED_STATES, 'submitted', $updatetime ) )
+         return;
+
+      if ( $window <= 0 || $updatetime + $window > time() )
+         return;
+
+      $this->fire_stall( $updatetime, $window, 'SUBMIT_TIMEOUT', 'submit timeout',
+         "Job listed submitted longer than $hours hours" );
+   }
+
+   /** Job has been sitting in SUBMIT_TIMEOUT. Second window, then give up. */
+   public function submit_timeout( $updatetime )
+   {
+      $hours = $this->stall_hours( 'global_max_queue_time_hours', 0 );
+
+      ## Moved on: the first timeout was premature.
+      if ( $this->reconcile( self::QUEUED_STATES, 'submit timeout', $updatetime ) )
+         return;
+
+      $this->fire_stall( $updatetime, $hours * 3600, 'FAILED', 'submit timeout (final)',
+         "Job listed submitted longer than " . ( 2 * $hours ) . " hours" );
+   }
+
+   /** Job is RUNNING. First stall window. */
+   public function running( $updatetime, $queue_msg )
+   {
+      $hours  = $this->stall_hours( 'global_max_run_time_hours', 0 );
+      $window = $hours * 3600;
+
+      $this->get_us3_data();
+      $this->update_autoflow_status( 'RUNNING', $queue_msg );
+
+      if ( $updatetime + self::SETTLE_SECONDS > time() )
+         return;
+
+      ## Same as submitted(): never scancel without asking the cluster about the job
+      ## in this poll. A job the cluster still calls running stays in $live_states, so
+      ## reconcile() reports no news and the stall still fires.
+      if ( $this->reconcile( self::RUNNING_STATES, 'running', $updatetime ) )
+         return;
+
+      if ( $window <= 0 || $updatetime + $window > time() )
+         return;
+
+      $this->fire_stall( $updatetime, $window, 'RUN_TIMEOUT', 'run timeout',
+         "Job listed running longer than $hours hours" );
+   }
+
+   /** Job is in RUN_TIMEOUT. Second window, then give up. */
+   public function run_timeout( $updatetime )
+   {
+      $hours = $this->stall_hours( 'global_max_run_time_hours', 0 );
+
+      if ( $this->reconcile( self::RUNNING_STATES, 'run timeout', $updatetime ) )
+         return;
+
+      $this->get_us3_data();
+
+      $this->fire_stall( $updatetime, $hours * 3600, 'FAILED', 'run timeout (final)',
+         "Job listed running longer than " . ( 2 * $hours ) . " hours" );
+   }
+
+   ## ----------------------------------------------------------------- ##
+   ## Writing status                                                     ##
+   ## ----------------------------------------------------------------- ##
+
+   ## Record a status the cluster reported, in gfac.analysis and on the LIMS
+   ## side. Each column gets its own vocabulary via job_status.php.
+   public function update_job_status( $job_status )
+   {
+      $this->logf( "update_job_status( '$job_status', '{$this->gfacID}' )" );
+
+      $log    = $this->log;
+      ## An unparseable status is recorded as ERROR rather than ignored.
+      $status = job_status_normalise( $job_status, $log, 'ERROR' );
+
+      if ( $status === null )
+      {
+         ## Nothing learned (e.g. cluster unreachable): keep the previous status.
+         $this->logf( "status '$job_status' says nothing about the job, leaving it untouched" );
+         $this->update_queue_messages( "Cluster unreachable; job status could not be checked" );
+         return;
+      }
+
+      $this->exec( $this->gfac,
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$status'"
+         . " WHERE gfacID='{$this->gfacID}'" );
+
+      $message = $this->status_message( $status );
+
+      if ( $message !== null )
+      {
+         $this->update_queue_messages( $message );
+         $this->update_db( $message );
+      }
+
+      ## The stage advances only when cleanup has imported the results; until
+      ## then a finished job reads as DATA (still in progress) to submitctl.
+      if ( $status === 'COMPLETE' )
+         $this->update_autoflow_status( 'DATA', 'Job finished; importing results' );
+      else
+         $this->update_autoflow_status( $status, $message !== null ? $message : $status );
+   }
+
+   ## Record a status in gfac.analysis without touching the stage or queue
+   ## status, which submitctl.php acts on. Used by complete(): cleanup sets
+   ## those after importing the results. Messages are written only on a change,
+   ## since complete() repeats every poll while cleanup waits.
+   public function record_job_status( $job_status )
+   {
+      $this->logf( "record_job_status( '$job_status', '{$this->gfacID}' )" );
+
+      $status = job_status_normalise( $job_status, $this->log, 'ERROR' );
+
+      if ( $status === null )
+         return null;
+
+      $analysis = $this->gfac_table( 'analysis' );
+      $result   = $this->exec( $this->gfac,
+         "SELECT status FROM $analysis WHERE gfacID='{$this->gfacID}'" );
+      $row      = $result ? $this->fetch_row( $result ) : null;
+
+      if ( $row && $row[ 0 ] === $status )
+         return $status;
+
+      $this->exec( $this->gfac,
+         "UPDATE $analysis SET status='$status' WHERE gfacID='{$this->gfacID}'" );
+
+      $message = $this->status_message( $status );
+
+      if ( $message !== null )
+      {
+         $this->update_queue_messages( $message );
+         $this->update_db( $message );
+      }
+
+      return $status;
+   }
+
+   ## The sentence a user sees for a status, or null for bookkeeping ones.
+   private function status_message( $status )
+   {
+      switch ( $status )
+      {
+         case 'SUBMITTED': return "Job status request reports job is SUBMITTED";
+         case 'RUNNING':   return "Job status request reports job is RUNNING";
+         case 'COMPLETE':  return "Job status request reports job is COMPLETED";
+         case 'DATA':      return "Job status request reports job is COMPLETE, waiting for data";
+         case 'CANCELED':  return "Job status request reports job is CANCELED";
+         case 'FAILED':    return "Job status request reports job is FAILED";
+         case 'ERROR':     return "Job status request reports job is not in the queue";
+      }
+
+      return null;
+   }
+
+   public function update_queue_messages( $message )
+   {
+      $analysis = $this->gfac_table( 'analysis' );
+      $result   = $this->exec( $this->gfac,
+         "SELECT id FROM $analysis WHERE gfacID = '{$this->gfacID}'" );
+
+      if ( ! $result )
+         return;
+
+      $row = $this->fetch_row( $result );
+
+      if ( ! $row )
+         return;
+
+      list( $analysisID ) = $row;
+
+      ## A deferral repeats every poll from every worker; record it once an hour.
+      $table  = $this->gfac_table( 'queue_messages' );
+      $quoted = $this->quote( $this->gfac, $message );
+      $this->exec( $this->gfac,
+         "INSERT INTO $table ( message, analysisID ) SELECT '$quoted', '$analysisID' FROM DUAL"
+         . " WHERE NOT EXISTS ( SELECT 1 FROM $table WHERE analysisID = '$analysisID'"
+         . " AND message = '$quoted' AND time > NOW() - INTERVAL 1 HOUR )" );
+   }
+
+   /** Record the user-visible message against the job's HPCAnalysisResult row. */
+   public function update_db( $message )
+   {
+      $us3 = $this->us3_link();
+
+      if ( ! $us3 )
+         return;
+
+      $requestID = $this->get_us3_data();
+
+      $this->exec( $us3,
+         "UPDATE " . $this->us3_table( 'HPCAnalysisResult' ) . " SET "
+         . "lastMessage='" . $this->quote( $us3, $message ) . "' "
+         . "WHERE gfacID = '{$this->gfacID}' AND HPCAnalysisRequestID = '$requestID'" );
+   }
+
+   ## This job's HPCAnalysisRequestID, 0 when there genuinely is no such row,
+   ## null when the database could not answer for a connection-class reason
+   ## (retryable, not the same as "not found" -- a caller that treated the
+   ## two alike used to end the monitor on a connection blip instead of
+   ## trying again next poll), or false when the query itself can never
+   ## succeed (retrying that forever would just mail the admin on every
+   ## poll for a problem no retry could fix -- see
+   ## db_error_is_connection_class()). The caller's contract (cleanup.php's
+   ## resolve_and_cleanup_job()) already distinguishes all three.
+   public function get_us3_data()
+   {
+      $us3 = $this->us3_link();
+
+      if ( ! $us3 )
+         return null;
+
+      $table  = $this->us3_table( 'HPCAnalysisResult' );
+      $result = $this->exec( $us3,
+         "SELECT HPCAnalysisRequestID FROM $table"
+         . " WHERE gfacID='{$this->gfacID}'" );
+
+      if ( ! $result )
+      {
+         $connection_class = db_error_is_connection_class( $this->errno( $us3 ) );
+         $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}"
+            . ( $connection_class ? '' : ' (permanent: ' . $this->error( $us3 ) . ')' ) );
+         return $connection_class ? null : false;
+      }
+
+      ## Duplicate gfacIDs happen; the most recent row is the live one.
+      if ( $this->num_rows( $result ) > 1 )
+         $result = $this->exec( $us3,
+            "SELECT HPCAnalysisRequestID FROM $table"
+            . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+
+      if ( ! $result )
+         return db_error_is_connection_class( $this->errno( $us3 ) ) ? null : false;
+
+      $row = $this->fetch_row( $result );
+
+      if ( ! $row )
+         return 0;
+
+      list( $requestID ) = $row;
+
+      return $requestID;
+   }
+
+   /**
+    * @return bool true if the write landed, or was correctly skipped (an
+    *              unmapped status, no autoflow id, no stage mapping -- none
+    *              of those are failures); false only when an actual write
+    *              was attempted and did not land.
+    */
+   public function update_autoflow_status( $status, $message )
+   {
+      $this->logf( "update_autoflow_status() id {$this->autoflowID} status $status message $message" );
+
+      ## Callers pass scheduler spellings too (COMPLETED); the maps want job words.
+      $status = job_status_normalise( $status, $this->log );
+
+      if ( $status === null )
+         return true;
+
+      ## Non-autoflow submissions (DMGA/GA) get their status only through this.
+      $this->update_hpc_analysis_result_status( $status );
+
+      if ( $this->autoflowID <= 0 )
+      {
+         $this->logf( "update_autoflow_status() ignored, no id" );
+         return true;
+      }
+
+      $us3 = $this->us3_link();
+
+      if ( ! $us3 )
+         return false;
+
+      ## submitctl.php matches this column against fixed stage words.
+      $stage = stage_status_from_job( $status, $this->log );
+
+      if ( $stage === null )
+         return true;
+
+      ## A terminal stage has been reported to the scientist, so nothing may put it
+      ## back in progress: that guard stays. It used to apply to every write, which
+      ## also blocked the corrections that matter, a stage wrongly failed by a
+      ## premature timeout and then finished, or completed and then found to have
+      ## bad results. A later terminal verdict is allowed to replace an earlier one.
+      $guard = stage_status_is_terminal( $stage )
+             ? ''
+             : " AND NOT status RLIKE '" . stage_status_terminal_regex() . "'";
+
+      if ( $guard === '' )
+         $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
+
+      $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
+         . "status='" . $this->quote( $us3, $stage ) . "', "
+         . "statusMsg='" . $this->quote( $us3, $message ) . "' "
+         . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
+         . $guard;
+
+      $ok = (bool) $this->exec( $us3, $query );
+
+      ## A lock-wait timeout or a killed session usually clears within
+      ## seconds while the connection itself is still usable; retrying the
+      ## same query on it a couple of times catches that without needing to
+      ## reconnect, which $this->us3 (cached from a one-shot factory, not
+      ## reopenable from here) cannot do anyway. A link that is truly gone
+      ## (2002/2006/2013) will keep failing the same way and still reports
+      ## false after this, for the caller to act on.
+      for ( $attempt = 1; ! $ok && $attempt <= 2 && db_error_is_connection_class( $this->errno( $us3 ) ); $attempt++ )
+      {
+         $this->pause( 2 );
+         $ok = (bool) $this->exec( $us3, $query );
+      }
+
+      return $ok;
+   }
+
+   ## The status the scientist sees; left alone when there is no mapping.
+   public function update_hpc_analysis_result_status( $status )
+   {
+      $status = job_status_normalise( $status, $this->log );
+
+      if ( $status === null )
+         return;
+
+      $queue_status = queue_status_from_job( $status, $this->log );
+
+      if ( $queue_status === null )
+         return;
+
+      $us3 = $this->us3_link();
+
+      if ( ! $us3 )
+         return;
+
+      $table = $this->us3_table( 'HPCAnalysisResult' );
+
+      ## gfacID is the scheduler's job ID, which is reused, so it can match more
+      ## than one row: get_us3_data() already resolves that by taking the newest.
+      ## Keying the update on gfacID alone instead rewrote the older rows too,
+      ## moving a long-finished analysis back to running. Resolve the live row
+      ## first and update it by its own key.
+      ##
+      ## Resolved rather than done with ORDER BY and LIMIT on the UPDATE: the
+      ## WHERE runs first, so if the newest row is already terminal the limit
+      ## would fall through to the stale row, which is the bug again.
+      $found = $this->exec( $us3,
+         "SELECT HPCAnalysisResultID FROM $table"
+         . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+
+      if ( ! $found || $this->num_rows( $found ) < 1 )
+         return;
+
+      $row = $this->fetch_row( $found );
+
+      if ( ! is_array( $row ) || ! isset( $row[ 0 ] ) )
+         return;
+
+      $result_id = (int) $row[ 0 ];
+
+      ## Terminal does not mean immutable: the two transitions below are real
+      ## outcomes, not a stale sweep rewriting a finished row (the sweep this
+      ## guard was written against is gone; only this per-job daemon, reading
+      ## its own fresh probe, calls this now).
+      ##
+      ##  - completed -> failed: the scheduler reported the job finished, but
+      ##    importing its results then failed. The scientist needs to see
+      ##    that, not a queueStatus stuck at "completed" for data that never
+      ##    arrived.
+      ##  - aborted -> completed: a cancel was recorded, but the job actually
+      ##    finished anyway (the cancel lost the race, or never reached the
+      ##    scheduler in time). The result exists and should be shown.
+      ##
+      ## Every other terminal-to-terminal move stays blocked: once genuinely
+      ## failed or completed-then-failed, nothing moves it again.
+      $this->exec( $us3,
+         "UPDATE $table SET "
+         . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
+         . " AND ( queueStatus NOT IN ('completed', 'failed', 'aborted')"
+         . "       OR ( queueStatus = 'completed' AND '$queue_status' = 'failed' )"
+         . "       OR ( queueStatus = 'aborted'   AND '$queue_status' = 'completed' ) )" );
+   }
+}

@@ -3,9 +3,10 @@
 
 # run nightly system backup script
 # also cleans out old files in the common data directory
+# NOTE: backup-cauma-db.sh is site-specific — replace with your own backup script
 #!runas(root)
-#!mailto(gegorbet)
-0 22 * * * /root/backup-cauma-db.sh
+#!mailto(admin)
+#0 22 * * * /root/backup-cauma-db.sh
 
 #ssl certificate renewal:
 30 0,12 * * * /usr/bin/certbot renew --quiet
