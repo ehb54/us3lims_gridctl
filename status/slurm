@@ -32,8 +32,25 @@ QUEUE=$1
 ## Only POSIX-portable awk (no gawk-only extensions) and %F, stable in SLURM
 ## since its 2.x releases: this runs over ssh on whatever login node and
 ## whatever awk/SLURM build happens to be installed there.
+##
+## Returns 0 (up), 1 (down, a real reading) or 2 (no reading at all: sinfo
+## itself could not be run). The distinction matters because a nonexistent
+## partition (a typo, no AVAIL field at all) and a controller outage both
+## leave sinfo's stdout empty, but mean different things: the first is a
+## real "down" answer (sinfo asked and the controller said this partition
+## does not exist), and the second is sinfo never getting an answer to ask
+## with at all. Collapsing both into "down" (as a plain zero-rows check did)
+## reported a confident "down" during a controller outage instead of no
+## answer, skipping cluster_status.php's warn-before-down escalation.
 is_up() {
-  sinfo -h "$@" -o "%a %F" | awk '
+  local out
+  out=$( sinfo -h "$@" -o "%a %F" )
+
+  if [[ $? -ne 0 ]] ; then
+    return 2
+  fi
+
+  echo "$out" | awk '
     {
       split( $2, n, "/" )
       if ( $1 == "up" && ( n[1] + n[2] ) > 0 ) found = 1
@@ -42,13 +59,22 @@ is_up() {
   '
 }
 
+report() {
+  is_up "$@"
+  case $? in
+    0) echo up ;;
+    1) echo down ;;
+    *) >&2 echo "$0: sinfo could not reach the controller"; exit 1 ;;
+  esac
+}
+
 if [[ $QUEUE == "ALL" ]] ; then
-  if is_up ; then echo up ; else echo down ; fi
+  report
   squeue -h -a -t running | wc -l
   squeue -h -a -t pending | wc -l
   exit 0
 fi
 
-if is_up -p "$QUEUE" ; then echo up ; else echo down ; fi
+report -p "$QUEUE"
 squeue -h -a -p "$QUEUE" -t running | wc -l
 squeue -h -a -p "$QUEUE" -t pending | wc -l

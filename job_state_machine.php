@@ -673,6 +673,12 @@ class job_state_machine
       return $requestID;
    }
 
+   /**
+    * @return bool true if the write landed, or was correctly skipped (an
+    *              unmapped status, no autoflow id, no stage mapping -- none
+    *              of those are failures); false only when an actual write
+    *              was attempted and did not land.
+    */
    public function update_autoflow_status( $status, $message )
    {
       $this->logf( "update_autoflow_status() id {$this->autoflowID} status $status message $message" );
@@ -681,7 +687,7 @@ class job_state_machine
       $status = job_status_normalise( $status, $this->log );
 
       if ( $status === null )
-         return;
+         return true;
 
       ## Non-autoflow submissions (DMGA/GA) get their status only through this.
       $this->update_hpc_analysis_result_status( $status );
@@ -689,19 +695,19 @@ class job_state_machine
       if ( $this->autoflowID <= 0 )
       {
          $this->logf( "update_autoflow_status() ignored, no id" );
-         return;
+         return true;
       }
 
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
-         return;
+         return false;
 
       ## submitctl.php matches this column against fixed stage words.
       $stage = stage_status_from_job( $status, $this->log );
 
       if ( $stage === null )
-         return;
+         return true;
 
       ## A terminal stage has been reported to the scientist, so nothing may put it
       ## back in progress: that guard stays. It used to apply to every write, which
@@ -715,12 +721,28 @@ class job_state_machine
       if ( $guard === '' )
          $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
 
-      $this->exec( $us3,
-         "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
+      $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
          . "status='" . $this->quote( $us3, $stage ) . "', "
          . "statusMsg='" . $this->quote( $us3, $message ) . "' "
          . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
-         . $guard );
+         . $guard;
+
+      $ok = (bool) $this->exec( $us3, $query );
+
+      ## A lock-wait timeout or a killed session usually clears within
+      ## seconds while the connection itself is still usable; retrying the
+      ## same query on it a couple of times catches that without needing to
+      ## reconnect, which $this->us3 (cached from a one-shot factory, not
+      ## reopenable from here) cannot do anyway. A link that is truly gone
+      ## (2002/2006/2013) will keep failing the same way and still reports
+      ## false after this, for the caller to act on.
+      for ( $attempt = 1; ! $ok && $attempt <= 2 && db_error_is_connection_class( $this->errno( $us3 ) ); $attempt++ )
+      {
+         $this->pause( 2 );
+         $ok = (bool) $this->exec( $us3, $query );
+      }
+
+      return $ok;
    }
 
    ## The status the scientist sees; left alone when there is no mapping.

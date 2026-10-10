@@ -264,7 +264,9 @@ function cleanup() {
     global $gfacID;
     global $us3_db;
 
-    ## -1 terminal, 0 retry (not yet finalizable), 1 finalized.
+    ## -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
+    ## marker survives for --restart, -1 terminal, 0 retry (not yet
+    ## finalizable), 1 finalized.
     return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld' );
 }
 

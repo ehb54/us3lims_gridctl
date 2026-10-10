@@ -450,20 +450,57 @@ write_logld( "$me: *messages.txt written" );
 
    $result = mysqli_query( $us3_link, $query );
 
+   ## A lock-wait timeout or a killed session (1205, 1213, 2006) with MariaDB
+   ## otherwise up usually clears within seconds. Reconnecting and retrying
+   ## here catches that, instead of unconditionally leaving the finalizing
+   ## marker for --restart: there is no cron, so that left the job sitting
+   ## "running" until an operator happened to run it by hand, and --restart
+   ## then closes a dead-worker marker out as FAILED without importing the
+   ## results that are sitting right here waiting to be -- worse than just
+   ## retrying a handful of seconds later.
+   for ( $attempt = 1; ! $result && $attempt <= 3
+       && db_error_is_connection_class( mysqli_errno( $us3_link ) ); $attempt++ )
+   {
+      sleep( 2 );
+      $reconnected = @mysqli_connect( $dbhost, $user, $passwd, $us3_db );
+
+      if ( $reconnected )
+      {
+         mysqli_close( $us3_link );
+         $us3_link = $reconnected;
+         $result   = mysqli_query( $us3_link, $query );
+      }
+   }
+
    if ( ! $result )
    {
-      ## A connection-class failure here (e.g. 1053 "server shutdown in
-      ## progress") says nothing about whether the job itself succeeded --
-      ## gfac.analysis is already deleted above, so this worker cannot
-      ## retry via the live poll loop the way code earlier in this function
-      ## does. Mailing "fail" and letting the caller remove the finalizing
-      ## marker would be wrong either way: the job may be fine, and the
+      ## Still failing after the retries above. Only when MariaDB is
+      ## genuinely unreachable -- not just this one link -- is the
+      ## finalizing marker worth leaving for --restart: gfac.analysis is
+      ## already deleted above, so this worker cannot retry via the live
+      ## poll loop the way code earlier in this function does, and the
       ## marker is the only thing that lets --restart notice and close this
-      ## out later. Leave both alone and let the caller see that.
-      if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
+      ## out later. A connection-class error that persists while a fresh
+      ## connection attempt succeeds is contention on this one query, not an
+      ## outage, and is reported the same way every other write failure in
+      ## this function already is.
+      $still_unreachable = db_error_is_connection_class( mysqli_errno( $us3_link ) );
+
+      if ( $still_unreachable )
+      {
+         $probe = @mysqli_connect( $dbhost, $user, $passwd, $us3_db );
+         $still_unreachable = ! $probe;
+         if ( $probe )
+         {
+            mysqli_close( $probe );
+         }
+      }
+
+      if ( $still_unreachable )
       {
          write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link )
-                     . " - connection-class, leaving the finalizing marker for --restart" );
+                     . " - connection-class and MariaDB still unreachable after retrying,"
+                     . " leaving the finalizing marker for --restart" );
          return( CLEANUP_FINALIZING_INTERRUPTED );
       }
       update_autoflow_status( 'FAILED', "Could not insert data into HPCAnalysis" );
@@ -837,7 +874,39 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 ##   mysqli_close( $db_handle );
 
    ## Set the final status now that all model records are written, then notify the user.
-   update_autoflow_status( $status, $queue_msg );
+   ##
+   ## The job has already succeeded by this point -- results are imported,
+   ## model records are fixed up -- so a failure writing this one status
+   ## flag is not a job failure. It is retried a couple of times for the
+   ## same lock-wait/killed-session reasons as the write above, and if it
+   ## still will not land, the user still gets the success mail they are
+   ## owed and the function still reports success: returning
+   ## CLEANUP_FINALIZING_INTERRUPTED here (as the write above does) would be
+   ## wrong, not just unhelpful -- the caller's close-out for that marks the
+   ## job FAILED with results never imported, which is false; the results
+   ## are sitting right here, imported. What is actually true is narrower:
+   ## autoflowAnalysis's status column did not get the final word, so the
+   ## stage can stay "running" with nothing left to move it, silently,
+   ## unless an admin is told to go fix it by hand.
+   $status_recorded = update_autoflow_status( $status, $queue_msg );
+
+   for ( $attempt = 1; ! $status_recorded && $attempt <= 2; $attempt++ )
+   {
+      sleep( 2 );
+      $status_recorded = update_autoflow_status( $status, $queue_msg );
+   }
+
+   if ( ! $status_recorded )
+   {
+      write_logld( "$me: update_autoflow_status() did not land for gfacID=$gfacID"
+                  . " after retrying; the job itself completed, but the autoflow stage"
+                  . " may be stuck \"running\" until this is corrected by hand" );
+      mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
+                   . " (requestID=$requestID, status=$status) after retrying. The job itself"
+                   . " completed and the user has been notified; the autoflowAnalysis status"
+                   . " column may still need to be corrected by hand." );
+   }
+
    mail_to_user( "success", "" );
 
    return 1;

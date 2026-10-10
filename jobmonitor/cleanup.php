@@ -23,7 +23,9 @@ $status          = '';
 const CLEANUP_FINALIZING_INTERRUPTED = -2;
 
 ## Called by the daemon's cleanup().
-## Returns -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
+## Returns -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
+## marker survives for --restart, -1 terminal, 0 retry (not yet finalizable),
+## 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
 {
    $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
