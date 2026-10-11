@@ -88,6 +88,29 @@ $cmd[ "esign"     ] = "$us3bin/esign.php";
 ## exactly why this was never seen in production -- but "never seen" is not
 ## "cannot happen", and a silently-wrong pattern here is the same class of
 ## bug this whole function exists to avoid.
+## These services submit and manage cluster jobs as the us3 account (mkdir,
+## scp, sbatch, scancel all run as us3 -- see us3lims_common's
+## remote_exec::runsAsLoginUser()). Root has no ssh key or known_hosts
+## entry for any cluster us3 does, and no account name appears anywhere in
+## the failure: every submission just fails at staging with "No ECDSA host
+## key is known" or similar, and nothing mails or logs why. us3-listen.service
+## already runs this as us3; a host that starts it some other way (by hand,
+## a different unit) is the only way to reach this.
+function require_not_root( $action ) {
+    if ( ! function_exists( 'posix_geteuid' ) || posix_geteuid() !== 0 ) {
+        return;
+    }
+
+    fwrite( STDERR, basename( __FILE__ ) . " $action refused: these services submit and"
+        . " manage cluster jobs as the us3 account, and must run as us3, not root --"
+        . " started as root, every submission fails at staging because root has no ssh"
+        . " key or known_hosts entry for the cluster(s) us3 does.\n"
+        . "Run this as us3 instead, for example:\n"
+        . "    runuser -l us3 -c " . escapeshellarg( escapeshellarg( __FILE__ ) . " $action" ) . "\n"
+        . "or let us3-listen.service start it, which already runs as us3.\n" );
+    exit( 1 );
+}
+
 function posix_ere_quote( $s ) {
     return preg_replace( '/[.\\\\*+?()\[\]{}|^$]/', '\\\\$0', $s );
 }
@@ -424,6 +447,7 @@ switch( $argv[ 1 ] ) {
     ## the same restart command/log start() already used for attempt 1, so
     ## there is nothing left for a junk or missing argument to crash on.
     case "_restart-retry-background" : {
+        require_not_root( $argv[ 1 ] );
         list( $restart_cmd, $restart_log ) = restart_command_and_log();
         monitor_restart_background( $restart_cmd, $restart_log, 2 );
         exit;
@@ -441,6 +465,7 @@ switch( $argv[ 1 ] ) {
     }
 
     case "restart" : {
+        require_not_root( $argv[ 1 ] );
         if ( status( false ) ) {
             stop();
         } else {
@@ -453,6 +478,7 @@ switch( $argv[ 1 ] ) {
     }
 
     case "start" : {
+        require_not_root( $argv[ 1 ] );
         if ( status( false ) == count( $lock ) ) {
             echo "all services are already running\n";
         } else {
