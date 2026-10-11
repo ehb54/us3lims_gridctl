@@ -8,9 +8,6 @@ require_once __DIR__ . '/gridctl_bootstrap.php';
 # the polling interval
 $poll_sleep_seconds = 120;
 
-# define admin_email to override listen-config.php's default
-$admin_email = "emre.brookes@umt.edu";
-
 # resend email after hours
 
 $resend_hours = 24 * 60;
@@ -346,7 +343,6 @@ while( 1 ) {
                         ## send SME email
 
                         $mailto = implode( ",", $smeEmails );
-                        # $mailto = "emre.brookes@umt.edu";
 
                         $headers  = 
                             "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
@@ -516,7 +512,6 @@ while( 1 ) {
                 ;
 
             $mailto = $person_obj->email;
-            # $mailto = "emre.brookes@umt.edu";
 
             $headers  = 
                 "From: GMP e-signature request $host_name<noreply@$host_name>\n"
