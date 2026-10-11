@@ -354,7 +354,7 @@ while( 1 ) {
 
                         $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($GMPReportID)";
 
-                        $now = date("m-d-Y H:i:m");
+                        $now = date("m-d-Y H:i:s");
 
                         if ( $do_send_emails ) {
                             if (
