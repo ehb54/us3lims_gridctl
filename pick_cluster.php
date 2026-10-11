@@ -467,26 +467,31 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
    ## loaded it first or what mysqli_report() is set to process-wide.
    try
    {
-      $quoted = array_map(
-         function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
-         $candidates
-      );
-
-      $result = mysqli_query( $gfac_link,
+      $placeholders = implode( ',', array_fill( 0, count( $candidates ), '?' ) );
+      $stmt         = mysqli_prepare( $gfac_link,
          "SELECT cluster, status, queued, running, UNIX_TIMESTAMP(time) AS epoch"
-         . " FROM gfac.cluster_status WHERE cluster IN (" . implode( ',', $quoted ) . ")" );
+         . " FROM gfac.cluster_status WHERE cluster IN ($placeholders)" );
 
-      if ( $result )
+      if ( $stmt )
       {
-         while ( $row = mysqli_fetch_assoc( $result ) )
+         mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ), ...$candidates );
+         mysqli_stmt_execute( $stmt );
+         $result = mysqli_stmt_get_result( $stmt );
+
+         if ( $result )
          {
-            $snapshot[ $row[ 'cluster' ] ] = array(
-               'status'  => $row[ 'status' ],
-               'queued'  => (int) $row[ 'queued' ],
-               'running' => (int) $row[ 'running' ],
-               'time'    => (int) $row[ 'epoch' ],
-            );
+            while ( $row = mysqli_fetch_assoc( $result ) )
+            {
+               $snapshot[ $row[ 'cluster' ] ] = array(
+                  'status'  => $row[ 'status' ],
+                  'queued'  => (int) $row[ 'queued' ],
+                  'running' => (int) $row[ 'running' ],
+                  'time'    => (int) $row[ 'epoch' ],
+               );
+            }
          }
+
+         mysqli_stmt_close( $stmt );
       }
       ## A failed query ($result === false, or caught below) leaves $snapshot
       ## empty: every candidate still reads as "no status data" below, same
@@ -542,25 +547,29 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
    ## throws there instead.
    try
    {
-      $quoted = array_map(
-         function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
-         $candidates
-      );
-
-      $cutoff = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
-
-      $result = mysqli_query( $gfac_link,
+      $cutoff       = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
+      $placeholders = implode( ',', array_fill( 0, count( $candidates ), '?' ) );
+      $stmt         = mysqli_prepare( $gfac_link,
          "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
-         . " WHERE cluster IN (" . implode( ',', $quoted ) . ")"
-         . " AND time >= '" . mysqli_real_escape_string( $gfac_link, $cutoff ) . "'"
+         . " WHERE cluster IN ($placeholders) AND time >= ?"
          . " GROUP BY cluster" );
 
-      if ( $result )
+      if ( $stmt )
       {
-         while ( $row = mysqli_fetch_assoc( $result ) )
+         $params = array_merge( $candidates, array( $cutoff ) );
+         mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ) . 's', ...$params );
+         mysqli_stmt_execute( $stmt );
+         $result = mysqli_stmt_get_result( $stmt );
+
+         if ( $result )
          {
-            $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+            while ( $row = mysqli_fetch_assoc( $result ) )
+            {
+               $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+            }
          }
+
+         mysqli_stmt_close( $stmt );
       }
    }
    catch ( \Throwable $e )
