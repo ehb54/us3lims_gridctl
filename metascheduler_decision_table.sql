@@ -11,12 +11,15 @@
 -- it on a host that never configures a metascheduler pseudo-cluster entry
 -- costs nothing and nothing ever writes to it either.
 --
--- NO RETENTION POLICY. Unlike gfac.cluster_status_nudge (self-purging, see
--- cluster_status_nudge_table.sql), this is an audit trail and grows one row
--- per submission for the life of the deployment. An operator who wants to
--- bound it prunes by `time` by hand; nothing in this codebase does it
--- automatically, on purpose -- this table's whole job is to answer "why",
--- after the fact, for as long as that answer is wanted.
+-- Retention: pick_cluster_record_decision() (pick_cluster_reserve.php, this
+-- directory) opportunistically purges rows older than
+-- decision_retention_seconds (default one year, see
+-- pick_cluster_default_config(); override with
+-- $global_metascheduler_decision_retention_seconds, 0 disables the purge)
+-- on every write, the same piggyback pattern gfac.cluster_status_nudge uses.
+-- This is still an audit trail -- the default is deliberately long so it
+-- keeps answering "why did job X land on cluster Y" for a year of normal
+-- operation -- just one that no longer grows forever by default.
 
 CREATE TABLE IF NOT EXISTS `metascheduler_decision` (
 `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'Unique decision ID',

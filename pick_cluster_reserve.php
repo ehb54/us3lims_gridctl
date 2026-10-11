@@ -27,6 +27,23 @@
  */
 require_once __DIR__ . '/pick_cluster.php';
 
+/**
+ * The GET_LOCK()/RELEASE_LOCK() name for one pseudo-cluster's decisions.
+ *
+ * MySQL/MariaDB GET_LOCK() names are capped at 64 bytes. A plain substr()
+ * truncation risks two differently named pseudo-clusters silently colliding
+ * and serializing against each other if their names share a long enough
+ * common prefix -- not reachable with any name configured today, but still
+ * a structurally fragile way to build a lock name. Appending a hash of the
+ * FULL name, not just truncating it, means two different names can never
+ * collide regardless of length; the leading substr is kept only so the
+ * name stays human-readable in a `SHOW PROCESSLIST`/metadata_lock dump.
+ */
+function pick_cluster_lock_name( $pseudo_cluster )
+{
+   return 'pick_cluster:' . substr( $pseudo_cluster, 0, 20 ) . ':' . substr( md5( $pseudo_cluster ), 0, 16 );
+}
+
 function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, array $cluster_details,
                                 array $job_requirements = array(), array $config = array(), $now = null,
                                 $authorized_clusters = null, $lock_timeout_seconds = 10 )
@@ -47,8 +64,7 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
       }
    }
 
-   ## MySQL/MariaDB GET_LOCK() names are capped at 64 bytes.
-   $lock_name = substr( 'pick_cluster:' . $pseudo_cluster, 0, 64 );
+   $lock_name = pick_cluster_lock_name( $pseudo_cluster );
    $locked    = false;
 
    ## Caught, not just checked for a false prepare()/execute(): see
@@ -149,7 +165,7 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
       }
    }
 
-   pick_cluster_record_decision( $gfac_link, $pseudo_cluster, $result );
+   pick_cluster_record_decision( $gfac_link, $pseudo_cluster, $result, $now, $merged_config[ 'decision_retention_seconds' ] );
 
    return $result;
 }
@@ -158,7 +174,17 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
 ## query "why did job X land on cluster Y" after the fact, instead of only
 ## having pick_cluster_log_line()'s text in a flat log file. Best-effort: a
 ## failed insert here never fails the submission itself.
-function pick_cluster_record_decision( $gfac_link, $pseudo_cluster, array $result )
+##
+## Also opportunistically purges rows past $retention_seconds, the same
+## piggyback-on-the-write-path pattern pick_cluster_record_nudge() already
+## uses for gfac.cluster_status_nudge -- this table has no cron or MySQL
+## EVENT anywhere in this codebase, and every decision write is already a
+## round trip here, so a separate scheduled sweep would just be a second
+## mechanism doing the same job. $retention_seconds is deliberately long by
+## default (see pick_cluster_default_config()): this table is an audit
+## trail, not a correctness ledger, so the purge only bounds growth, it
+## does not keep the table fresh for any decision logic.
+function pick_cluster_record_decision( $gfac_link, $pseudo_cluster, array $result, $now = null, $retention_seconds = null )
 {
    ## Caught, same reason as every other best-effort write in this file: the
    ## interactive path has no MYSQLI_REPORT_OFF, so a failure here would
@@ -169,19 +195,31 @@ function pick_cluster_record_decision( $gfac_link, $pseudo_cluster, array $resul
          'INSERT INTO gfac.metascheduler_decision (pseudo_cluster, chosen, reason, tier, scores)'
          . ' VALUES (?, ?, ?, ?, ?)' );
 
-      if ( ! $stmt )
+      if ( $stmt )
       {
-         return;
+         $chosen = $result[ 'chosen' ] ?? null;
+         $reason = $result[ 'reason' ] ?? null;
+         $tier   = $result[ 'tier' ] ?? null;
+         $scores = json_encode( $result[ 'scores' ] ?? array() );
+
+         mysqli_stmt_bind_param( $stmt, 'sssss', $pseudo_cluster, $chosen, $reason, $tier, $scores );
+         mysqli_stmt_execute( $stmt );
+         mysqli_stmt_close( $stmt );
       }
 
-      $chosen = $result[ 'chosen' ] ?? null;
-      $reason = $result[ 'reason' ] ?? null;
-      $tier   = $result[ 'tier' ] ?? null;
-      $scores = json_encode( $result[ 'scores' ] ?? array() );
+      if ( $retention_seconds !== null && (int) $retention_seconds > 0 )
+      {
+         $cutoff_stmt = mysqli_prepare( $gfac_link,
+            'DELETE FROM gfac.metascheduler_decision WHERE time < FROM_UNIXTIME(?)' );
 
-      mysqli_stmt_bind_param( $stmt, 'sssss', $pseudo_cluster, $chosen, $reason, $tier, $scores );
-      mysqli_stmt_execute( $stmt );
-      mysqli_stmt_close( $stmt );
+         if ( $cutoff_stmt )
+         {
+            $cutoff = ( $now === null ? time() : (int) $now ) - (int) $retention_seconds;
+            mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
+            mysqli_stmt_execute( $cutoff_stmt );
+            mysqli_stmt_close( $cutoff_stmt );
+         }
+      }
    }
    catch ( \Throwable $e )
    {

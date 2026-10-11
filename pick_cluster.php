@@ -147,6 +147,15 @@ function pick_cluster_default_config()
       ## submitted minutes after a burst had already finished and drained.
       'nudge_ttl_seconds'      => isset( $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] )
                                   ? (int) $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] : 90,
+
+      ## How long a gfac.metascheduler_decision row is kept before an
+      ## opportunistic purge (see pick_cluster_record_decision()). That table
+      ## is an audit trail, not a correctness ledger like cluster_status_nudge
+      ## -- this exists only to bound its growth, not to serve any decision
+      ## logic, so the default is deliberately long (a year) rather than
+      ## tuned like the nudge TTL above. 0 disables the purge entirely.
+      'decision_retention_seconds' => isset( $GLOBALS[ 'global_metascheduler_decision_retention_seconds' ] )
+                                  ? (int) $GLOBALS[ 'global_metascheduler_decision_retention_seconds' ] : 31536000,
    );
 }
 
