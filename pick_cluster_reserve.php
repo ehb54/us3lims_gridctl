@@ -69,23 +69,39 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
    $now           = $now === null ? time() : (int) $now;
    $merged_config = array_merge( pick_cluster_default_config(), $config );
 
-   $snapshot = pick_cluster_status_snapshot( $gfac_link, $candidates, $now, $merged_config[ 'nudge_ttl_seconds' ] );
-   $result   = pick_cluster( $candidates, $cluster_details, $snapshot, $job_requirements, $config, $now, $authorized_clusters );
-
-   if ( $result[ 'chosen' ] !== null )
+   ## try/finally, not the sequential run-then-unlock below it used to be: this
+   ## codebase's mysqli default report mode throws on a query error, and
+   ## pick_cluster_status_snapshot()/pick_cluster()/pick_cluster_record_nudge()
+   ## all run queries -- an exception from any of them used to skip RELEASE_LOCK()
+   ## entirely, leaving this function's only unlock path to be the caller's
+   ## eventual mysqli_close() (which does auto-release every lock held on that
+   ## connection, but only once the connection actually closes, not pooled or
+   ## reused -- see db_connection_pool.php's own doc comment on why this
+   ## connection is never given to it). Guaranteeing the explicit unlock here
+   ## too means a transient query error no longer depends on that connection
+   ## being closed promptly to let the next decision through.
+   try
    {
-      ## Best-effort nudge -- never fails the submission if this write fails.
-      pick_cluster_record_nudge( $gfac_link, $result[ 'chosen' ], $now, $merged_config[ 'nudge_ttl_seconds' ] );
-   }
+      $snapshot = pick_cluster_status_snapshot( $gfac_link, $candidates, $now, $merged_config[ 'nudge_ttl_seconds' ] );
+      $result   = pick_cluster( $candidates, $cluster_details, $snapshot, $job_requirements, $config, $now, $authorized_clusters );
 
-   if ( $locked )
-   {
-      $unlock_stmt = mysqli_prepare( $gfac_link, 'SELECT RELEASE_LOCK(?)' );
-      if ( $unlock_stmt )
+      if ( $result[ 'chosen' ] !== null )
       {
-         mysqli_stmt_bind_param( $unlock_stmt, 's', $lock_name );
-         mysqli_stmt_execute( $unlock_stmt );
-         mysqli_stmt_close( $unlock_stmt );
+         ## Best-effort nudge -- never fails the submission if this write fails.
+         pick_cluster_record_nudge( $gfac_link, $result[ 'chosen' ], $now, $merged_config[ 'nudge_ttl_seconds' ] );
+      }
+   }
+   finally
+   {
+      if ( $locked )
+      {
+         $unlock_stmt = mysqli_prepare( $gfac_link, 'SELECT RELEASE_LOCK(?)' );
+         if ( $unlock_stmt )
+         {
+            mysqli_stmt_bind_param( $unlock_stmt, 's', $lock_name );
+            mysqli_stmt_execute( $unlock_stmt );
+            mysqli_stmt_close( $unlock_stmt );
+         }
       }
    }
 
