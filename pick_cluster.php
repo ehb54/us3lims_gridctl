@@ -50,6 +50,17 @@ function pick_cluster_default_config()
       ## retunes the other, rather than the two silently drifting apart.
       'max_status_age_seconds' => isset( $GLOBALS[ 'global_cluster_status_max_age_seconds' ] )
                                   ? (int) $GLOBALS[ 'global_cluster_status_max_age_seconds' ] : 900,
+
+      ## How long a pick_cluster_reserve() nudge (see that function's own
+      ## comment) stays counted in a snapshot after being written. Long
+      ## enough to bridge a burst of decisions moments apart -- the nudge's
+      ## only job -- short enough that it never stands in for a real probe
+      ## (every 12 minutes by default) for long: a nudge that outlived its
+      ## usefulness here used to persist, uncorrected, until the next probe,
+      ## which could fabricate "every candidate saturated" for real jobs
+      ## submitted minutes after a burst had already finished and drained.
+      'nudge_ttl_seconds'      => isset( $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] )
+                                  ? (int) $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] : 90,
    );
 }
 
@@ -301,13 +312,22 @@ function pick_cluster_log_line( $pseudo_cluster, array $result )
 }
 
 /**
- * Read the live gfac.cluster_status rows for $candidates. The only
- * non-pure piece in this file; kept to one tiny function so
- * pick_cluster() itself never needs a DB handle to be tested.
+ * Read the live gfac.cluster_status rows for $candidates, with any
+ * not-yet-expired pick_cluster_reserve() nudges (see
+ * pick_cluster_nudge_counts()) folded into 'queued'. The only non-pure piece
+ * in this file; kept to one tiny function so pick_cluster() itself never
+ * needs a DB handle to be tested.
+ *
+ * @param int|null $now               Unix time to age nudges against; null
+ *                                     means time(). Threaded through
+ *                                     explicitly for the same reason
+ *                                     pick_cluster() itself takes $now.
+ * @param int|null $nudge_ttl_seconds Overrides
+ *                                     pick_cluster_default_config()['nudge_ttl_seconds'].
  *
  * @return array keyed by cluster name, in the shape pick_cluster() expects.
  */
-function pick_cluster_status_snapshot( $gfac_link, array $candidates )
+function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = null, $nudge_ttl_seconds = null )
 {
    $snapshot = array();
 
@@ -315,6 +335,8 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates )
    {
       return $snapshot;
    }
+
+   $now = $now === null ? time() : (int) $now;
 
    $quoted = array_map(
       function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
@@ -325,20 +347,112 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates )
       "SELECT cluster, status, queued, running, UNIX_TIMESTAMP(time) AS epoch"
       . " FROM gfac.cluster_status WHERE cluster IN (" . implode( ',', $quoted ) . ")" );
 
-   if ( ! $result )
+   if ( $result )
    {
-      return $snapshot;   ## no rows learned: every candidate reads as "no status data"
+      while ( $row = mysqli_fetch_assoc( $result ) )
+      {
+         $snapshot[ $row[ 'cluster' ] ] = array(
+            'status'  => $row[ 'status' ],
+            'queued'  => (int) $row[ 'queued' ],
+            'running' => (int) $row[ 'running' ],
+            'time'    => (int) $row[ 'epoch' ],
+         );
+      }
    }
+   ## A failed query ($result === false) leaves $snapshot empty: every
+   ## candidate still reads as "no status data" below, same as before.
 
-   while ( $row = mysqli_fetch_assoc( $result ) )
+   $nudge_ttl_seconds = $nudge_ttl_seconds === null
+                      ? pick_cluster_default_config()[ 'nudge_ttl_seconds' ] : (int) $nudge_ttl_seconds;
+
+   ## A nudge only ever adds load to a candidate this snapshot already has a
+   ## real probe row for -- it cannot manufacture eligibility for a candidate
+   ## with no status data, which stays ineligible exactly as it always has.
+   foreach ( pick_cluster_nudge_counts( $gfac_link, $candidates, $now, $nudge_ttl_seconds ) as $name => $count )
    {
-      $snapshot[ $row[ 'cluster' ] ] = array(
-         'status'  => $row[ 'status' ],
-         'queued'  => (int) $row[ 'queued' ],
-         'running' => (int) $row[ 'running' ],
-         'time'    => (int) $row[ 'epoch' ],
-      );
+      if ( $count > 0 && isset( $snapshot[ $name ] ) )
+      {
+         $snapshot[ $name ][ 'queued' ] += $count;
+      }
    }
 
    return $snapshot;
+}
+
+/**
+ * Count each candidate's not-yet-expired nudges from gfac.cluster_status_nudge
+ * (written by pick_cluster_record_nudge()). Separate from cluster_status
+ * itself -- which only a real probe ever writes -- so a nudge ages out on
+ * its own after $ttl_seconds instead of persisting, uncorrected, until the
+ * next probe (every 12 minutes by default): a burst of decisions large
+ * enough to nudge every candidate past saturation_threshold used to read as
+ * "every candidate saturated" for the full gap until the next probe, even
+ * once every one of those jobs had already finished.
+ *
+ * @return array keyed by every entry in $candidates (0 when absent), so a
+ *         caller can always add this directly onto a snapshot's 'queued'.
+ */
+function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_seconds )
+{
+   $counts = array_fill_keys( $candidates, 0 );
+
+   if ( empty( $candidates ) )
+   {
+      return $counts;
+   }
+
+   $quoted = array_map(
+      function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
+      $candidates
+   );
+
+   $cutoff = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
+
+   $result = mysqli_query( $gfac_link,
+      "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
+      . " WHERE cluster IN (" . implode( ',', $quoted ) . ")"
+      . " AND time >= '" . mysqli_real_escape_string( $gfac_link, $cutoff ) . "'"
+      . " GROUP BY cluster" );
+
+   if ( $result )
+   {
+      while ( $row = mysqli_fetch_assoc( $result ) )
+      {
+         $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+      }
+   }
+
+   return $counts;
+}
+
+/**
+ * Record one pick_cluster_reserve() decision's nudge, and opportunistically
+ * purge nudges past $ttl_seconds -- piggybacked here, rather than run as a
+ * separate cron, since every nudge write is already a round trip to this
+ * table; a nudge just past the cutoff was already excluded by
+ * pick_cluster_nudge_counts()'s own WHERE clause before this delete ever
+ * runs, so the purge is cleanup, not a correctness requirement.
+ */
+function pick_cluster_record_nudge( $gfac_link, $cluster, $now, $ttl_seconds )
+{
+   $stmt = mysqli_prepare( $gfac_link,
+      'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );
+
+   if ( $stmt )
+   {
+      mysqli_stmt_bind_param( $stmt, 'si', $cluster, $now );
+      mysqli_stmt_execute( $stmt );
+      mysqli_stmt_close( $stmt );
+   }
+
+   $cutoff_stmt = mysqli_prepare( $gfac_link,
+      'DELETE FROM gfac.cluster_status_nudge WHERE time < FROM_UNIXTIME(?)' );
+
+   if ( $cutoff_stmt )
+   {
+      $cutoff = $now - max( 0, (int) $ttl_seconds );
+      mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
+      mysqli_stmt_execute( $cutoff_stmt );
+      mysqli_stmt_close( $cutoff_stmt );
+   }
 }

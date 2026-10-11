@@ -8,14 +8,21 @@
  * each independently snapshot gfac.cluster_status, both see the same
  * cluster idle, and both pick_cluster() to it. This wraps the snapshot +
  * decision in a MySQL GET_LOCK() so concurrent callers serialize on it, then
- * nudges the chosen cluster's own queued count up by one immediately, so a
- * second decision made moments later -- before the real status probe's next
- * poll overwrites it -- does not read the same stale "idle" picture.
+ * nudges the chosen cluster's own load up by one immediately, in a separate
+ * gfac.cluster_status_nudge ledger (not cluster_status itself), so a second
+ * decision made moments later -- before the real status probe's next poll
+ * -- does not read the same stale "idle" picture. A nudge ages out of that
+ * ledger on its own after nudge_ttl_seconds (see pick_cluster_record_nudge()
+ * in pick_cluster.php): it only needs to outlive the gap between two
+ * decisions in the same burst, never the full 12-minute gap until the next
+ * real probe. Left to persist that long, a burst large enough to nudge
+ * every candidate past saturation_threshold used to read as "every
+ * candidate saturated" for the whole gap, even once every one of those jobs
+ * had already finished and the real clusters were sitting idle.
  *
  * Both halves are best-effort, deliberately: a lock that cannot be acquired
  * falls through to an unlocked decision rather than refusing to submit the
- * job outright, and the nudge is overwritten by the next real probe
- * regardless. GET_LOCK() is scoped to this one mysqli connection, so a
+ * job outright. GET_LOCK() is scoped to this one mysqli connection, so a
  * crashed caller never leaves the lock held.
  */
 require_once __DIR__ . '/pick_cluster.php';
@@ -59,14 +66,16 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
       mysqli_stmt_close( $stmt );
    }
 
-   $snapshot = pick_cluster_status_snapshot( $gfac_link, $candidates );
+   $now           = $now === null ? time() : (int) $now;
+   $merged_config = array_merge( pick_cluster_default_config(), $config );
+
+   $snapshot = pick_cluster_status_snapshot( $gfac_link, $candidates, $now, $merged_config[ 'nudge_ttl_seconds' ] );
    $result   = pick_cluster( $candidates, $cluster_details, $snapshot, $job_requirements, $config, $now, $authorized_clusters );
 
    if ( $result[ 'chosen' ] !== null )
    {
-      ## Best-effort nudge -- never fails the submission if this update fails.
-      $chosen = mysqli_real_escape_string( $gfac_link, $result[ 'chosen' ] );
-      mysqli_query( $gfac_link, "UPDATE gfac.cluster_status SET queued = queued + 1 WHERE cluster = '$chosen'" );
+      ## Best-effort nudge -- never fails the submission if this write fails.
+      pick_cluster_record_nudge( $gfac_link, $result[ 'chosen' ], $now, $merged_config[ 'nudge_ttl_seconds' ] );
    }
 
    if ( $locked )
