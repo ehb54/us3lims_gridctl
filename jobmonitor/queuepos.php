@@ -82,7 +82,12 @@ $rx  = cluster_probe_remote( $cluster, function ( $m ) use ( $STDERR ) {
 ## portable. --array expands an array job's pending tasks into one row per
 ## task (rather than a collapsed range) so each task's own ID and state are
 ## visible; %i still yields a heterogeneous job component as "<id>+<n>".
-$out = $rx->run( "squeue --noheader --array --states=all --format='%i|%t'", array(
+## %P (partition) is needed so a job's queue position only counts PD jobs
+## actually ahead of it in ITS OWN partition -- a cluster with more than
+## one queue listed this job behind every PD job in every partition
+## combined, reporting a higher position than the partition it will
+## actually start from ever has.
+$out = $rx->run( "squeue --noheader --array --states=all --format='%i|%t|%P'", array(
     'label'   => 'squeue',
     'timeout' => 20,
     'retries' => 0,
@@ -152,12 +157,12 @@ if ( !function_exists( 'queuepos_report' ) ) {
                 continue;
             }
             $fields = explode( '|', $v );
-            if ( count( $fields ) !== 2 || trim( $fields[0] ) === '' ) {
+            if ( count( $fields ) !== 3 || trim( $fields[0] ) === '' ) {
                 debug_json( "queuepos: skipping malformed row", $v );
                 $malformed++;
                 continue;
             }
-            $rows[] = array( trim( $fields[0] ), trim( $fields[1] ) );
+            $rows[] = array( trim( $fields[0] ), trim( $fields[1] ), trim( $fields[2] ) );
         }
 
         debug_json( "squeue rows", $rows );
@@ -168,24 +173,32 @@ if ( !function_exists( 'queuepos_report' ) ) {
 
         $jinfo = (object)[];
 
-        ## Rank among PD jobs only, in listing order: the first pending job
-        ## squeue lists gets 1 (next up), the second gets 2, and so on.
-        ## Previously this counted every row DOWN from the total count
+        ## Rank among PD jobs only, in listing order, PER PARTITION: the
+        ## first pending job squeue lists in a given partition gets 1 (next
+        ## up in THAT partition), the second gets 2, and so on. An earlier
+        ## version ranked across every row regardless of partition --
+        ## confirmed on a real cluster with more than one queue: a job
+        ## listed behind only 3 other PD jobs in its own partition, but
+        ## behind a 3-job partition listed first in squeue's output overall,
+        ## reported position 4 instead of 1.
+        ##
+        ## Also previously counted every row DOWN from the total count
         ## instead, then subtracted where the first "R" row appeared --
         ## which numbered the *first*-listed PD job highest and the
         ## *last*-listed one 1, backwards from what "position in queue"
         ## means, confirmed on a real cluster: the next job to start
         ## reported position 10500 (of 10500), the last reported 1.
-        $pdRank = 0;
+        $pdRankByPartition = array();
 
         foreach ( $rows as $r ) {
-            list( $jobid, $state ) = $r;
+            list( $jobid, $state, $partition ) = $r;
             $jinfo->{ $jobid } = (object)[];
             $jinfo->{ $jobid }->state = $state;
             if ( $state === "PD" ) {
-                $pdRank++;
+                $pdRankByPartition[ $partition ] = ( $pdRankByPartition[ $partition ] ?? 0 ) + 1;
             }
-            $jinfo->{ $jobid }->pos = $pdRank;
+            ## Overwritten below for every non-PD state; harmless meanwhile.
+            $jinfo->{ $jobid }->pos = $pdRankByPartition[ $partition ] ?? 0;
         }
 
         ## Listing order is not a guaranteed start order, so "pos" has always

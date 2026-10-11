@@ -122,12 +122,16 @@ function pending_restart_retry_pattern() {
     ## interpreter path -- an upgrade, a different wrapper -- would build a
     ## pattern that could never match a child spawned under the old one,
     ## leaving it running forever with no way for a later stop to reach it.
-    ## '[^ ]+' matches any single token here instead, which is what the
-    ## child's own command line always looks like regardless of which
-    ## invocation built this pattern; __FILE__ and the literal subcommand
-    ## marker stay exact, so a decoy that happens to start with some
-    ## unrelated single word still cannot match the rest of the line.
-    return '^[^ ]+ ' . posix_ere_quote( __FILE__ )
+    ## '[^ ]*php[0-9.]*' matches any php-like first token (a bare "php", a
+    ## distro's version-suffixed "php8.1", any path ending in either)
+    ## instead of '[^ ]+' matching any single token at all: unanchored to a
+    ## specific interpreter path for the same reason given above, but an
+    ## unrelated command that merely happens to end with this exact
+    ## command line used to match too -- observed killing a `grep '<path>
+    ## _restart-retry-background'` pipeline, a `vi <path>
+    ## _restart-retry-background`, and (run as root) another user's own
+    ## grep. __FILE__ and the literal subcommand marker stay exact.
+    return '^[^ ]*php[0-9.]* ' . posix_ere_quote( __FILE__ )
          . ' _restart-retry-background$';
 }
 

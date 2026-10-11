@@ -59,6 +59,40 @@ function reopen_global_db_handle( $dbhost, $user, $passwd )
    }
 }
 
+## A thin wrapper around sleep(), so a test can define its own no-op version
+## first (the way run-job-cleanup.php's harness already does for write_log()/
+## update_autoflow_status()/mail_to_admin()) instead of actually waiting out
+## the real ~120s backoff budget on every run that reaches this path.
+if ( ! function_exists( 'cleanup_job_sleep' ) ) {
+   function cleanup_job_sleep( $seconds )
+   {
+      sleep( $seconds );
+   }
+}
+
+/**
+ * Wait times, in seconds, for retrying the finalizing status write: doubles
+ * from 2s, capped at 30s, stopping once the running total would reach or
+ * pass a two-minute budget. (2, 4, 8, 16, 30, 30, 30) -- 7 attempts, ~120s
+ * total -- replacing the old 2 retries, 2s apart (~4-6s total), which a real
+ * MariaDB restart under load can outlast.
+ */
+function finalizing_retry_wait_schedule()
+{
+   $schedule = array();
+   $elapsed  = 0;
+   $wait     = 2;
+
+   while ( $elapsed < 120 )
+   {
+      $schedule[] = $wait;
+      $elapsed   += $wait;
+      $wait       = min( 30, $wait * 2 );
+   }
+
+   return $schedule;
+}
+
 function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
@@ -924,9 +958,21 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## running, confirmed). Reconnecting before each retry, exactly as the
    ## write above does for its own link, is what lets this one actually
    ## recover from the same kind of outage.
-   for ( $attempt = 1; ! $status_recorded && $attempt <= 2; $attempt++ )
+   ##
+   ## Doubling backoff over about two minutes, not 2 retries 2s apart: the
+   ## old budget (~4-6s total) only covered a MariaDB restart that happened
+   ## to land within about 4s on an autoflow job, 3s on a non-autoflow one
+   ## (round 11 should-fix) -- shorter than a real restart under load can
+   ## take. finalizing_retry_wait_schedule() is the pure sequence, kept
+   ## separate so a test can assert its shape without a live DB.
+   foreach ( finalizing_retry_wait_schedule() as $wait )
    {
-      sleep( 2 );
+      if ( $status_recorded )
+      {
+         break;
+      }
+
+      cleanup_job_sleep( $wait );
 
       reopen_global_db_handle( $dbhost, $user, $passwd );
 
