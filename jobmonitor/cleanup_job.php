@@ -934,12 +934,17 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    if ( ! $status_recorded )
    {
       write_logld( "$me: update_autoflow_status() did not land for gfacID=$gfacID"
-                  . " after retrying; the job itself completed, but the autoflow stage"
-                  . " may be stuck \"running\" until this is corrected by hand" );
+                  . " after retrying; the job itself completed, but the autoflowAnalysis"
+                  . " and/or HPCAnalysisResult status may be stuck \"running\" until this"
+                  . " is corrected by hand" );
+      ## Names both tables now: update_autoflow_status()'s own return value
+      ## folds in update_hpc_analysis_result_status()'s result, so this can
+      ## be the only write that failed on a non-autoflow (DMGA/GA) job,
+      ## which has no autoflowAnalysis row to point at in the first place.
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
-                   . " completed and the user has been notified; the autoflowAnalysis status"
-                   . " column may still need to be corrected by hand." );
+                   . " completed and the user has been notified; the autoflowAnalysis and/or"
+                   . " HPCAnalysisResult status column may still need to be corrected by hand." );
    }
 
    mail_to_user( "success", "" );
