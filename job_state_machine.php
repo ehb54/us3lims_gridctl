@@ -676,8 +676,10 @@ class job_state_machine
    /**
     * @return bool true if the write landed, or was correctly skipped (an
     *              unmapped status, no autoflow id, no stage mapping -- none
-    *              of those are failures); false only when an actual write
-    *              was attempted and did not land.
+    *              of those are failures); false if either that write or
+    *              update_hpc_analysis_result_status()'s own write -- the
+    *              only write a non-autoflow job gets -- was attempted and
+    *              did not land.
     */
    public function update_autoflow_status( $status, $message )
    {
@@ -689,13 +691,18 @@ class job_state_machine
       if ( $status === null )
          return true;
 
-      ## Non-autoflow submissions (DMGA/GA) get their status only through this.
-      $this->update_hpc_analysis_result_status( $status );
+      ## Non-autoflow submissions (DMGA/GA) get their status only through
+      ## this, so its own result has to count: discarding it here is exactly
+      ## how a non-autoflow job's final status could silently fail to land,
+      ## with no retry and no admin mail, while this function still reported
+      ## success because the (irrelevant, for that job) autoflow write below
+      ## was skipped cleanly.
+      $hpc_ok = $this->update_hpc_analysis_result_status( $status );
 
       if ( $this->autoflowID <= 0 )
       {
          $this->logf( "update_autoflow_status() ignored, no id" );
-         return true;
+         return $hpc_ok;
       }
 
       $us3 = $this->us3_link();
@@ -707,7 +714,7 @@ class job_state_machine
       $stage = stage_status_from_job( $status, $this->log );
 
       if ( $stage === null )
-         return true;
+         return $hpc_ok;
 
       ## A terminal stage has been reported to the scientist, so nothing may put it
       ## back in progress: that guard stays. It used to apply to every write, which
@@ -742,26 +749,34 @@ class job_state_machine
          $ok = (bool) $this->exec( $us3, $query );
       }
 
-      return $ok;
+      return $ok && $hpc_ok;
    }
 
-   ## The status the scientist sees; left alone when there is no mapping.
+   /**
+    * The status the scientist sees; left alone when there is no mapping.
+    *
+    * @return bool true if the write landed, or was correctly skipped (an
+    *              unmapped status, no matching row -- a non-autoflow job
+    *              that predates this table, or a race with the row being
+    *              created -- none of those are failures); false only when
+    *              a connection or an actual write attempt failed.
+    */
    public function update_hpc_analysis_result_status( $status )
    {
       $status = job_status_normalise( $status, $this->log );
 
       if ( $status === null )
-         return;
+         return true;
 
       $queue_status = queue_status_from_job( $status, $this->log );
 
       if ( $queue_status === null )
-         return;
+         return true;
 
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
-         return;
+         return false;
 
       $table = $this->us3_table( 'HPCAnalysisResult' );
 
@@ -778,13 +793,20 @@ class job_state_machine
          "SELECT HPCAnalysisResultID FROM $table"
          . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
-      if ( ! $found || $this->num_rows( $found ) < 1 )
-         return;
+      ## The query itself failing is a real problem (false); finding no
+      ## matching row is not (true) -- a non-autoflow job that predates this
+      ## table, or a race with the row being created. Conflating the two
+      ## here let a connection drop on this SELECT alone report success.
+      if ( ! $found )
+         return false;
+
+      if ( $this->num_rows( $found ) < 1 )
+         return true;
 
       $row = $this->fetch_row( $found );
 
       if ( ! is_array( $row ) || ! isset( $row[ 0 ] ) )
-         return;
+         return true;
 
       $result_id = (int) $row[ 0 ];
 
@@ -803,7 +825,7 @@ class job_state_machine
       ##
       ## Every other terminal-to-terminal move stays blocked: once genuinely
       ## failed or completed-then-failed, nothing moves it again.
-      $this->exec( $us3,
+      return (bool) $this->exec( $us3,
          "UPDATE $table SET "
          . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
          . " AND ( queueStatus NOT IN ('completed', 'failed', 'aborted')"

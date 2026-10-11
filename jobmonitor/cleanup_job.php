@@ -38,6 +38,27 @@ if ( ! function_exists( 'write_logld' ) ) {
    }
 }
 
+/**
+ * Reopen the global $db_handle that job_machine()'s shim functions
+ * (gridctl.php) read fresh on every call, so a retry after this point
+ * reaches a live connection instead of reusing one a MariaDB restart
+ * already killed. Best-effort: on failure, $db_handle is left exactly as
+ * it was, so the caller's own retry still fails the same way and reports
+ * it, instead of the failure being silently swallowed here.
+ */
+function reopen_global_db_handle( $dbhost, $user, $passwd )
+{
+   global $db_handle;
+
+   $reconnected = @mysqli_connect( $dbhost, $user, $passwd );
+
+   if ( $reconnected )
+   {
+      @mysqli_close( $db_handle );
+      $db_handle = $reconnected;
+   }
+}
+
 function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
@@ -890,9 +911,23 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## unless an admin is told to go fix it by hand.
    $status_recorded = update_autoflow_status( $status, $queue_msg );
 
+   ## update_autoflow_status()'s own link comes from job_machine()'s global
+   ## $db_handle, read fresh on every call -- but, unlike the write above,
+   ## nothing here reopens it. jobmonitor.php's own open_db_or_retry()/
+   ## mysqli_ping() cycle is what normally recovers a dropped connection,
+   ## and it only runs at the top of the main poll loop, which has already
+   ## exited by the time this finalizing write runs: a MariaDB restart
+   ## between the last poll and here left every retry below reusing the
+   ## same dead handle forever ("MySQL server has gone away" nine times
+   ## running, confirmed). Reconnecting before each retry, exactly as the
+   ## write above does for its own link, is what lets this one actually
+   ## recover from the same kind of outage.
    for ( $attempt = 1; ! $status_recorded && $attempt <= 2; $attempt++ )
    {
       sleep( 2 );
+
+      reopen_global_db_handle( $dbhost, $user, $passwd );
+
       $status_recorded = update_autoflow_status( $status, $queue_msg );
    }
 
