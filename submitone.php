@@ -23,6 +23,7 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 require_once __DIR__ . '/pick_cluster.php';
 require_once __DIR__ . '/pick_cluster_reserve.php';
+require_once $class_dir . 'db_connection_pool.php';
 
 # ********* start user defines *************
 
@@ -396,7 +397,7 @@ if ( $cluster == "localhost" ) {
             'reason' => "metascheduler '$metascheduler_pseudo_cluster' is disabled (active=false)",
             'tier' => null, 'scores' => array() );
     } else {
-        $gfac_link = @mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+        $gfac_link = db_connection_pool::shared()->checkout( $dbhost, $guser, $gpasswd, $gDB );
 
         if ( ! $gfac_link ) {
             ## No status data is learnable without this connection: every
@@ -406,34 +407,37 @@ if ( $cluster == "localhost" ) {
             $pick = array( 'chosen' => null, 'reason' => 'could not connect to gfac for cluster status',
                 'tier' => null, 'scores' => array() );
         } else {
-            ## pick_cluster(), not pick_cluster_reserve(): $cluster itself
-            ## stays the pseudo name below (see comment above), so the
-            ## simulated $_POST this script builds still names the pseudo
-            ## pool, not a real cluster -- the driven _1.php/_2.php pages
-            ## re-detect it as unresolved and require_cluster.php makes the
-            ## one authoritative, lock-protected, logged reservation when
-            ## they run (same as an interactive submission). Resolving here
-            ## too, with pick_cluster_reserve(), would reserve and log a
-            ## second, discarded decision every autoflow job -- this call is
-            ## read-only and only feeds the host_name/queue shown below for
-            ## display/record purposes.
-            $snapshot = pick_cluster_status_snapshot( $gfac_link,
-                $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ] );
-            $pick = pick_cluster(
-                $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ],
-                $cluster_details,
-                $snapshot,
-                $job_requirements_estimate,
-                array(),
-                null,
-                ## $clusterAuth (resolved above from {$lims_db}.people for this
-                ## job's owning person, $invID) -- being allowed to select the
-                ## metascheduler pseudo-entry is never authorization for every
-                ## real cluster behind it, so every candidate is checked against
-                ## this same per-person allowlist a direct submission would be.
-                $clusterAuth
-            );
-            mysqli_close( $gfac_link );
+            try {
+                ## pick_cluster(), not pick_cluster_reserve(): $cluster itself
+                ## stays the pseudo name below (see comment above), so the
+                ## simulated $_POST this script builds still names the pseudo
+                ## pool, not a real cluster -- the driven _1.php/_2.php pages
+                ## re-detect it as unresolved and require_cluster.php makes the
+                ## one authoritative, lock-protected, logged reservation when
+                ## they run (same as an interactive submission). Resolving here
+                ## too, with pick_cluster_reserve(), would reserve and log a
+                ## second, discarded decision every autoflow job -- this call is
+                ## read-only and only feeds the host_name/queue shown below for
+                ## display/record purposes.
+                $snapshot = pick_cluster_status_snapshot( $gfac_link,
+                    $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ] );
+                $pick = pick_cluster(
+                    $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ],
+                    $cluster_details,
+                    $snapshot,
+                    $job_requirements_estimate,
+                    array(),
+                    null,
+                    ## $clusterAuth (resolved above from {$lims_db}.people for this
+                    ## job's owning person, $invID) -- being allowed to select the
+                    ## metascheduler pseudo-entry is never authorization for every
+                    ## real cluster behind it, so every candidate is checked against
+                    ## this same per-person allowlist a direct submission would be.
+                    $clusterAuth
+                );
+            } finally {
+                db_connection_pool::shared()->release( $gfac_link );
+            }
         }
     }
 
