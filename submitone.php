@@ -21,6 +21,8 @@ if ( count( $argv ) != 3 ) {
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
+require_once __DIR__ . '/pick_cluster.php';
+require_once __DIR__ . '/pick_cluster_reserve.php';
 
 # ********* start user defines *************
 
@@ -357,6 +359,85 @@ if ( $cluster == "localhost" ) {
         $queue     = $cluster_details[$cluster]['queue'] ?? 'batch';
     }
     echo "localhost cluster resolved to $cluster host_name $host_name queue $queue\n";
+} elseif ( isset( $cluster_details )
+           && is_array( $cluster_details )
+           && array_key_exists( $cluster, $cluster_details )
+           && pick_cluster_is_metascheduler_entry( $cluster_details[ $cluster ] ) ) {
+    ## $cluster names a metascheduler pseudo-entry (a "clusters" list to pick
+    ## a real cluster from), not a real cluster. $cluster itself is left
+    ## unchanged below -- it still becomes the stored gfac.analysis.cluster
+    ## value exactly as it does for a named cluster today (see
+    ## METASCHEDULER-DESIGN.md section 3); only host_name/queue are resolved
+    ## from the cluster pick_cluster() actually chose.
+    $metascheduler_pseudo_cluster = $cluster;
+
+    ## Kill switch: flipping the pseudo-entry's own 'active' to false must
+    ## stop this resolution outright, not just hide it from the UI's cluster
+    ## list (collect_config_info() filtering). Without this check, an
+    ## autoflowAnalysis row whose clusterDefault was already set to this
+    ## pseudo-name before it was disabled would still reach pick_cluster()
+    ## here and keep resolving to a real cluster -- 'active' only stopped new
+    ## selections, not jobs already pointed at it.
+    if ( array_key_exists( 'active', $cluster_details[ $metascheduler_pseudo_cluster ] )
+         && ! $cluster_details[ $metascheduler_pseudo_cluster ][ 'active' ] ) {
+        $pick = array( 'chosen' => null,
+            'reason' => "metascheduler '$metascheduler_pseudo_cluster' is disabled (active=false)",
+            'tier' => null, 'scores' => array() );
+    } else {
+        $gfac_link = @mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
+
+        if ( ! $gfac_link ) {
+            ## No status data is learnable without this connection: every
+            ## candidate reads as ineligible and pick_cluster() reports
+            ## "no eligible cluster" rather than guessing -- never treat a
+            ## failed connection here as permission to pick blindly.
+            $pick = array( 'chosen' => null, 'reason' => 'could not connect to gfac for cluster status',
+                'tier' => null, 'scores' => array() );
+        } else {
+            ## pick_cluster(), not pick_cluster_reserve(): $cluster itself
+            ## stays the pseudo name below (see comment above), so the
+            ## simulated $_POST this script builds still names the pseudo
+            ## pool, not a real cluster -- the driven _1.php/_2.php pages
+            ## re-detect it as unresolved and require_cluster.php makes the
+            ## one authoritative, lock-protected, logged reservation when
+            ## they run (same as an interactive submission). Resolving here
+            ## too, with pick_cluster_reserve(), would reserve and log a
+            ## second, discarded decision every autoflow job -- this call is
+            ## read-only and only feeds the host_name/queue shown below for
+            ## display/record purposes.
+            $snapshot = pick_cluster_status_snapshot( $gfac_link,
+                $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ] );
+            $pick = pick_cluster(
+                $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ],
+                $cluster_details,
+                $snapshot,
+                array(),   ## job sizing is not resolved yet at this point in submitone.php
+                array(),
+                null,
+                ## $clusterAuth (resolved above from {$lims_db}.people for this
+                ## job's owning person, $invID) -- being allowed to select the
+                ## metascheduler pseudo-entry is never authorization for every
+                ## real cluster behind it, so every candidate is checked against
+                ## this same per-person allowlist a direct submission would be.
+                $clusterAuth
+            );
+            mysqli_close( $gfac_link );
+        }
+    }
+
+    write_logl( pick_cluster_log_line( $metascheduler_pseudo_cluster, $pick ) );
+
+    if ( $pick[ 'chosen' ] === null ) {
+        $cluster_error = "metascheduler '$metascheduler_pseudo_cluster': " . $pick[ 'reason' ];
+    } else {
+        $real = $pick[ 'chosen' ];
+        $host_name = $cluster_details[ $real ][ 'name' ];
+        if ( array_key_exists( 'queue', $cluster_details[ $real ] ) ) {
+            $queue = $cluster_details[ $real ][ 'queue' ];
+        }
+        echo "metascheduler $metascheduler_pseudo_cluster resolved to $real"
+             . " (reason={$pick['reason']}) host_name=$host_name queue=$queue\n";
+    }
 } else {
     if ( isset( $cluster_details )
          && is_array( $cluster_details )
