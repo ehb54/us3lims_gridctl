@@ -75,7 +75,19 @@ $rx  = cluster_probe_remote( $cluster, function ( $m ) use ( $STDERR ) {
     fwrite( $STDERR, "$m\n" );
 } );
 
-$out = $rx->run( "squeue -t all", array(
+## Explicit, delimited fields instead of squeue's default table: that table's
+## column count varies by Slurm version (seen directly: 8 on some, 9 on
+## Anvil 26.05.4) and by row (extra whitespace-separated fields on some
+## Expanse 23.02.7 rows), so a fixed-column-count parse of it is not
+## portable. --array expands an array job's pending tasks into one row per
+## task (rather than a collapsed range) so each task's own ID and state are
+## visible; %i still yields a heterogeneous job component as "<id>+<n>".
+## %P (partition) is needed so a job's queue position only counts PD jobs
+## actually ahead of it in ITS OWN partition -- a cluster with more than
+## one queue listed this job behind every PD job in every partition
+## combined, reporting a higher position than the partition it will
+## actually start from ever has.
+$out = $rx->run( "squeue --noheader --array --states=all --format='%i|%t|%P'", array(
     'label'   => 'squeue',
     'timeout' => 20,
     'retries' => 0,
@@ -118,43 +130,104 @@ if ( !function_exists( 'debug_json' ) ) {
     }
 }
 
-array_shift( $res );
+if ( !function_exists( 'queuepos_report' ) ) {
+    /**
+     * Parse squeue's "<jobid>|<state>" lines (from --noheader --format='%i|%t')
+     * and report $gfacid's queue position and state. Pure: no I/O, so this is
+     * the part covered directly by unit tests.
+     *
+     * @param string[] $lines Raw squeue stdout lines, one per row.
+     * @param string   $gfacid The job id being asked about.
+     * @return array JSON-ready: ['state' => ..., 'pos' => ...] (+'incomplete'
+     *               => true when a malformed row was skipped), or ['error' => ...].
+     */
+    function queuepos_report( array $lines, $gfacid ) {
+        ## No header to discard: --noheader. Each row is "<jobid>|<state>"; an
+        ## unrelated row from this same squeue that doesn't split into exactly
+        ## those two fields (truncated output, an unexpected scheduler message
+        ## mixed into stdout, etc.) is skipped rather than aborting the whole
+        ## request -- one bad row must not hide every other job's state,
+        ## including the target's.
+        $rows = array();
+        $malformed = 0;
 
-debug_json( "squeue result", $res );
+        foreach ( $lines as $v ) {
+            $v = trim( $v );
+            if ( $v === '' ) {
+                continue;
+            }
+            $fields = explode( '|', $v );
+            if ( count( $fields ) !== 3 || trim( $fields[0] ) === '' ) {
+                debug_json( "queuepos: skipping malformed row", $v );
+                $malformed++;
+                continue;
+            }
+            $rows[] = array( trim( $fields[0] ), trim( $fields[1] ), trim( $fields[2] ) );
+        }
 
-$jinfo = (object)[];
-$jcount = count( $res );
+        debug_json( "squeue rows", $rows );
 
-## Number of running jobs ahead of the queue.
-$jstart = 0;
+        if ( ! count( $rows ) ) {
+            return array( "error" => "squeue returned no usable rows" );
+        }
 
-foreach ( $res as $v ) {
-    $l = preg_split( '/\\s+/', trim( $v ) );
-    if ( count( $l ) != 8 ) {
-        echo "{\"error\":\"unexpected result line $v\"}";
-        exit;
+        $jinfo = (object)[];
+
+        ## Rank among PD jobs only, in listing order, PER PARTITION: the
+        ## first pending job squeue lists in a given partition gets 1 (next
+        ## up in THAT partition), the second gets 2, and so on. An earlier
+        ## version ranked across every row regardless of partition --
+        ## confirmed on a real cluster with more than one queue: a job
+        ## listed behind only 3 other PD jobs in its own partition, but
+        ## behind a 3-job partition listed first in squeue's output overall,
+        ## reported position 4 instead of 1.
+        ##
+        ## Also previously counted every row DOWN from the total count
+        ## instead, then subtracted where the first "R" row appeared --
+        ## which numbered the *first*-listed PD job highest and the
+        ## *last*-listed one 1, backwards from what "position in queue"
+        ## means, confirmed on a real cluster: the next job to start
+        ## reported position 10500 (of 10500), the last reported 1.
+        $pdRankByPartition = array();
+
+        foreach ( $rows as $r ) {
+            list( $jobid, $state, $partition ) = $r;
+            $jinfo->{ $jobid } = (object)[];
+            $jinfo->{ $jobid }->state = $state;
+            if ( $state === "PD" ) {
+                $pdRankByPartition[ $partition ] = ( $pdRankByPartition[ $partition ] ?? 0 ) + 1;
+            }
+            ## Overwritten below for every non-PD state; harmless meanwhile.
+            $jinfo->{ $jobid }->pos = $pdRankByPartition[ $partition ] ?? 0;
+        }
+
+        ## Listing order is not a guaranteed start order, so "pos" has always
+        ## been an estimate for PD jobs (pre-existing behavior, unchanged
+        ## here). A malformed row dropped above makes that estimate
+        ## additionally rest on an incomplete snapshot of the queue, so PD
+        ## positions are reported as unknown (-1, the same sentinel already
+        ## used for states this calculation does not otherwise handle) rather
+        ## than a count that is now confidently wrong.
+        foreach ( $jinfo as $v ) {
+            switch ( $v->state ) {
+                case "PD"  : $v->pos = $malformed > 0 ? -1 : $v->pos; break;
+                case "R"   : $v->pos = 0; break;
+                default    : $v->pos = -1; break;
+            }
+        }
+
+        debug_json( "jinfo", $jinfo );
+
+        if ( ! isset( $jinfo->{ $gfacid } ) ) {
+            return array( "error" => "job not found" );
+        }
+
+        $result = (array) $jinfo->{ $gfacid };
+        if ( $malformed > 0 ) {
+            $result[ 'incomplete' ] = true;
+        }
+        return $result;
     }
-    debug_json( "line", $l );
-    $jinfo->{ $l[0] } = (object)[];
-    $jinfo->{ $l[0] }->state = $l[4];
-    if ( ! $jstart && $l[4] == "R" ) {
-        $jstart = $jcount;
-    }
-    $jinfo->{ $l[0] }->pos   = $jcount--;
 }
 
-foreach ( $jinfo as $v ) {
-    switch ( $v->state ) {
-        case "PD"  : $v->pos -= $jstart; break;
-        case "R"   : $v->pos = 0; break;
-        default    : $v->pos = -1; break;
-    }
-}
-
-debug_json( "jinfo", $jinfo );
-
-if ( isset( $jinfo->{ $gfacid } ) ) {
-    echo json_encode( $jinfo->{ $gfacid } );
-} else {
-    echo "{\"error\":\"job not found\"}";
-}
+echo json_encode( queuepos_report( $res, $gfacid ) );

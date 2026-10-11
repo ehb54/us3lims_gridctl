@@ -2,10 +2,41 @@
 
 # functions for jobmonitor.php
 
-## joblinkjson.php includes this file without jobmonitor.php's includes.
 require_once __DIR__ . '/../job_state_machine.php';
 
 ## returns true when job processing is done (regardless error or success)
+
+## Pure: decides whether the stored status ($status_gw) must survive a fresh
+## live probe answer ($status), or whether the probe's answer should be used.
+## get_local_status() only ever returns a plain cluster state (SUBMITTED/
+## ACTIVE/COMPLETED/...), never one of LIMS's own escalation markers
+## (SUBMIT_TIMEOUT/RUN_TIMEOUT/FAILED-via-fire_stall). While squeue still
+## lists the job as queued/running, that plain answer used to overwrite the
+## marker, routing check_job()'s switch back into submitted()/running() --
+## the *first* stall window -- instead of re-entering submit_timeout()/
+## run_timeout(), the second window that actually decides (via reconcile())
+## whether to fail the job. The marker has to survive a "still alive" answer
+## the same way COMPLETE/UNKNOWN/UNREACHABLE already did, or it never reaches
+## FAILED and refires every window instead.
+##
+## FAILED needs the same protection, but not unconditionally: fire_stall()
+## writes FAILED directly (bypassing this function on the way in), and the
+## very next poll's "still alive" probe answer then overwrote it right back
+## to RUN_TIMEOUT/SUBMIT_TIMEOUT here, alternating forever with a scancel
+## every window and never finalizing while squeue still lists the job.
+## Keep FAILED against the still-alive answers; let a
+## COMPLETED or CANCELED answer through, since those are the cluster
+## reporting a different, equally genuine terminal outcome.
+function reconcile_probed_status( $status_gw, $status ) {
+    if ( $status_gw === 'FAILED' ) {
+        return in_array( $status, [ 'COMPLETED', 'CANCELED' ], true ) ? $status : 'FAILED';
+    }
+    if ( $status_gw === 'COMPLETE'  ||  $status_gw === 'SUBMIT_TIMEOUT'  ||  $status_gw === 'RUN_TIMEOUT'
+         ||  $status === 'UNKNOWN'  ||  $status === GRIDCTL_UNREACHABLE ) {
+        return $status_gw;
+    }
+    return $status;
+}
 
 function check_job() {
     write_logld( "check_job()" );
@@ -24,11 +55,7 @@ function check_job() {
 
     // Get local job status
     $status_gw  = $status;
-    $status     = get_local_status( $gfacID );
-    ## UNREACHABLE: we could not ask, so keep the recorded status.
-    if ( $status_gw == 'COMPLETE'  ||  $status == 'UNKNOWN'  ||  $status == GRIDCTL_UNREACHABLE ) {
-        $status     = $status_gw;
-    }
+    $status     = reconcile_probed_status( $status_gw, get_local_status( $gfacID ) );
     write_logld( "Local status=$status status_gw=$status_gw" );
     
     # Sometimes during testing, the us3_db entry is not set
@@ -152,12 +179,17 @@ function job_machine()
 }
 
 /** One "job is hung" and one "scancel never landed" mail per job, not one per
- *  poll. Other 'fail' mails (e.g. a query failure) are unrelated problems and
- *  still all go out, so they are not deduplicated here. */
+ *  poll. 'fail' is deduped per distinct message text instead: a blip
+ *  followed by a different, permanent failure still gets two mails, but the
+ *  same 'fail' text is sent only once. 'fail' used to go out unconditionally
+ *  every time (e.g. a query failure during an outage), which meant the same
+ *  text repeating ~2,880 times a day until someone killed the monitor by
+ *  hand. */
 function mail_to_admin_once( $type, $msg )
 {
    global $timeout_email_sent;
    global $scancel_fail_email_sent;
+   global $fail_email_sent_messages;
 
    if ( $type === 'hang' )
    {
@@ -172,6 +204,25 @@ function mail_to_admin_once( $type, $msg )
          return;
 
       $scancel_fail_email_sent = true;
+   }
+   elseif ( $type === 'fail' )
+   {
+      ## Keyed on the message, not a single flag: a retryable
+      ## connection blip and a later, genuinely different permanent failure
+      ## both come through as type 'fail' (job_state_machine.php's one call
+      ## site), and a single boolean let the first one's mail silently
+      ## swallow the second's -- the mail that actually mattered, since a
+      ## permanent failure is the one that ends the monitor. The *same*
+      ## message repeating (the real spam case this dedup exists for) is
+      ## still deduped.
+      if ( ! is_array( $fail_email_sent_messages ) )
+      {
+         $fail_email_sent_messages = array();
+      }
+      if ( in_array( $msg, $fail_email_sent_messages, true ) )
+         return;
+
+      $fail_email_sent_messages[] = $msg;
    }
 
    mail_to_admin( $type, $msg );
@@ -213,7 +264,9 @@ function cleanup() {
     global $gfacID;
     global $us3_db;
 
-    ## -1 terminal, 0 retry (not yet finalizable), 1 finalized.
+    ## -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
+    ## marker survives for --restart, -1 terminal, 0 retry (not yet
+    ## finalizable), 1 finalized.
     return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld' );
 }
 

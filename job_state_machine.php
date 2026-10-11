@@ -18,6 +18,34 @@ if ( ! function_exists( 'cluster_probe_job_status' ) )
 
 require_once __DIR__ . '/job_status.php';
 
+## A failed query here must not retry forever regardless of why it failed:
+## mailing the admin on every poll for a permanent error (a dropped
+## database, a missing table, revoked grants) that a retry could never fix
+## would be about 2,880 mails a day per job until someone killed the
+## monitor by hand. Only a connection-class errno is worth retrying; these
+## are mysqli's/MariaDB's "the server or network, not the query, is the
+## problem" codes:
+##   2002 CR_CONNECTION_ERROR      2006 CR_SERVER_GONE_ERROR
+##   2013 CR_SERVER_LOST           1040 ER_CON_COUNT_ERROR (max_connections)
+##   1203 ER_TOO_MANY_USER_CONNECTIONS
+##   1226 ER_USER_LIMIT_REACHED    1205 ER_LOCK_WAIT_TIMEOUT
+##   1213 ER_LOCK_DEADLOCK
+## Anything else (unknown table/column, access denied for this query, a
+## syntax error from an older schema) says the query itself cannot succeed no
+## matter how many times it is retried, and is treated as terminal instead,
+## matching the behavior this file had before 0c8086c made every failure here
+## retry.
+function db_error_is_connection_class( $errno )
+{
+   return in_array( (int) $errno,
+      ## 1053 (ER_SERVER_SHUTDOWN, SQLSTATE 08S01): MariaDB stopping mid-query.
+      ## Without it, a cleanup query in flight during a restart mailed the
+      ## user but could not persist FAILED (the same shutdown refused that
+      ## write too), leaving the job's own status wrong even though the user
+      ## was told.
+      array( 2002, 2006, 2013, 1040, 1203, 1226, 1205, 1213, 1053 ), true );
+}
+
 class job_state_machine
 {
    ## Probe answers that carry no news. UNKNOWN: the cluster has no record.
@@ -130,6 +158,21 @@ class job_state_machine
       return mysqli_real_escape_string( $handle, $value );
    }
 
+   ## Overridable alongside exec()/quote()/fetch_row()/num_rows(): $handle
+   ## here is whatever us3_link() returns, which a test double is free to
+   ## make something other than a real mysqli link (RecordingJobStateMachine
+   ## returns a bare true), so get_us3_data() must not call mysqli_errno()/
+   ## mysqli_error() on it directly.
+   protected function errno( $handle )
+   {
+      return mysqli_errno( $handle );
+   }
+
+   protected function error( $handle )
+   {
+      return mysqli_error( $handle );
+   }
+
    ## All database access goes through exec(), quote(), fetch_row() and
    ## num_rows(), so a test double can replace the database.
    protected function fetch_row( $result )
@@ -205,10 +248,24 @@ class job_state_machine
    ## is not proof the controller is up), so without this a breaker left
    ## open by an unrelated earlier failure would refuse this scancel
    ## locally even though the cluster just answered.
+   ##
+   ## retries => 0: remote_exec's default retry budget (3 attempts, backing
+   ## off) was meant for a cold call with no other information, not this
+   ## one, which already knows the cluster just answered a ping -- without
+   ## this a single scancel failure here could retry for close to 26
+   ## minutes on a flapping cluster before fire_stall() gets an answer back.
+   ##
+   ## breaker_gate => false (not plain breaker => false): skips only the
+   ## open-breaker check that would otherwise refuse this call on an
+   ## unrelated earlier failure, despite the ping moments ago. A real
+   ## scancel failure here still counts against the cluster: a plain
+   ## 'breaker' => false would bypass that bookkeeping too, so a cluster
+   ## that started actually failing scancels specifically would never be
+   ## recorded as failing at all.
    public function cancel_local_job()
    {
       return cluster_probe_cancel_job( $this->cluster, $this->gfacID, $this->log,
-                                       array( 'breaker' => false ) );
+                                       array( 'breaker_gate' => false, 'retries' => 0 ) );
    }
 
    ## May a stall clock fire? 'proceed', 'defer' or 'abandon'; see
@@ -569,9 +626,14 @@ class job_state_machine
    }
 
    ## This job's HPCAnalysisRequestID, 0 when there genuinely is no such row,
-   ## or null when the database could not answer (retryable, not the same as
-   ## "not found" -- a caller that treated the two alike used to end the
-   ## monitor on a connection blip instead of trying again next poll).
+   ## null when the database could not answer for a connection-class reason
+   ## (retryable, not the same as "not found" -- a caller that treated the
+   ## two alike used to end the monitor on a connection blip instead of
+   ## trying again next poll), or false when the query itself can never
+   ## succeed (retrying that forever would just mail the admin on every
+   ## poll for a problem no retry could fix -- see
+   ## db_error_is_connection_class()). The caller's contract (cleanup.php's
+   ## resolve_and_cleanup_job()) already distinguishes all three.
    public function get_us3_data()
    {
       $us3 = $this->us3_link();
@@ -586,8 +648,10 @@ class job_state_machine
 
       if ( ! $result )
       {
-         $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}" );
-         return null;
+         $connection_class = db_error_is_connection_class( $this->errno( $us3 ) );
+         $this->mail_admin( "fail", "Query failed against $table for {$this->gfacID}"
+            . ( $connection_class ? '' : ' (permanent: ' . $this->error( $us3 ) . ')' ) );
+         return $connection_class ? null : false;
       }
 
       ## Duplicate gfacIDs happen; the most recent row is the live one.
@@ -597,7 +661,7 @@ class job_state_machine
             . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
       if ( ! $result )
-         return null;
+         return db_error_is_connection_class( $this->errno( $us3 ) ) ? null : false;
 
       $row = $this->fetch_row( $result );
 
@@ -609,6 +673,14 @@ class job_state_machine
       return $requestID;
    }
 
+   /**
+    * @return bool true if the write landed, or was correctly skipped (an
+    *              unmapped status, no autoflow id, no stage mapping -- none
+    *              of those are failures); false if either that write or
+    *              update_hpc_analysis_result_status()'s own write -- the
+    *              only write a non-autoflow job gets -- was attempted and
+    *              did not land.
+    */
    public function update_autoflow_status( $status, $message )
    {
       $this->logf( "update_autoflow_status() id {$this->autoflowID} status $status message $message" );
@@ -617,27 +689,32 @@ class job_state_machine
       $status = job_status_normalise( $status, $this->log );
 
       if ( $status === null )
-         return;
+         return true;
 
-      ## Non-autoflow submissions (DMGA/GA) get their status only through this.
-      $this->update_hpc_analysis_result_status( $status );
+      ## Non-autoflow submissions (DMGA/GA) get their status only through
+      ## this, so its own result has to count: discarding it here is exactly
+      ## how a non-autoflow job's final status could silently fail to land,
+      ## with no retry and no admin mail, while this function still reported
+      ## success because the (irrelevant, for that job) autoflow write below
+      ## was skipped cleanly.
+      $hpc_ok = $this->update_hpc_analysis_result_status( $status );
 
       if ( $this->autoflowID <= 0 )
       {
          $this->logf( "update_autoflow_status() ignored, no id" );
-         return;
+         return $hpc_ok;
       }
 
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
-         return;
+         return false;
 
       ## submitctl.php matches this column against fixed stage words.
       $stage = stage_status_from_job( $status, $this->log );
 
       if ( $stage === null )
-         return;
+         return $hpc_ok;
 
       ## A terminal stage has been reported to the scientist, so nothing may put it
       ## back in progress: that guard stays. It used to apply to every write, which
@@ -651,31 +728,55 @@ class job_state_machine
       if ( $guard === '' )
          $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
 
-      $this->exec( $us3,
-         "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
+      $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
          . "status='" . $this->quote( $us3, $stage ) . "', "
          . "statusMsg='" . $this->quote( $us3, $message ) . "' "
          . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
-         . $guard );
+         . $guard;
+
+      $ok = (bool) $this->exec( $us3, $query );
+
+      ## A lock-wait timeout or a killed session usually clears within
+      ## seconds while the connection itself is still usable; retrying the
+      ## same query on it a couple of times catches that without needing to
+      ## reconnect, which $this->us3 (cached from a one-shot factory, not
+      ## reopenable from here) cannot do anyway. A link that is truly gone
+      ## (2002/2006/2013) will keep failing the same way and still reports
+      ## false after this, for the caller to act on.
+      for ( $attempt = 1; ! $ok && $attempt <= 2 && db_error_is_connection_class( $this->errno( $us3 ) ); $attempt++ )
+      {
+         $this->pause( 2 );
+         $ok = (bool) $this->exec( $us3, $query );
+      }
+
+      return $ok && $hpc_ok;
    }
 
-   ## The status the scientist sees; left alone when there is no mapping.
+   /**
+    * The status the scientist sees; left alone when there is no mapping.
+    *
+    * @return bool true if the write landed, or was correctly skipped (an
+    *              unmapped status, no matching row -- a non-autoflow job
+    *              that predates this table, or a race with the row being
+    *              created -- none of those are failures); false only when
+    *              a connection or an actual write attempt failed.
+    */
    public function update_hpc_analysis_result_status( $status )
    {
       $status = job_status_normalise( $status, $this->log );
 
       if ( $status === null )
-         return;
+         return true;
 
       $queue_status = queue_status_from_job( $status, $this->log );
 
       if ( $queue_status === null )
-         return;
+         return true;
 
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
-         return;
+         return false;
 
       $table = $this->us3_table( 'HPCAnalysisResult' );
 
@@ -692,13 +793,20 @@ class job_state_machine
          "SELECT HPCAnalysisResultID FROM $table"
          . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
-      if ( ! $found || $this->num_rows( $found ) < 1 )
-         return;
+      ## The query itself failing is a real problem (false); finding no
+      ## matching row is not (true) -- a non-autoflow job that predates this
+      ## table, or a race with the row being created. Conflating the two
+      ## here let a connection drop on this SELECT alone report success.
+      if ( ! $found )
+         return false;
+
+      if ( $this->num_rows( $found ) < 1 )
+         return true;
 
       $row = $this->fetch_row( $found );
 
       if ( ! is_array( $row ) || ! isset( $row[ 0 ] ) )
-         return;
+         return true;
 
       $result_id = (int) $row[ 0 ];
 
@@ -717,7 +825,7 @@ class job_state_machine
       ##
       ## Every other terminal-to-terminal move stays blocked: once genuinely
       ## failed or completed-then-failed, nothing moves it again.
-      $this->exec( $us3,
+      return (bool) $this->exec( $us3,
          "UPDATE $table SET "
          . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
          . " AND ( queueStatus NOT IN ('completed', 'failed', 'aborted')"

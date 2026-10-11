@@ -20,6 +20,18 @@ include_once "$us3jm/cleanup_job.php";
 # the polling interval
 $poll_sleep_seconds = 30;
 
+## ultrascan-tickets#1120: +/-20% jitter on the steady-state poll, never
+## below 1s. Many monitors (one per job) start close together -- a batch
+## submission, or services.php's own boot restart relaunching several at
+## once -- and without this they stay in lockstep every $poll_sleep_seconds
+## for as long as they keep running, all hitting the DB and the cluster at
+## the same instant instead of spread across the interval.
+function jobmonitor_poll_sleep_seconds( $base ) {
+   $base   = max( 1, (int) $base );
+   $jitter = (int) round( $base * 0.2 );
+   return $jitter <= 0 ? $base : max( 1, $base + random_int( -$jitter, $jitter ) );
+}
+
 # logging_level 
 # 0 : minimal messages (expected value for production)
 # 1 : add some db messages
@@ -113,6 +125,19 @@ if ( !$nofork ) {
 
     $cancel_shutdown_kill = true;
 
+    ## fclose() above freed fds 0/1/2 with nothing yet to reclaim fd 0: the
+    ## next two fopen()s below would otherwise land on fds 0 and 1, not 1
+    ## and 2, leaving the real fd 2 unclaimed -- and unclaimed is not
+    ## "closed": the next thing in this process that opens anything (the
+    ## per-poll mysqli reconnect in open_db_or_retry(), reliably, since it
+    ## runs before almost everything else) claims the lowest free fd, which
+    ## is then fd 2, for as long as that connection lives. Any later exec()
+    ## without its own explicit `2>` inherits that fd by number and gets a
+    ## live MariaDB socket standing in for its stderr, not a harmless sink.
+    ## Opening /dev/null here first claims fd 0, so $STDOUT/$STDERR land on
+    ## 1 and 2 as intended and fd 2 is never left free for anything else to
+    ## pick up.
+    $STDIN  = fopen( '/dev/null', 'rb' );
     $STDOUT = fopen( $logfile, 'ab' );
     $STDERR = fopen( $logfile, 'ab' );
 }
@@ -148,7 +173,12 @@ pcntl_signal(SIGHUP,  "sig_handler");
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 
 # open db
-open_db();
+## A plain open_db() here would exit outright on a MariaDB blip, including a
+## monitor the boot restart (services.php) had just launched to pick a job
+## back up right after an unclean shutdown -- exactly when a blip is most
+## likely. The main loop below already uses open_db_or_retry() for this
+## reason; the startup connect does too.
+open_db_or_retry();
 
 write_logld( "db opened" );
 
@@ -176,7 +206,7 @@ if (
                      ,true
       ) ) ) {
     mysqli_close( $db_handle );
-    error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+    error_exit( "gfacID $gfacID not found in gfac.analysis" );
 }
 
 ## A metascheduler pseudo-cluster submission (cluster_shortname stays the
@@ -249,11 +279,12 @@ while( 1 ) {
 
     if ( $res_analysis === null ) {
         mysqli_close( $db_handle );
-        error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+        error_exit( "gfacID $gfacID not found in gfac.analysis" );
     }
 
     ## One probe answer per poll: check_job() and the stall paths ask the same
-    ## question, and the cache is what keeps that to a single SSH call.
+    ## question, and the cache is what keeps that to a single call to the
+    ## cluster -- over ssh, or run directly for a 'localhost' => true one.
     job_state_machine::reset_status_cache();
 
     $status                         = $res_analysis->{"status"};
@@ -278,8 +309,8 @@ while( 1 ) {
     }
 
     mysqli_close( $db_handle );
-    sleep( $poll_sleep_seconds );
+    sleep( jobmonitor_poll_sleep_seconds( $poll_sleep_seconds ) );
 }
 
 mysqli_close( $db_handle );
-error_exit( timestamp( "dropped out of main loop, this should not happen" ) );
+error_exit( "dropped out of main loop, this should not happen" );

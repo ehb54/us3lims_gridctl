@@ -14,8 +14,18 @@ $db              = '';
 $editXMLFilename = '';
 $status          = '';
 
+## job_cleanup()'s outcome for a connection-class failure writing a stage
+## inside the finalizing span (after the gfac.analysis row is already
+## deleted). Distinct from -1 ("finalized, give up") so
+## resolve_and_cleanup_job() can tell the two apart: this one must leave the
+## finalizing marker in place for uslims_jobs.php --restart to close out,
+## since the write that marker exists for never actually happened.
+const CLEANUP_FINALIZING_INTERRUPTED = -2;
+
 ## Called by the daemon's cleanup().
-## Returns -1 terminal, 0 retry (not yet finalizable), 1 finalized / nothing to do.
+## Returns -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
+## marker survives for --restart, -1 terminal, 0 retry (not yet finalizable),
+## 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
 {
    $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
@@ -23,12 +33,18 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
    if ( ! $result )
    {
-      ## Retry, not terminal: a query failure here says nothing about whether
-      ## gfacID is still tracked, and returning -1 (terminal) is what used to
-      ## end the monitor on a transient database error.
-      $log_fn( "Query failed $query - " . mysqli_error( $db_handle ) . " - will retry" );
-      mail_to_admin( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
-      return 0;
+      ## A connection-class failure says nothing about whether gfacID is
+      ## still tracked, so it is retried rather than treated as terminal.
+      ## Anything else is a query that can never succeed -- retrying it
+      ## forever would just mail the admin every poll for a problem no
+      ## retry could fix. mail_to_admin_once() dedupes the mail either
+      ## way, so a real outage that does eventually clear is still only one
+      ## 'fail' mail per job, not one per poll.
+      $connection_class = db_error_is_connection_class( mysqli_errno( $db_handle ) );
+      $log_fn( "Query failed $query - " . mysqli_error( $db_handle )
+              . ( $connection_class ? " - will retry" : " - permanent, giving up" ) );
+      mail_to_admin_once( "fail", "Query failed $query\n" . mysqli_error( $db_handle ) );
+      return $connection_class ? 0 : -1;
    }
 
    list( $count ) = mysqli_fetch_array( $result );
@@ -56,9 +72,15 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       $requestID = get_us3_data();
       if ( $requestID === null )
       {
-         ## The database could not answer, not "no such row": retry rather
-         ## than ending the monitor on a connection blip.
+         ## The database could not answer for a connection-class reason, not
+         ## "no such row": retry rather than ending the monitor on a blip.
          return 0;
+      }
+      if ( $requestID === false )
+      {
+         ## A permanent query failure (get_us3_data() already mailed it,
+         ## deduped). Retrying this forever cannot help.
+         return -1;
       }
       if ( $requestID == 0 )
       {
@@ -72,7 +94,16 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       ## span is over. One place rather than every exit path in job_cleanup: what
       ## matters is that the marker survives only when the worker dies mid-span,
       ## and a death skips this as surely as it skips the release below.
-      if ( $outcome !== 0 )
+      ##
+      ## CLEANUP_FINALIZING_INTERRUPTED is the one outcome that is terminal for
+      ## this monitor (it must stop polling: the row is already gone) without
+      ## the stage ever having been written -- a connection-class failure
+      ## reads exactly like a real crash to the code that would otherwise
+      ## remove the marker, even though the worker is still alive and running.
+      ## Leaving the marker here is what lets --restart's existing dead-worker
+      ## close-out finish the job instead of it being stranded with no row,
+      ## no marker, and a stage stuck at 'running' forever.
+      if ( $outcome !== 0 && $outcome !== CLEANUP_FINALIZING_INTERRUPTED )
       {
          cleanup_finalizing_end( $us3_db, $gfacID );
       }
@@ -465,7 +496,7 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    Job Type        : $jobtype
    Job Status      : $status
    Job Message     : $gfac_message
-$aira_details   Stdout          : $stdout
+   Stdout          : $stdout
    ";
 
    if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
@@ -639,11 +670,14 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    chdir( $staging );
 
-   ## us_mpi_analysis writes the tar at the top of the work directory;
-   ## output/ is a fallback for older layouts.
+   ## us_mpi_analysis changes into output/ and archives into that directory
+   ## (us_mpi_analysis.cpp:340, :2515-2516) -- that is where it is on every
+   ## normal job, so it goes first to avoid a guaranteed-failed scp attempt
+   ## against the top-level path before falling back to the real one. The
+   ## top-level name is still tried second in case a layout ever puts it there.
    $tar_candidates = array(
-      "$remoteDir/analysis-results.tar",
       "$remoteDir/output/analysis-results.tar",
+      "$remoteDir/analysis-results.tar",
    );
 
    $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );

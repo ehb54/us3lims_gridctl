@@ -38,6 +38,61 @@ if ( ! function_exists( 'write_logld' ) ) {
    }
 }
 
+/**
+ * Reopen the global $db_handle that job_machine()'s shim functions
+ * (gridctl.php) read fresh on every call, so a retry after this point
+ * reaches a live connection instead of reusing one a MariaDB restart
+ * already killed. Best-effort: on failure, $db_handle is left exactly as
+ * it was, so the caller's own retry still fails the same way and reports
+ * it, instead of the failure being silently swallowed here.
+ */
+function reopen_global_db_handle( $dbhost, $user, $passwd )
+{
+   global $db_handle;
+
+   $reconnected = @mysqli_connect( $dbhost, $user, $passwd );
+
+   if ( $reconnected )
+   {
+      @mysqli_close( $db_handle );
+      $db_handle = $reconnected;
+   }
+}
+
+## A thin wrapper around sleep(), so a test can define its own no-op version
+## first (the way run-job-cleanup.php's harness already does for write_log()/
+## update_autoflow_status()/mail_to_admin()) instead of actually waiting out
+## the real ~120s backoff budget on every run that reaches this path.
+if ( ! function_exists( 'cleanup_job_sleep' ) ) {
+   function cleanup_job_sleep( $seconds )
+   {
+      sleep( $seconds );
+   }
+}
+
+/**
+ * Wait times, in seconds, for retrying the finalizing status write: doubles
+ * from 2s, capped at 30s, stopping once the running total would reach or
+ * pass a two-minute budget. (2, 4, 8, 16, 30, 30, 30) -- 7 attempts, ~120s
+ * total -- replacing the old 2 retries, 2s apart (~4-6s total), which a real
+ * MariaDB restart under load can outlast.
+ */
+function finalizing_retry_wait_schedule()
+{
+   $schedule = array();
+   $elapsed  = 0;
+   $wait     = 2;
+
+   while ( $elapsed < 120 )
+   {
+      $schedule[] = $wait;
+      $elapsed   += $wait;
+      $wait       = min( 30, $wait * 2 );
+   }
+
+   return $schedule;
+}
+
 function job_cleanup( $us3_db, $reqID, $db_handle )
 {
    global $dbhost;
@@ -66,12 +121,20 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $us3_link )
    {
-      ## Retryable, not the job's own failure: a connect failure (e.g.
-      ## MariaDB at max_connections) says nothing about whether the job
-      ## finished. The caller's own connection ($db_handle) can still mark
-      ## the stage FAILED below; don't do it here on a transient blip.
-      write_logld( "$me: Could not connect to DB $dbhost : $us3_db - will retry" );
-      return( 0 );
+      ## Retryable only for a connection-class reason (e.g. MariaDB at
+      ## max_connections), which says nothing about whether the job
+      ## finished. Anything else is a connection that will never succeed
+      ## (bad credentials, unknown database) and must be treated as
+      ## terminal, not retried forever.
+      if ( db_error_is_connection_class( mysqli_connect_errno() ) )
+      {
+         write_logld( "$me: Could not connect to DB $dbhost : $us3_db - will retry" );
+         return( 0 );
+      }
+      write_logld( "$me: Could not connect to DB $dbhost : $us3_db - permanent: "
+                 . mysqli_connect_error() );
+      update_autoflow_status( 'FAILED', "Internal error - cleanup could not connect to DB $us3_db" );
+      return( -1 );
    }
 
    ## First get basic info for email messages
@@ -81,13 +144,21 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## Retryable: a failed SELECT says nothing about the job itself. Close
-      ## $us3_link first: this now recurs every poll during an outage
-      ## instead of ending the job's monitoring once, so leaving it open
-      ## would leak one connection per poll instead of one connection total.
-      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      ## Retryable only for a connection-class reason. Closing $us3_link
+      ## before returning isn't needed for correctness -- PHP frees a
+      ## function-local mysqli link when the function returns regardless --
+      ## but costs nothing and makes the connection's lifetime here explicit.
+      if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
+      {
+         write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+         mysqli_close( $us3_link );
+         return( 0 );
+      }
+      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - permanent" );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       mysqli_close( $us3_link );
-      return( 0 );
+      return( -1 );
    }
 
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
@@ -107,10 +178,18 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## Retryable, and closed for the same reason as the SELECT above.
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) . " - will retry" );
+      ## Retryable only for a connection-class reason, and closed for the
+      ## same reason as the SELECT above.
+      if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
+      {
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) . " - will retry" );
+         mysqli_close( $us3_link );
+         return( 0 );
+      }
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) . " - permanent" );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       mysqli_close( $us3_link );
-      return( 0 );
+      return( -1 );
    }
 
    if ( mysqli_num_rows( $result ) == 0 )
@@ -130,13 +209,21 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## A failed query is not the same claim as "this request has no result
-      ## row": it is retryable, not terminal, and marking the job FAILED here
-      ## would make a transient database error look like the job's own
-      ## failure. 0 means retry, per resolve_and_cleanup_job()'s contract.
-      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+      ## A connection-class failure is not the same claim as "this request
+      ## has no result row": it is retryable, not terminal. Anything else
+      ## is a query that can never succeed. 0/-1 per
+      ## resolve_and_cleanup_job()'s contract.
+      if ( db_error_is_connection_class( mysqli_errno( $us3_link ) ) )
+      {
+         write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - will retry" );
+         mysqli_close( $us3_link );
+         return( 0 );
+      }
+      write_logld( "$me: Bad query: $query - " . mysqli_error( $us3_link ) . " - permanent" );
+      mail_to_user( "fail", "Internal Error $requestID\n$query\n" . mysqli_error( $us3_link ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $us3_link ) );
       mysqli_close( $us3_link );
-      return( 0 );
+      return( -1 );
    }
 
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result );
@@ -148,9 +235,17 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    $result = mysqli_query( $db_handle, $query );
    if ( ! $result )
    {
-      ## Retryable: a failed SELECT says nothing about the job itself.
-      write_logld( "$me: Could not select GFAC status for $gfacID - will retry" );
-      return( 0 );
+      ## Retryable only for a connection-class reason.
+      if ( db_error_is_connection_class( mysqli_errno( $db_handle ) ) )
+      {
+         write_logld( "$me: Could not select GFAC status for $gfacID - will retry" );
+         return( 0 );
+      }
+      write_logld( "$me: Could not select GFAC status for $gfacID - permanent: "
+                 . mysqli_error( $db_handle ) );
+      mail_to_user( "fail", "Could not select GFAC status for $gfacID" );
+      update_autoflow_status( 'FAILED', "Could not select GFAC status for $gfacID" );
+      return( -1 );
    }
 
    $num_rows = mysqli_num_rows( $result );
@@ -208,9 +303,16 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    if ( ! $result )
    {
-      ## Retryable: a failed SELECT says nothing about the job itself.
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) . " - will retry" );
-      return( 0 );
+      ## Retryable only for a connection-class reason.
+      if ( db_error_is_connection_class( mysqli_errno( $db_handle ) ) )
+      {
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) . " - will retry" );
+         return( 0 );
+      }
+      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) . " - permanent" );
+      mail_to_user( "fail", "Internal error " . mysqli_error( $db_handle ) );
+      update_autoflow_status( 'FAILED', "Internal error - query failed: $query" . mysqli_error( $db_handle ) );
+      return( -1 );
    }
 
    $num_rows = mysqli_num_rows( $result );
@@ -412,8 +514,61 @@ write_logld( "$me: *messages.txt written" );
 
    $result = mysqli_query( $us3_link, $query );
 
+   ## A lock-wait timeout or a killed session (1205, 1213, 2006) with MariaDB
+   ## otherwise up usually clears within seconds. Reconnecting and retrying
+   ## here catches that, instead of unconditionally leaving the finalizing
+   ## marker for --restart: there is no cron, so that left the job sitting
+   ## "running" until an operator happened to run it by hand, and --restart
+   ## then closes a dead-worker marker out as FAILED without importing the
+   ## results that are sitting right here waiting to be -- worse than just
+   ## retrying a handful of seconds later.
+   for ( $attempt = 1; ! $result && $attempt <= 3
+       && db_error_is_connection_class( mysqli_errno( $us3_link ) ); $attempt++ )
+   {
+      write_logld( "$me: stdout/stderr write failed (" . mysqli_error( $us3_link )
+                  . "), reconnecting and retrying, attempt $attempt" );
+      sleep( 2 );
+      $reconnected = @mysqli_connect( $dbhost, $user, $passwd, $us3_db );
+
+      if ( $reconnected )
+      {
+         mysqli_close( $us3_link );
+         $us3_link = $reconnected;
+         $result   = mysqli_query( $us3_link, $query );
+      }
+   }
+
    if ( ! $result )
    {
+      ## Still failing after the retries above. Only when MariaDB is
+      ## genuinely unreachable -- not just this one link -- is the
+      ## finalizing marker worth leaving for --restart: gfac.analysis is
+      ## already deleted above, so this worker cannot retry via the live
+      ## poll loop the way code earlier in this function does, and the
+      ## marker is the only thing that lets --restart notice and close this
+      ## out later. A connection-class error that persists while a fresh
+      ## connection attempt succeeds is contention on this one query, not an
+      ## outage, and is reported the same way every other write failure in
+      ## this function already is.
+      $still_unreachable = db_error_is_connection_class( mysqli_errno( $us3_link ) );
+
+      if ( $still_unreachable )
+      {
+         $probe = @mysqli_connect( $dbhost, $user, $passwd, $us3_db );
+         $still_unreachable = ! $probe;
+         if ( $probe )
+         {
+            mysqli_close( $probe );
+         }
+      }
+
+      if ( $still_unreachable )
+      {
+         write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link )
+                     . " - connection-class and MariaDB still unreachable after retrying,"
+                     . " leaving the finalizing marker for --restart" );
+         return( CLEANUP_FINALIZING_INTERRUPTED );
+      }
       update_autoflow_status( 'FAILED', "Could not insert data into HPCAnalysis" );
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $us3_link ) );
       mail_to_user( "fail", "Bad query:\n$query\n" . mysqli_error( $us3_link ) );
@@ -477,8 +632,14 @@ write_logld( "$me: *messages.txt written" );
    }
 ##write_logld( "$me: tar files extracted" );
 
-   ## Explicit rather than jobmonitor.php's globals, which joblinkjson.php
-   ## lacks: it calls in through gridctl.php without jobmonitor.php's includes.
+   ## Explicit rather than jobmonitor.php's globals -- not because
+   ## joblinkjson.php calls this (it doesn't; it only requires
+   ## gridctl_bootstrap.php and runs its own query directly), but because
+   ## job_cleanup() can be called from contexts other than jobmonitor.php's own main loop,
+   ## where $GLOBALS['db_handle']/['us3_db']/['autoflowAnalysisID'] are not
+   ## guaranteed to be set, so get_autoflow_type_id()'s global fallback
+   ## (used only when called with no arguments, e.g. from jobmonitor.php
+   ## itself) is not relied on here.
    $autoflow = get_autoflow_type_id( $us3_link, $us3_db, $autoflowAnalysisID );
 
    ## Insert the model files and noise files
@@ -779,7 +940,70 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 ##   mysqli_close( $db_handle );
 
    ## Set the final status now that all model records are written, then notify the user.
-   update_autoflow_status( $status, $queue_msg );
+   ##
+   ## The job has already succeeded by this point -- results are imported,
+   ## model records are fixed up -- so a failure writing this one status
+   ## flag is not a job failure. It is retried a couple of times for the
+   ## same lock-wait/killed-session reasons as the write above, and if it
+   ## still will not land, the user still gets the success mail they are
+   ## owed and the function still reports success: returning
+   ## CLEANUP_FINALIZING_INTERRUPTED here (as the write above does) would be
+   ## wrong, not just unhelpful -- the caller's close-out for that marks the
+   ## job FAILED with results never imported, which is false; the results
+   ## are sitting right here, imported. What is actually true is narrower:
+   ## autoflowAnalysis's status column did not get the final word, so the
+   ## stage can stay "running" with nothing left to move it, silently,
+   ## unless an admin is told to go fix it by hand.
+   $status_recorded = update_autoflow_status( $status, $queue_msg );
+
+   ## update_autoflow_status()'s own link comes from job_machine()'s global
+   ## $db_handle, read fresh on every call -- but, unlike the write above,
+   ## nothing here reopens it. jobmonitor.php's own open_db_or_retry()/
+   ## mysqli_ping() cycle is what normally recovers a dropped connection,
+   ## and it only runs at the top of the main poll loop, which has already
+   ## exited by the time this finalizing write runs: a MariaDB restart
+   ## between the last poll and here left every retry below reusing the
+   ## same dead handle forever ("MySQL server has gone away" nine times
+   ## running, confirmed). Reconnecting before each retry, exactly as the
+   ## write above does for its own link, is what lets this one actually
+   ## recover from the same kind of outage.
+   ##
+   ## Doubling backoff over about two minutes, not 2 retries 2s apart: the
+   ## old budget (~4-6s total) only covered a MariaDB restart that happened
+   ## to land within about 4s on an autoflow job, 3s on a non-autoflow one
+   ## (round 11 should-fix) -- shorter than a real restart under load can
+   ## take. finalizing_retry_wait_schedule() is the pure sequence, kept
+   ## separate so a test can assert its shape without a live DB.
+   foreach ( finalizing_retry_wait_schedule() as $wait )
+   {
+      if ( $status_recorded )
+      {
+         break;
+      }
+
+      cleanup_job_sleep( $wait );
+
+      reopen_global_db_handle( $dbhost, $user, $passwd );
+
+      $status_recorded = update_autoflow_status( $status, $queue_msg );
+   }
+
+   if ( ! $status_recorded )
+   {
+      write_logld( "$me: update_autoflow_status() did not land for gfacID=$gfacID"
+                  . " after retrying; the job itself completed, but the autoflowAnalysis"
+                  . " and/or HPCAnalysisResult status may be stuck \"running\" until this"
+                  . " is corrected by hand" );
+      ## Names both tables now: update_autoflow_status()'s own return value
+      ## folds in update_hpc_analysis_result_status()'s result, so this can
+      ## be the only write that failed on a non-autoflow (DMGA/GA) job,
+      ## which has no autoflowAnalysis row to point at in the first place.
+      mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
+                   . " (requestID=$requestID, status=$status) after retrying. The job itself"
+                   . " completed and the user has been notified; the autoflowAnalysis and/or"
+                   . " HPCAnalysisResult status column may still need to be corrected by hand." );
+   }
+
    mail_to_user( "success", "" );
 
    return 1;
