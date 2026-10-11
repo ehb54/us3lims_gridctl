@@ -51,19 +51,42 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
    $lock_name = substr( 'pick_cluster:' . $pseudo_cluster, 0, 64 );
    $locked    = false;
 
-   $stmt = mysqli_prepare( $gfac_link, 'SELECT GET_LOCK(?, ?)' );
-   if ( $stmt )
+   ## Caught, not just checked for a false prepare()/execute(): see
+   ## pick_cluster_status_snapshot()'s own comment -- the interactive path
+   ## reaches this function without autoflow's MYSQLI_REPORT_OFF, so a real
+   ## failure here throws there instead of returning false. Logged only in
+   ## the catch, deliberately: $got !== 1 (another caller already holds the
+   ## lock, or the timeout elapsed) is normal, expected contention, not an
+   ## error, and must stay silent the way it always has -- only a genuine
+   ## failure to even ask (a dead connection, a permissions change) is worth
+   ## a log line, so it is distinguishable from ordinary contention instead
+   ## of both reaching here as the same silent "fell through unlocked".
+   try
    {
-      mysqli_stmt_bind_param( $stmt, 'si', $lock_name, $lock_timeout_seconds );
-      if ( mysqli_stmt_execute( $stmt ) )
+      $stmt = mysqli_prepare( $gfac_link, 'SELECT GET_LOCK(?, ?)' );
+      if ( $stmt )
       {
-         mysqli_stmt_bind_result( $stmt, $got );
-         if ( mysqli_stmt_fetch( $stmt ) )
+         mysqli_stmt_bind_param( $stmt, 'si', $lock_name, $lock_timeout_seconds );
+         if ( mysqli_stmt_execute( $stmt ) )
          {
-            $locked = ( $got === 1 );
+            mysqli_stmt_bind_result( $stmt, $got );
+            if ( mysqli_stmt_fetch( $stmt ) )
+            {
+               $locked = ( $got === 1 );
+            }
          }
+         mysqli_stmt_close( $stmt );
       }
-      mysqli_stmt_close( $stmt );
+      else
+      {
+         error_log( "pick_cluster_reserve: GET_LOCK prepare failed for '$lock_name': " . mysqli_error( $gfac_link )
+                  . ' -- falling through to an unlocked decision' );
+      }
+   }
+   catch ( \Throwable $e )
+   {
+      error_log( "pick_cluster_reserve: GET_LOCK failed for '$lock_name': " . $e->getMessage()
+               . ' -- falling through to an unlocked decision' );
    }
 
    $now           = $now === null ? time() : (int) $now;
@@ -95,12 +118,33 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
    {
       if ( $locked )
       {
-         $unlock_stmt = mysqli_prepare( $gfac_link, 'SELECT RELEASE_LOCK(?)' );
-         if ( $unlock_stmt )
+         ## Caught, not left to propagate: this finally can already be
+         ## running because the try block above threw, and an exception
+         ## escaping a finally replaces that original one -- the caller
+         ## would see "RELEASE_LOCK failed" and never learn what actually
+         ## went wrong with the decision itself. Logged either way, since
+         ## a lock that was genuinely acquired but never explicitly
+         ## released still needs a trace of why, even though MySQL's own
+         ## session-scoped auto-release (see this file's header comment)
+         ## is the backstop that keeps it from being held forever.
+         try
          {
-            mysqli_stmt_bind_param( $unlock_stmt, 's', $lock_name );
-            mysqli_stmt_execute( $unlock_stmt );
-            mysqli_stmt_close( $unlock_stmt );
+            $unlock_stmt = mysqli_prepare( $gfac_link, 'SELECT RELEASE_LOCK(?)' );
+            if ( $unlock_stmt )
+            {
+               mysqli_stmt_bind_param( $unlock_stmt, 's', $lock_name );
+               mysqli_stmt_execute( $unlock_stmt );
+               mysqli_stmt_close( $unlock_stmt );
+            }
+            else
+            {
+               error_log( "pick_cluster_reserve: RELEASE_LOCK prepare failed for '$lock_name': "
+                        . mysqli_error( $gfac_link ) );
+            }
+         }
+         catch ( \Throwable $e )
+         {
+            error_log( "pick_cluster_reserve: RELEASE_LOCK failed for '$lock_name': " . $e->getMessage() );
          }
       }
    }
@@ -116,21 +160,31 @@ function pick_cluster_reserve( $gfac_link, $pseudo_cluster, array $candidates, a
 ## failed insert here never fails the submission itself.
 function pick_cluster_record_decision( $gfac_link, $pseudo_cluster, array $result )
 {
-   $stmt = mysqli_prepare( $gfac_link,
-      'INSERT INTO gfac.metascheduler_decision (pseudo_cluster, chosen, reason, tier, scores)'
-      . ' VALUES (?, ?, ?, ?, ?)' );
-
-   if ( ! $stmt )
+   ## Caught, same reason as every other best-effort write in this file: the
+   ## interactive path has no MYSQLI_REPORT_OFF, so a failure here would
+   ## otherwise throw instead of just skipping the record as it always has.
+   try
    {
-      return;
+      $stmt = mysqli_prepare( $gfac_link,
+         'INSERT INTO gfac.metascheduler_decision (pseudo_cluster, chosen, reason, tier, scores)'
+         . ' VALUES (?, ?, ?, ?, ?)' );
+
+      if ( ! $stmt )
+      {
+         return;
+      }
+
+      $chosen = $result[ 'chosen' ] ?? null;
+      $reason = $result[ 'reason' ] ?? null;
+      $tier   = $result[ 'tier' ] ?? null;
+      $scores = json_encode( $result[ 'scores' ] ?? array() );
+
+      mysqli_stmt_bind_param( $stmt, 'sssss', $pseudo_cluster, $chosen, $reason, $tier, $scores );
+      mysqli_stmt_execute( $stmt );
+      mysqli_stmt_close( $stmt );
    }
-
-   $chosen = $result[ 'chosen' ] ?? null;
-   $reason = $result[ 'reason' ] ?? null;
-   $tier   = $result[ 'tier' ] ?? null;
-   $scores = json_encode( $result[ 'scores' ] ?? array() );
-
-   mysqli_stmt_bind_param( $stmt, 'sssss', $pseudo_cluster, $chosen, $reason, $tier, $scores );
-   mysqli_stmt_execute( $stmt );
-   mysqli_stmt_close( $stmt );
+   catch ( \Throwable $e )
+   {
+      error_log( 'pick_cluster_record_decision: ' . $e->getMessage() );
+   }
 }

@@ -411,29 +411,48 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
 
    $now = $now === null ? time() : (int) $now;
 
-   $quoted = array_map(
-      function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
-      $candidates
-   );
-
-   $result = mysqli_query( $gfac_link,
-      "SELECT cluster, status, queued, running, UNIX_TIMESTAMP(time) AS epoch"
-      . " FROM gfac.cluster_status WHERE cluster IN (" . implode( ',', $quoted ) . ")" );
-
-   if ( $result )
+   ## try/catch, not just the $result === false check below: this file's
+   ## entire contract is "a failed query leaves data out, never fails the
+   ## caller", which mysqli only honors under MYSQLI_REPORT_OFF. Autoflow sets
+   ## that globally in gridctl_bootstrap.php, but an interactive submission
+   ## reaches this same function through require_cluster.php, which never
+   ## loads that bootstrap -- so under PHP 8.1+'s real default
+   ## (MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT) the identical failure
+   ## throws there instead of returning false, uncaught, turning "no status
+   ## data, treat every candidate as ineligible" into a fatal 500. Catching
+   ## here makes the function behave the same regardless of which caller
+   ## loaded it first or what mysqli_report() is set to process-wide.
+   try
    {
-      while ( $row = mysqli_fetch_assoc( $result ) )
+      $quoted = array_map(
+         function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
+         $candidates
+      );
+
+      $result = mysqli_query( $gfac_link,
+         "SELECT cluster, status, queued, running, UNIX_TIMESTAMP(time) AS epoch"
+         . " FROM gfac.cluster_status WHERE cluster IN (" . implode( ',', $quoted ) . ")" );
+
+      if ( $result )
       {
-         $snapshot[ $row[ 'cluster' ] ] = array(
-            'status'  => $row[ 'status' ],
-            'queued'  => (int) $row[ 'queued' ],
-            'running' => (int) $row[ 'running' ],
-            'time'    => (int) $row[ 'epoch' ],
-         );
+         while ( $row = mysqli_fetch_assoc( $result ) )
+         {
+            $snapshot[ $row[ 'cluster' ] ] = array(
+               'status'  => $row[ 'status' ],
+               'queued'  => (int) $row[ 'queued' ],
+               'running' => (int) $row[ 'running' ],
+               'time'    => (int) $row[ 'epoch' ],
+            );
+         }
       }
+      ## A failed query ($result === false, or caught below) leaves $snapshot
+      ## empty: every candidate still reads as "no status data" below, same
+      ## as before.
    }
-   ## A failed query ($result === false) leaves $snapshot empty: every
-   ## candidate still reads as "no status data" below, same as before.
+   catch ( \Throwable $e )
+   {
+      error_log( 'pick_cluster_status_snapshot: ' . $e->getMessage() );
+   }
 
    $nudge_ttl_seconds = $nudge_ttl_seconds === null
                       ? pick_cluster_default_config()[ 'nudge_ttl_seconds' ] : (int) $nudge_ttl_seconds;
@@ -474,25 +493,36 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
       return $counts;
    }
 
-   $quoted = array_map(
-      function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
-      $candidates
-   );
-
-   $cutoff = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
-
-   $result = mysqli_query( $gfac_link,
-      "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
-      . " WHERE cluster IN (" . implode( ',', $quoted ) . ")"
-      . " AND time >= '" . mysqli_real_escape_string( $gfac_link, $cutoff ) . "'"
-      . " GROUP BY cluster" );
-
-   if ( $result )
+   ## See pick_cluster_status_snapshot()'s own comment on why this is caught,
+   ## not just checked for a false return: the interactive path reaches this
+   ## function without autoflow's MYSQLI_REPORT_OFF, so a query failure here
+   ## throws there instead.
+   try
    {
-      while ( $row = mysqli_fetch_assoc( $result ) )
+      $quoted = array_map(
+         function ( $name ) use ( $gfac_link ) { return "'" . mysqli_real_escape_string( $gfac_link, $name ) . "'"; },
+         $candidates
+      );
+
+      $cutoff = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
+
+      $result = mysqli_query( $gfac_link,
+         "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
+         . " WHERE cluster IN (" . implode( ',', $quoted ) . ")"
+         . " AND time >= '" . mysqli_real_escape_string( $gfac_link, $cutoff ) . "'"
+         . " GROUP BY cluster" );
+
+      if ( $result )
       {
-         $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+         while ( $row = mysqli_fetch_assoc( $result ) )
+         {
+            $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+         }
       }
+   }
+   catch ( \Throwable $e )
+   {
+      error_log( 'pick_cluster_nudge_counts: ' . $e->getMessage() );
    }
 
    return $counts;
@@ -508,24 +538,34 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
  */
 function pick_cluster_record_nudge( $gfac_link, $cluster, $now, $ttl_seconds )
 {
-   $stmt = mysqli_prepare( $gfac_link,
-      'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );
-
-   if ( $stmt )
+   ## Best-effort, same as the rest of this file -- caught so a thrown
+   ## failure (interactive path, no MYSQLI_REPORT_OFF) is as harmless to the
+   ## caller as a prepare() that merely returned false already was.
+   try
    {
-      mysqli_stmt_bind_param( $stmt, 'si', $cluster, $now );
-      mysqli_stmt_execute( $stmt );
-      mysqli_stmt_close( $stmt );
+      $stmt = mysqli_prepare( $gfac_link,
+         'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );
+
+      if ( $stmt )
+      {
+         mysqli_stmt_bind_param( $stmt, 'si', $cluster, $now );
+         mysqli_stmt_execute( $stmt );
+         mysqli_stmt_close( $stmt );
+      }
+
+      $cutoff_stmt = mysqli_prepare( $gfac_link,
+         'DELETE FROM gfac.cluster_status_nudge WHERE time < FROM_UNIXTIME(?)' );
+
+      if ( $cutoff_stmt )
+      {
+         $cutoff = $now - max( 0, (int) $ttl_seconds );
+         mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
+         mysqli_stmt_execute( $cutoff_stmt );
+         mysqli_stmt_close( $cutoff_stmt );
+      }
    }
-
-   $cutoff_stmt = mysqli_prepare( $gfac_link,
-      'DELETE FROM gfac.cluster_status_nudge WHERE time < FROM_UNIXTIME(?)' );
-
-   if ( $cutoff_stmt )
+   catch ( \Throwable $e )
    {
-      $cutoff = $now - max( 0, (int) $ttl_seconds );
-      mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
-      mysqli_stmt_execute( $cutoff_stmt );
-      mysqli_stmt_close( $cutoff_stmt );
+      error_log( 'pick_cluster_record_nudge: ' . $e->getMessage() );
    }
 }
