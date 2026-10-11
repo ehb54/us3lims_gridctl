@@ -90,6 +90,19 @@ function pick_cluster_estimate_job_requirements( $stage, $xmljson, $paramgroup )
       $vsize      = isset( $attrs->{'variations_count'} ) ? (int) $attrs->{'variations_count'} : 10;
       $curve_type = isset( $attrs->{'curve_type'} ) ? (string) $attrs->{'curve_type'} : null;
 
+      ## A zero or negative variations_count (bad/empty XML) must not produce
+      ## a zero or negative maxproc -- pick_cluster_meets_requirements() reads
+      ## that as "requirement not resolved", which silently disables the
+      ## size filter entirely rather than surfacing the bad input. Same "not
+      ## known yet" treatment the missing-attrs branch above already gets.
+      if ( $vsize <= 0 )
+      {
+         error_log( "pick_cluster_estimate_job_requirements: non-positive variations_count "
+                  . "(" . var_export( isset( $attrs->{'variations_count'} ) ? $attrs->{'variations_count'} : null, true )
+                  . ") -- treating job sizing as not known yet" );
+         return array();
+      }
+
       return array( 'maxproc' => ( $curve_type !== 'HL' ) ? $vsize * $vsize : $vsize );
    }
 
@@ -165,7 +178,28 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
 
       $limit = $opt( $key, null );
 
-      if ( $limit !== null && (int) $job_requirements[ $key ] > (int) $limit )
+      if ( $limit === null )
+      {
+         continue;
+      }
+
+      ## A non-numeric limit (a typo'd config value, a sentinel like
+      ## 'unlimited' that was never actually wired up) must never silently
+      ## become 0 via (int) -- that reads as "this cluster takes zero of
+      ## everything", rejecting every sized job with the same "does not meet
+      ## job requirements" message a genuinely small cluster gets, with
+      ## nothing to tell the two apart. Logged and skipped instead: treated
+      ## the same as "not configured", never as "configured to reject
+      ## everything".
+      if ( ! is_numeric( $limit ) )
+      {
+         error_log( "pick_cluster_meets_requirements: non-numeric '$key' limit "
+                  . "(" . var_export( $limit, true ) . ") in cluster config -- "
+                  . "treating as not configured" );
+         continue;
+      }
+
+      if ( (int) $job_requirements[ $key ] > (int) $limit )
       {
          return false;
       }
