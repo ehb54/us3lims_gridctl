@@ -168,21 +168,24 @@ if ( !function_exists( 'queuepos_report' ) ) {
 
         $jinfo = (object)[];
 
-        ## Number of entries actually parsed, not the raw line count: a
-        ## malformed row contributes nothing to the position count either.
-        $jcount = count( $rows );
-
-        ## Number of running jobs ahead of the queue.
-        $jstart = 0;
+        ## Rank among PD jobs only, in listing order: the first pending job
+        ## squeue lists gets 1 (next up), the second gets 2, and so on.
+        ## Previously this counted every row DOWN from the total count
+        ## instead, then subtracted where the first "R" row appeared --
+        ## which numbered the *first*-listed PD job highest and the
+        ## *last*-listed one 1, backwards from what "position in queue"
+        ## means, confirmed on a real cluster: the next job to start
+        ## reported position 10500 (of 10500), the last reported 1.
+        $pdRank = 0;
 
         foreach ( $rows as $r ) {
             list( $jobid, $state ) = $r;
             $jinfo->{ $jobid } = (object)[];
             $jinfo->{ $jobid }->state = $state;
-            if ( ! $jstart && $state === "R" ) {
-                $jstart = $jcount;
+            if ( $state === "PD" ) {
+                $pdRank++;
             }
-            $jinfo->{ $jobid }->pos   = $jcount--;
+            $jinfo->{ $jobid }->pos = $pdRank;
         }
 
         ## Listing order is not a guaranteed start order, so "pos" has always
@@ -194,7 +197,7 @@ if ( !function_exists( 'queuepos_report' ) ) {
         ## than a count that is now confidently wrong.
         foreach ( $jinfo as $v ) {
             switch ( $v->state ) {
-                case "PD"  : $v->pos = $malformed > 0 ? -1 : $v->pos - $jstart; break;
+                case "PD"  : $v->pos = $malformed > 0 ? -1 : $v->pos; break;
                 case "R"   : $v->pos = 0; break;
                 default    : $v->pos = -1; break;
             }
