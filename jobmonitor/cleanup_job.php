@@ -482,6 +482,8 @@ write_logld( "$me: *messages.txt written" );
    for ( $attempt = 1; ! $result && $attempt <= 3
        && db_error_is_connection_class( mysqli_errno( $us3_link ) ); $attempt++ )
    {
+      write_logld( "$me: stdout/stderr write failed (" . mysqli_error( $us3_link )
+                  . "), reconnecting and retrying, attempt $attempt" );
       sleep( 2 );
       $reconnected = @mysqli_connect( $dbhost, $user, $passwd, $us3_db );
 

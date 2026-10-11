@@ -21,8 +21,9 @@ QUEUE=$1
 ## down or drained. %F adds per-partition node counts as
 ## allocated/idle/other/total. A partition is only really usable when it is
 ## admin-up AND has at least one allocated or idle node -- checking %a alone
-## (the old behavior, ultrascan-tickets#343) reported the whole queue down
-## the moment even one node did, while others stayed available.
+## (the old behavior, ultrascan-tickets#343) reported the whole queue up as
+## long as the partition itself was enabled, even with every node down or
+## drained and nothing in it able to actually run anything.
 ##
 ## A row with no AVAIL field at all means sinfo matched nothing for this
 ## partition (a typo, or a partition that does not exist here), which counts

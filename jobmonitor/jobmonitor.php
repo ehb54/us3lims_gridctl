@@ -125,6 +125,19 @@ if ( !$nofork ) {
 
     $cancel_shutdown_kill = true;
 
+    ## fclose() above freed fds 0/1/2 with nothing yet to reclaim fd 0: the
+    ## next two fopen()s below would otherwise land on fds 0 and 1, not 1
+    ## and 2, leaving the real fd 2 unclaimed -- and unclaimed is not
+    ## "closed": the next thing in this process that opens anything (the
+    ## per-poll mysqli reconnect in open_db_or_retry(), reliably, since it
+    ## runs before almost everything else) claims the lowest free fd, which
+    ## is then fd 2, for as long as that connection lives. Any later exec()
+    ## without its own explicit `2>` inherits that fd by number and gets a
+    ## live MariaDB socket standing in for its stderr, not a harmless sink.
+    ## Opening /dev/null here first claims fd 0, so $STDOUT/$STDERR land on
+    ## 1 and 2 as intended and fd 2 is never left free for anything else to
+    ## pick up.
+    $STDIN  = fopen( '/dev/null', 'rb' );
     $STDOUT = fopen( $logfile, 'ab' );
     $STDERR = fopen( $logfile, 'ab' );
 }

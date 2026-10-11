@@ -44,7 +44,7 @@ $cmd[ "esign"     ] = "$us3bin/esign.php";
 ## is not one of $lock's own services, so without this it keeps retrying
 ## after a stop and can start monitors for services this call just stopped,
 ## once MariaDB finally comes back. Called unconditionally by both the
-## "stop" and "restart" cases below, not only from inside stop() itself
+## "stop" and "restart" cases below, not only from inside stop() itself:
 ## those cases only call stop() when a $lock daemon is
 ## actually running, but a pending retry child can exist with every $lock
 ## daemon down (e.g. a prior start() left one retrying with MariaDB still
@@ -66,29 +66,45 @@ $cmd[ "esign"     ] = "$us3bin/esign.php";
 ## log and an unrelated `watch pgrep -af '<pattern>'` and another user's
 ## grep. The child is always spawned as a lone background command (see the
 ## exec() call below), never wrapped in a larger compound one, so anchoring
-## to its exact three-argument invocation loses nothing real.
+## to its exact three-argument invocation loses nothing real -- the first
+## argument (the interpreter path) is matched as any one token rather than
+## this invocation's own exact PHP_BINARY; see pending_restart_retry_pattern().
 ##
 ## A separate function so a test can see exactly what will be matched
 ## without actually killing anything.
 ##
 ## posix_ere_quote(), not preg_quote(): pkill -f matches with glibc's POSIX
-## extended regex, a different engine from PCRE with a smaller special-
-## character set (no ':', '=', '!', '<', '>', '-', '#', all of which
-## preg_quote backslash-escapes anyway). That extra escaping is silently a
-## no-op in PCRE but not guaranteed to be in POSIX ERE, confirmed here: a
-## path containing '(', ')' and ':' built with preg_quote() stopped
-## matching at all, while the same path through posix_ere_quote() matched
-## correctly. PHP_BINARY and a real __FILE__ are always plain filesystem
-## paths, never containing any of that either way, which is exactly why
-## this was never seen in production -- but "never seen" is not "cannot
-## happen", and a silently-wrong pattern here is the same class of bug this
-## whole function exists to avoid.
+## extended regex, a different engine from PCRE. The two metacharacter sets
+## mostly overlap (both treat '(', ')', '.', '*', etc. specially), but
+## preg_quote() backslash-escapes several characters glibc's ERE gives no
+## special meaning at all ('-', '#', ':', '=', '!') -- harmless there, since
+## escaping an ordinary character is a no-op. '<' and '>' are different:
+## glibc's ERE gives a backslash-escaped '\<' or '\>' its own GNU-extension
+## meaning (a word-boundary anchor, like PCRE's own \b), not a literal '<'
+## or '>'. preg_quote() escapes both, so a path containing either would
+## silently stop matching as a literal path and start matching as a word
+## boundary instead. PHP_BINARY and a real __FILE__ are always plain
+## filesystem paths, never containing '<' or '>' either way, which is
+## exactly why this was never seen in production -- but "never seen" is not
+## "cannot happen", and a silently-wrong pattern here is the same class of
+## bug this whole function exists to avoid.
 function posix_ere_quote( $s ) {
     return preg_replace( '/[.\\\\*+?()\[\]{}|^$]/', '\\\\$0', $s );
 }
 
 function pending_restart_retry_pattern() {
-    return '^' . posix_ere_quote( PHP_BINARY ) . ' ' . posix_ere_quote( __FILE__ )
+    ## Not anchored to *this* invocation's own PHP_BINARY: the retry child
+    ## was spawned with whatever PHP_BINARY resolved to back then (see the
+    ## exec() call below), and a later stop run under a different resolved
+    ## interpreter path -- an upgrade, a different wrapper -- would build a
+    ## pattern that could never match a child spawned under the old one,
+    ## leaving it running forever with no way for a later stop to reach it.
+    ## '[^ ]+' matches any single token here instead, which is what the
+    ## child's own command line always looks like regardless of which
+    ## invocation built this pattern; __FILE__ and the literal subcommand
+    ## marker stay exact, so a decoy that happens to start with some
+    ## unrelated single word still cannot match the rest of the line.
+    return '^[^ ]+ ' . posix_ere_quote( __FILE__ )
          . ' _restart-retry-background$';
 }
 
@@ -268,7 +284,7 @@ function monitor_restart_background( $restart_cmd, $restart_log, $next_attempt )
         if ( $rc === 0 ) {
             return;
         }
-        ## This attempt's own output, not the first attempt's $connection_class
+        ## This attempt's own output, not the first attempt's $connection_class:
         ## checking only the original classification meant that
         ## once attempt $next_attempt looked connection-class, nothing any
         ## later attempt's output said could ever break the loop early, since
