@@ -371,6 +371,18 @@ if ( $cluster == "localhost" ) {
     ## from the cluster pick_cluster() actually chose.
     $metascheduler_pseudo_cluster = $cluster;
 
+    ## Approximated from the analysis profile's own XML, already decoded
+    ## into $xmljson above -- real sizing (jobsubmit.php's own
+    ## tasks_per_group_plan()) cannot run yet, since it needs the real
+    ## cluster's own ppbj/ppn, not resolved until after this pick. Stashed
+    ## into $_SESSION (not $_SESSION['cluster'], which the driven _1.php
+    ## page below unconditionally overwrites) so require_cluster.php -- the
+    ## one authoritative, lock-protected pick for both this autoflow path
+    ## and an interactive submission -- can read it back once it runs
+    ## inside the driven _2.php page, in this same PHP process.
+    $job_requirements_estimate = pick_cluster_estimate_job_requirements(
+        $stage, $xmljson, $stage === 'PCSA' ? 'p_pcsa' : 'p_2dsa' );
+
     ## Kill switch: flipping the pseudo-entry's own 'active' to false must
     ## stop this resolution outright, not just hide it from the UI's cluster
     ## list (collect_config_info() filtering). Without this check, an
@@ -411,7 +423,7 @@ if ( $cluster == "localhost" ) {
                 $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ],
                 $cluster_details,
                 $snapshot,
-                array(),   ## job sizing is not resolved yet at this point in submitone.php
+                $job_requirements_estimate,
                 array(),
                 null,
                 ## $clusterAuth (resolved above from {$lims_db}.people for this
@@ -468,6 +480,16 @@ $_SESSION[ 'user_id' ]         = $person->{'fname'} . "_" . $person->{'lname'} .
 $_SESSION[ 'advancelevel' ]    = $person->{'advancelevel'};
 $_SESSION[ 'clusterAuth' ]     = $clusterAuth;
 $_SESSION[ 'gwhostid' ]        = $host_name;
+
+## Read back by require_cluster.php, if set above -- a top-level key, not
+## $_SESSION['cluster'], which the driven _1.php page below (2DSA_1.php,
+## PCSA_1.php, ...) unconditionally reinitializes to array() before setting
+## its own 'name'/'shortname'/'queue' keys, which would wipe this if it were
+## nested there instead. Unset for a direct (non-metascheduler) submission,
+## in which case require_cluster.php never looks for it at all.
+if ( isset( $job_requirements_estimate ) ) {
+    $_SESSION[ 'metascheduler_job_requirements_estimate' ] = $job_requirements_estimate;
+}
 
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
 

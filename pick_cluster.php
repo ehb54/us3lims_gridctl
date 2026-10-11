@@ -29,6 +29,79 @@ function pick_cluster_is_metascheduler_entry( $entry )
 }
 
 /**
+ * Approximate the per-group MPI task demand a PCSA or 2DSA/2DSA-CG
+ * submission will ask for, from the raw analysis-profile XML already
+ * decoded at submitone.php's pick time -- before any real cluster is
+ * chosen, so before jobsubmit.php's own tasks_per_group_plan() can run (it
+ * reads $this->grid[$cluster]['ppbj'], a per-cluster value that does not
+ * exist yet). Mirrors that formula's *inputs*, deliberately without the
+ * per-cluster ppbj clamp it also applies: omitting a clamp only ever makes
+ * this number larger, which is the safe direction for a pre-filter -- it
+ * can rule out a candidate clearly too small, never wrongly accept one
+ * that is.
+ *
+ * $stage values other than 'PCSA' are treated as the 2DSA family (2DSA,
+ * 2DSA-CG): submitone.php itself only ever reaches this call for one of
+ * those two, never GA or DMGA, whose own demand formulas (e.g. GA's
+ * deme-doubling heuristic) are different enough that approximating them
+ * here risks a wrong rejection -- strictly worse than this pre-filter
+ * simply not applying yet, which is what every other caller already gets
+ * by passing no job_requirements at all.
+ *
+ * @param string $stage     'PCSA', or anything else (the 2DSA family).
+ * @param object $xmljson   The analysis profile's XML, already
+ *                          json_decode(json_encode(simplexml_load_string(...)))'d
+ *                          (submitone.php's own $xmljson).
+ * @param string $paramgroup 'p_pcsa' or 'p_2dsa', matching $stage.
+ *
+ * @return array Suitable as pick_cluster()'s own $job_requirements:
+ *               array('maxproc' => int) when a demand could be read,
+ *               array() when the XML did not have the shape expected (no
+ *               guess -- pick_cluster_meets_requirements() already treats
+ *               "not known yet" as "never fails a candidate").
+ */
+function pick_cluster_estimate_job_requirements( $stage, $xmljson, $paramgroup )
+{
+   if ( $stage === 'PCSA' )
+   {
+      ## PCSA carries every attribute (including curve_type and
+      ## variations_count) directly on <channel_parms>, never on a separate
+      ## job node -- the same first-channel-is-representative assumption
+      ## submitone.php's own later $channel_attributes extraction already
+      ## makes (see its "is_array($channel_parms)" branch).
+      $channel_parms = isset( $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} )
+                      ? $xmljson->{'analysis_profile'}->{$paramgroup}->{'channel_parms'} : null;
+
+      $attrs = null;
+      if ( is_array( $channel_parms ) && isset( $channel_parms[ 0 ]->{'@attributes'} ) )
+      {
+         $attrs = $channel_parms[ 0 ]->{'@attributes'};
+      }
+      elseif ( is_object( $channel_parms ) && isset( $channel_parms->{'@attributes'} ) )
+      {
+         $attrs = $channel_parms->{'@attributes'};
+      }
+
+      if ( $attrs === null )
+      {
+         return array();   ## not the XML shape expected: no guess, same as "not known yet"
+      }
+
+      $vsize      = isset( $attrs->{'variations_count'} ) ? (int) $attrs->{'variations_count'} : 10;
+      $curve_type = isset( $attrs->{'curve_type'} ) ? (string) $attrs->{'curve_type'} : null;
+
+      return array( 'maxproc' => ( $curve_type !== 'HL' ) ? $vsize * $vsize : $vsize );
+   }
+
+   ## 2DSA / 2DSA-CG: uniform_grid has no XML override anywhere in this
+   ## codebase's conversion tables (confirmed against both the shipped
+   ## <job_2dsa*> attributes and submitone.php's own $conv_2dsa_keys) --
+   ## $defaults_2dsa always uses 6, so this is the one value genuinely known
+   ## in advance rather than approximated.
+   return array( 'maxproc' => 36 );
+}
+
+/**
  * Default thresholds, overridable from global_config.php. Kept as a function
  * (not a constant array) so a deployment can override individual keys via
  * $GLOBALS without having to restate every key.
