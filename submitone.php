@@ -23,7 +23,13 @@ $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 require_once __DIR__ . '/pick_cluster.php';
 require_once __DIR__ . '/pick_cluster_reserve.php';
-require_once $class_dir . 'db_connection_pool.php';
+## db_connection_pool.php is required lazily, right before the one place
+## below that actually uses it (inside the metascheduler pseudo-cluster
+## branch), not here. Round-12 blocker, gridctl#35: common#24/#29 never
+## shipped this file at all -- requiring it unconditionally here killed
+## every autoflow submission outright (dies before the row can even be
+## marked, no statusMsg, no mail), including on a host with the
+## metascheduler entirely turned off, where this file is never needed.
 
 # ********* start user defines *************
 
@@ -372,6 +378,18 @@ if ( $cluster == "localhost" ) {
     ## from the cluster pick_cluster() actually chose.
     $metascheduler_pseudo_cluster = $cluster;
 
+    ## Required here, not at the top of this file: this is the only branch
+    ## that actually uses db_connection_pool, so a host with no metascheduler
+    ## pseudo-cluster entry configured at all never needs it -- and a common
+    ## checkout that predates this file (common#24/#29, before common#33's
+    ## consolidation) can still run every other submission normally.
+    $db_connection_pool_file = $class_dir . 'db_connection_pool.php';
+    $db_connection_pool_available = class_exists( 'db_connection_pool', false );
+    if ( ! $db_connection_pool_available && is_file( $db_connection_pool_file ) ) {
+        require_once $db_connection_pool_file;
+        $db_connection_pool_available = true;
+    }
+
     ## Approximated from the analysis profile's own XML, already decoded
     ## into $xmljson above -- real sizing (jobsubmit.php's own
     ## tasks_per_group_plan()) cannot run yet, since it needs the real
@@ -395,6 +413,13 @@ if ( $cluster == "localhost" ) {
          && ! $cluster_details[ $metascheduler_pseudo_cluster ][ 'active' ] ) {
         $pick = array( 'chosen' => null,
             'reason' => "metascheduler '$metascheduler_pseudo_cluster' is disabled (active=false)",
+            'tier' => null, 'scores' => array() );
+    } elseif ( ! $db_connection_pool_available ) {
+        write_logl( "submitone.php: metascheduler pseudo-cluster"
+                   . " '$metascheduler_pseudo_cluster' posted, but $db_connection_pool_file"
+                   . " is missing (common checkout predates it) -- cannot pool this cluster" );
+        $pick = array( 'chosen' => null,
+            'reason' => 'db_connection_pool.php is not installed on this host',
             'tier' => null, 'scores' => array() );
     } else {
         $gfac_link = db_connection_pool::shared()->checkout( $dbhost, $guser, $gpasswd, $gDB );

@@ -230,6 +230,31 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
          continue;   ## not resolved yet / not asked: cannot fail this check
       }
 
+      $demand = $job_requirements[ $key ];
+
+      ## 'maxproc' here is pick_cluster_estimate_job_requirements()'s raw,
+      ## uncapped demand (2DSA: uniform_grid^2; PCSA: vars_count^2 unless
+      ## HL) -- jobsubmit.php's own tasks_per_group_plan() never submits
+      ## that many tasks to any one cluster: it clamps to min(ppbj,
+      ## raw_demand) there, per candidate, before ever reaching sbatch.
+      ## Comparing the raw demand straight against maxproc here rejected
+      ## every appliance-sized cluster (ppbj/maxproc both 8) for every
+      ## 2DSA/PCSA job regardless of real fit -- confirmed: a 2DSA job
+      ## that actually asks for 8 tasks read this pre-filter's own 36 as
+      ## "needs 36", sending it to a billed national allocation or "no
+      ## eligible cluster" instead (round-12 should-fix, gridctl#35). The
+      ## pre-filter must never reject a cluster the real sizing would
+      ## accept, so the same clamp is applied here, per candidate, before
+      ## comparing to its maxproc.
+      if ( $key === 'maxproc' )
+      {
+         $ppbj = $opt( 'ppbj', null );
+         if ( is_numeric( $ppbj ) && (int) $ppbj > 0 )
+         {
+            $demand = min( (int) $demand, (int) $ppbj );
+         }
+      }
+
       $limit = $opt( $key, null );
 
       if ( $limit === null )
@@ -253,7 +278,7 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
          continue;
       }
 
-      if ( (int) $job_requirements[ $key ] > (int) $limit )
+      if ( (int) $demand > (int) $limit )
       {
          return false;
       }
