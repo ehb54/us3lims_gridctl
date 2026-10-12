@@ -61,6 +61,18 @@ function open_db_or_retry() {
     while ( true ) {
         $db_handle = @mysqli_connect( $dbhost, $user, $passwd );
         if ( $db_handle ) {
+            ## Bounds a row-lock wait on this connection to 5s instead of
+            ## MariaDB's 50s default (round-12 should-fix): this is the
+            ## connection the finalizing status write in cleanup_job.php
+            ## reuses after polling has already stopped, so a long lock
+            ## wait here isn't caught by any stall timer -- see
+            ## cleanup_job_bound_lock_wait()'s own comment for the full
+            ## reasoning.
+            if ( function_exists( 'cleanup_job_bound_lock_wait' ) ) {
+                cleanup_job_bound_lock_wait( $db_handle );
+            } else {
+                @mysqli_query( $db_handle, 'SET SESSION innodb_lock_wait_timeout = 5' );
+            }
             return;
         }
         ## errno/error logged on every retry: without them, a permanent
