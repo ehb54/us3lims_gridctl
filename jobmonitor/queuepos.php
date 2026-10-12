@@ -194,11 +194,36 @@ if ( !function_exists( 'queuepos_report' ) ) {
             list( $jobid, $state, $partition ) = $r;
             $jinfo->{ $jobid } = (object)[];
             $jinfo->{ $jobid }->state = $state;
-            if ( $state === "PD" ) {
-                $pdRankByPartition[ $partition ] = ( $pdRankByPartition[ $partition ] ?? 0 ) + 1;
+            $jinfo->{ $jobid }->pos = 0;   ## Overwritten below for PD; harmless meanwhile.
+
+            if ( $state !== "PD" ) {
+                continue;
             }
-            ## Overwritten below for every non-PD state; harmless meanwhile.
-            $jinfo->{ $jobid }->pos = $pdRankByPartition[ $partition ] ?? 0;
+
+            ## %P lists every partition a job was submitted to, comma-joined,
+            ## until it is actually assigned one ("batch,fast") -- not just
+            ## the one it ends up running in. Treating that whole joined
+            ## string as one partition key gave a multi-partition job its
+            ## own exclusive bucket (nothing else's %P matches the same
+            ## joined string), so it always ranked 1 in that bucket
+            ## regardless of how many jobs it is really behind in either
+            ## partition it could actually land in -- round-12 nit,
+            ## gridctl#33 (position 1 reported, when the job was genuinely
+            ## behind others in both of its real candidate partitions).
+            ## Ranked against, and counted into, every partition it listed:
+            ## it really does occupy a queue slot in each one until the
+            ## scheduler picks, and its reported position is the best
+            ## (lowest) rank among them -- whichever partition is actually
+            ## closest to running it next.
+            $bestRank = null;
+            foreach ( explode( ',', $partition ) as $p ) {
+                $pdRankByPartition[ $p ] = ( $pdRankByPartition[ $p ] ?? 0 ) + 1;
+                $rank = $pdRankByPartition[ $p ];
+                if ( $bestRank === null || $rank < $bestRank ) {
+                    $bestRank = $rank;
+                }
+            }
+            $jinfo->{ $jobid }->pos = $bestRank;
         }
 
         ## Listing order is not a guaranteed start order, so "pos" has always
