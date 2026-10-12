@@ -339,6 +339,15 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
 
    $scores = array();
    $by_tier = array( 'local' => array(), 'national' => array() );
+   ## Unpenalized load, parallel to $by_tier -- the saturation test below
+   ## must judge whether local as a WHOLE is busy enough to try national,
+   ## never whether one candidate's probe happened to come back 'warn'.
+   ## Using the penalized $scored_load there (round-12 should-fix,
+   ## gridctl#35) added PICK_CLUSTER_WARN_PENALTY before that test ran, so
+   ## a single 'warn' probe on an otherwise-idle local cluster read as
+   ## saturated and sent the job national -- the opposite of this file's
+   ## own stated intent (see the comment above PICK_CLUSTER_WARN_PENALTY).
+   $by_tier_raw = array( 'local' => array(), 'national' => array() );
 
    foreach ( $candidates as $name )
    {
@@ -429,13 +438,14 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
          'tier' => $tier, 'status' => $status, 'load' => $load );
 
       $by_tier[ $tier ][ $name ] = $scored_load;
+      $by_tier_raw[ $tier ][ $name ] = $load;
    }
 
    $pool = array();
    $pool_tier = null;
 
-   if ( ! empty( $by_tier[ 'local' ] )
-        && min( $by_tier[ 'local' ] ) < $config[ 'saturation_threshold' ] )
+   if ( ! empty( $by_tier_raw[ 'local' ] )
+        && min( $by_tier_raw[ 'local' ] ) < $config[ 'saturation_threshold' ] )
    {
       $pool = $by_tier[ 'local' ];
       $pool_tier = 'local';
@@ -617,17 +627,30 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
    ## throws there instead.
    try
    {
-      $cutoff       = gmdate( 'Y-m-d H:i:s', $now - max( 0, (int) $ttl_seconds ) );
+      ## FROM_UNIXTIME(?), not a pre-formatted gmdate() string (round-12
+      ## should-fix, gridctl#35): pick_cluster_record_nudge() writes `time`
+      ## via FROM_UNIXTIME(), which MySQL/MariaDB expresses in the
+      ## connection's own session time zone -- but a bound string literal
+      ## compared against that TIMESTAMP column is interpreted in that same
+      ## session zone too, not as UTC, even though gmdate()'s digits were
+      ## meant as UTC. Behind UTC (most US zones), the cutoff string reads
+      ## as later than it should and this WHERE clause almost never
+      ## matches a real nudge ("nudges never count"); ahead of UTC, it
+      ## reads as earlier, so an already-expired nudge still counts for the
+      ## zone's own offset. Passing the raw cutoff through FROM_UNIXTIME()
+      ## here instead makes both sides go through the identical conversion,
+      ## so they agree regardless of session zone.
+      $cutoff_unixtime = $now - max( 0, (int) $ttl_seconds );
       $placeholders = implode( ',', array_fill( 0, count( $candidates ), '?' ) );
       $stmt         = mysqli_prepare( $gfac_link,
          "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
-         . " WHERE cluster IN ($placeholders) AND time >= ?"
+         . " WHERE cluster IN ($placeholders) AND time >= FROM_UNIXTIME(?)"
          . " GROUP BY cluster" );
 
       if ( $stmt )
       {
-         $params = array_merge( $candidates, array( $cutoff ) );
-         mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ) . 's', ...$params );
+         $params = array_merge( $candidates, array( $cutoff_unixtime ) );
+         mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ) . 'i', ...$params );
          mysqli_stmt_execute( $stmt );
          $result = mysqli_stmt_get_result( $stmt );
 
