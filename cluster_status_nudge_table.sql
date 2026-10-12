@@ -22,11 +22,18 @@
 -- configures a metascheduler pseudo-cluster entry costs nothing and nothing
 -- ever writes to it either.
 
+USE gfac;
+
 CREATE TABLE IF NOT EXISTS `cluster_status_nudge` (
 `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT COMMENT 'Unique nudge ID',
 `cluster` varchar(64) NOT NULL COMMENT 'Real cluster this decision was nudged onto',
 `time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'When this decision was made',
 PRIMARY KEY (`id`),
-KEY `cluster_time` (`cluster`, `time`)
+KEY `cluster_time` (`cluster`, `time`),
+-- pick_cluster_record_nudge()'s own purge (pick_cluster.php) deletes by
+-- `time` alone too, with no `cluster` predicate -- same reasoning and same
+-- fix as metascheduler_decision's own `time` index (round-12 should-fix,
+-- gridctl#35).
+KEY `time` (`time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
   COMMENT='Short-lived pick_cluster_reserve() load nudges, independent of the real cluster_status probe';

@@ -21,6 +21,8 @@
 -- keeps answering "why did job X land on cluster Y" for a year of normal
 -- operation -- just one that no longer grows forever by default.
 
+USE gfac;
+
 CREATE TABLE IF NOT EXISTS `metascheduler_decision` (
 `id` int(11) NOT NULL AUTO_INCREMENT COMMENT 'Unique decision ID',
 `pseudo_cluster` varchar(120) NOT NULL COMMENT 'Metascheduler pool name that was resolved',
@@ -30,6 +32,12 @@ CREATE TABLE IF NOT EXISTS `metascheduler_decision` (
 `scores` text COMMENT 'JSON-encoded pick_cluster() scores for every candidate, for full post-hoc diagnosis',
 `time` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'When this decision was made',
 PRIMARY KEY (`id`),
-KEY `pseudo_cluster_time` (`pseudo_cluster`, `time`)
+KEY `pseudo_cluster_time` (`pseudo_cluster`, `time`),
+-- pick_cluster_record_decision()'s retention purge (pick_cluster_reserve.php)
+-- deletes by `time` alone, with no pseudo_cluster predicate -- a composite
+-- index led by pseudo_cluster cannot serve that range scan, forcing a full
+-- table scan on every write (round-12 should-fix, gridctl#35: measured
+-- 0.33s at 262k rows without this index, 0.000s with it).
+KEY `time` (`time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
   COMMENT='Queryable history of metascheduler pick_cluster() decisions';
