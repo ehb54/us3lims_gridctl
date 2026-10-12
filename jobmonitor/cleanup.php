@@ -187,9 +187,10 @@ function job_staging_dir_prepare( $work, $gfacID, $log = null )
 function job_state_files()
 {
    return array(
-      'claim'         => 'cleanup.claim',   ## only this worker may finalize the job
-      'finalizing'    => 'finalizing',      ## the row is gone, the stage is not written yet
-      'complete_seen' => 'complete_seen',   ## when cleanup first found the job unfinalizable
+      'claim'          => 'cleanup.claim',    ## only this worker may finalize the job
+      'finalizing'     => 'finalizing',       ## the row is gone, the stage is not written yet
+      'status_pending' => 'status-pending',   ## results are in; only the final status write failed
+      'complete_seen'  => 'complete_seen',    ## when cleanup first found the job unfinalizable
    );
 }
 
@@ -238,6 +239,43 @@ function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $reque
 function cleanup_finalizing_end( $us3_db, $gfacID )
 {
    @unlink( cleanup_finalizing_path( $us3_db, $gfacID ) );
+}
+
+## Marker for a job whose results are already fully imported but whose final
+## stage-status write (update_autoflow_status()) did not land after retrying.
+## Unlike the finalizing marker above, this is not evidence of a dead worker --
+## the worker is still alive and returns success -- so --restart's close-out
+## for this marker must retry the real recorded status, never assume FAILED.
+function cleanup_status_pending_path( $us3_db, $gfacID )
+{
+   return job_state_path( $us3_db, $gfacID, 'status_pending' );
+}
+
+## $stage/$queue_status are the already-mapped final column values
+## (stage_status_from_job()/queue_status_from_job() on the normalised job
+## status), not the raw job status -- dbutils's uslims_jobs.php has no access
+## to gridctl's status vocabulary maps, so the mapping happens once, here,
+## and the marker carries the answer.
+function cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $stage, $queue_status, $message )
+{
+   $path = cleanup_status_pending_path( $us3_db, $gfacID );
+   @mkdir( dirname( $path ), 0770, true );
+   @file_put_contents( $path, json_encode( array(
+      'us3_db'             => $us3_db,
+      'gfacID'             => $gfacID,
+      'autoflowAnalysisID' => (int) $autoflowAnalysisID,
+      'requestID'          => (int) $requestID,
+      'stage'              => $stage,
+      'queue_status'       => $queue_status,
+      'message'            => $message,
+      'pid'                => getmypid(),
+      'started'            => time(),
+   ) ) );
+}
+
+function cleanup_status_pending_end( $us3_db, $gfacID )
+{
+   @unlink( cleanup_status_pending_path( $us3_db, $gfacID ) );
 }
 
 ## Seconds since cleanup first found this job not yet finalizable. The first

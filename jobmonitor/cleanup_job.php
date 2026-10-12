@@ -54,8 +54,27 @@ function reopen_global_db_handle( $dbhost, $user, $passwd )
 
    if ( $reconnected )
    {
+      cleanup_job_bound_lock_wait( $reconnected );
       @mysqli_close( $db_handle );
       $db_handle = $reconnected;
+   }
+}
+
+## Caps how long a single query here can sit on a row lock before failing
+## with errno 1205 (round-12 should-fix). Without this, MariaDB's own
+## default (50s) stacks with the finalizing write's own outer backoff
+## (finalizing_retry_wait_schedule(), ~120s) and update_autoflow_status()'s
+## inner retry (2 more attempts on a connection-class error, which 1205 is
+## one of) -- a sustained lock measured at 23 minutes to finally land,
+## after polling has already stopped and nothing else is watching this job.
+## 5s is well short of the outer schedule's own shortest wait (2s already
+## elapses between attempts), so a lock that is about to clear still gets
+## caught by one of the many outer retries; this just stops any single
+## attempt from eating the whole backoff budget sitting on one lock.
+if ( ! function_exists( 'cleanup_job_bound_lock_wait' ) ) {
+   function cleanup_job_bound_lock_wait( $handle )
+   {
+      @mysqli_query( $handle, 'SET SESSION innodb_lock_wait_timeout = 5' );
    }
 }
 
@@ -954,6 +973,23 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## autoflowAnalysis's status column did not get the final word, so the
    ## stage can stay "running" with nothing left to move it, silently,
    ## unless an admin is told to go fix it by hand.
+   ##
+   ## Leave a status-pending marker before even the first attempt below, not
+   ## only once it has already failed: a process killed while that first
+   ## write is still in flight used to leave no marker at all for --restart
+   ## to find (round-12 should-fix) -- the same gap this marker exists to
+   ## close, just one write earlier. Resolved to final column values up
+   ## front (job_status.php's maps are not available to dbutils), same as
+   ## job_state_machine's own update_autoflow_status()/
+   ## update_hpc_analysis_result_status() resolve them. Costs one cheap
+   ## local file write/unlink pair on the normal path, where the first
+   ## attempt lands and the marker is cleared immediately below.
+   $normalised = job_status_normalise( $status );
+   cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID,
+      $normalised !== null ? stage_status_from_job( $normalised ) : null,
+      $normalised !== null ? queue_status_from_job( $normalised ) : null,
+      $queue_msg );
+
    $status_recorded = update_autoflow_status( $status, $queue_msg );
 
    ## update_autoflow_status()'s own link comes from job_machine()'s global
@@ -988,20 +1024,34 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       $status_recorded = update_autoflow_status( $status, $queue_msg );
    }
 
-   if ( ! $status_recorded )
+   if ( $status_recorded )
+   {
+      cleanup_status_pending_end( $us3_db, $gfacID );
+   }
+   else
    {
       write_logld( "$me: update_autoflow_status() did not land for gfacID=$gfacID"
-                  . " after retrying; the job itself completed, but the autoflowAnalysis"
-                  . " and/or HPCAnalysisResult status may be stuck \"running\" until this"
-                  . " is corrected by hand" );
+                  . " after retrying; the job itself completed. Left a status-pending"
+                  . " marker for the next uslims_jobs.php --restart to close out." );
       ## Names both tables now: update_autoflow_status()'s own return value
       ## folds in update_hpc_analysis_result_status()'s result, so this can
       ## be the only write that failed on a non-autoflow (DMGA/GA) job,
       ## which has no autoflowAnalysis row to point at in the first place.
+      ##
+      ## Spells out the exact command, not just "will retry automatically"
+      ## (round-12 should-fix): there is no cron running --restart on its
+      ## own, so a mail implying it happens by itself just left an admin
+      ## waiting on nothing. Results are already imported either way --
+      ## --restart only needs to run once to close the marker out; it is
+      ## not itself destructive to run again if nothing is pending.
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
-                   . " completed and the user has been notified; the autoflowAnalysis and/or"
-                   . " HPCAnalysisResult status column may still need to be corrected by hand." );
+                   . " completed and the user has been notified; results are already imported."
+                   . " A status-pending marker was left for this job. Run"
+                   . " 'uslims_jobs.php --restart' to close it out -- this does not happen on"
+                   . " its own, nothing is scheduled to run it automatically. If it is still"
+                   . " stuck after that, the autoflowAnalysis and/or HPCAnalysisResult status"
+                   . " column may need to be corrected by hand." );
    }
 
    mail_to_user( "success", "" );
