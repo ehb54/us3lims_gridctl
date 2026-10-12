@@ -965,6 +965,23 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## (round 11 should-fix) -- shorter than a real restart under load can
    ## take. finalizing_retry_wait_schedule() is the pure sequence, kept
    ## separate so a test can assert its shape without a live DB.
+   ## Leave a status-pending marker for the span covered by the retry loop
+   ## below: results are already imported, so a crash here is not a failed
+   ## job, just an interrupted retry -- --restart's status-pending close-out
+   ## (uslims_jobs.php) picks this up and keeps retrying the real recorded
+   ## status, same as this loop does, until it lands or the job is manually
+   ## corrected. Resolved to final column values up front (job_status.php's
+   ## maps are not available to dbutils), same as job_state_machine's own
+   ## update_autoflow_status()/update_hpc_analysis_result_status() resolve them.
+   if ( ! $status_recorded )
+   {
+      $normalised = job_status_normalise( $status );
+      cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID,
+         $normalised !== null ? stage_status_from_job( $normalised ) : null,
+         $normalised !== null ? queue_status_from_job( $normalised ) : null,
+         $queue_msg );
+   }
+
    foreach ( finalizing_retry_wait_schedule() as $wait )
    {
       if ( $status_recorded )
@@ -979,20 +996,25 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       $status_recorded = update_autoflow_status( $status, $queue_msg );
    }
 
-   if ( ! $status_recorded )
+   if ( $status_recorded )
+   {
+      cleanup_status_pending_end( $us3_db, $gfacID );
+   }
+   else
    {
       write_logld( "$me: update_autoflow_status() did not land for gfacID=$gfacID"
-                  . " after retrying; the job itself completed, but the autoflowAnalysis"
-                  . " and/or HPCAnalysisResult status may be stuck \"running\" until this"
-                  . " is corrected by hand" );
+                  . " after retrying; the job itself completed. Left a status-pending"
+                  . " marker for --restart to keep retrying automatically." );
       ## Names both tables now: update_autoflow_status()'s own return value
       ## folds in update_hpc_analysis_result_status()'s result, so this can
       ## be the only write that failed on a non-autoflow (DMGA/GA) job,
       ## which has no autoflowAnalysis row to point at in the first place.
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
-                   . " completed and the user has been notified; the autoflowAnalysis and/or"
-                   . " HPCAnalysisResult status column may still need to be corrected by hand." );
+                   . " completed and the user has been notified; a status-pending marker was"
+                   . " left for --restart to retry automatically. If it is still stuck after"
+                   . " the next --restart, the autoflowAnalysis and/or HPCAnalysisResult status"
+                   . " column may need to be corrected by hand." );
    }
 
    mail_to_user( "success", "" );
