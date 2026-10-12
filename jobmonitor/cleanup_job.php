@@ -129,6 +129,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    global $status;
    global $stdout;
    global $requestID;
+   global $us3util;
 
    $requestID = $reqID;
    $db = $us3_db;
@@ -1035,11 +1036,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       ## waiting on nothing. Results are already imported either way --
       ## --restart only needs to run once to close the marker out; it is
       ## not itself destructive to run again if nothing is pending.
+      ##
+      ## Prints a runnable command, not just the bare filename (round-13
+      ## should-fix): "uslims_jobs.php --restart" has no path and no
+      ## interpreter in front of it, and the file itself is 0644, so typed
+      ## as written it is "command not found", same class of bug as the
+      ## pre-round-12 services.php remedy.
+      $restart = "php " . escapeshellarg( "$us3util/uslims_jobs.php" ) . " --restart";
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
                    . " completed and the user has been notified; results are already imported."
                    . " A status-pending marker was left for this job. Run"
-                   . " 'uslims_jobs.php --restart' to close it out -- this does not happen on"
+                   . " '$restart' to close it out -- this does not happen on"
                    . " its own, nothing is scheduled to run it automatically. If it is still"
                    . " stuck after that, the autoflowAnalysis and/or HPCAnalysisResult status"
                    . " column may need to be corrected by hand." );

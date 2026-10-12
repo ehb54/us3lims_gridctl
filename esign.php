@@ -2,6 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
+gridctl_require_not_root( __FILE__, 'start' );
 
 # ********* start user defines *************
 
