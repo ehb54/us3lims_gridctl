@@ -115,6 +115,43 @@ function pick_cluster_estimate_job_requirements( $stage, $xmljson, $paramgroup )
 }
 
 /**
+ * One $GLOBALS-overridable tunable, validated instead of a bare (int) cast:
+ * round-12 nit (common#32's review, moved here since the tunables it found
+ * loose actually live in gridctl, not common). A bare (int) cast silently
+ * turns a typo'd non-numeric value into 0 (which several of these callers
+ * treat as "disabled", not "misconfigured"), and silently accepts a
+ * negative value a caller never guards against either. Anything that isn't
+ * a clean int (or numeric string -- a site's config is still PHP, but a
+ * hand-edited value quoted by mistake is still an unambiguous request for
+ * that number) within [$min, $max] falls back to $default with a logged
+ * warning, same leniency/strictness balance as common's
+ * circuit_breaker::max_cooldown validation.
+ */
+function pick_cluster_validated_tunable( $global_key, $default, $min, $max = null )
+{
+   if ( ! isset( $GLOBALS[ $global_key ] ) )
+   {
+      return $default;
+   }
+
+   $raw   = $GLOBALS[ $global_key ];
+   $value = is_int( $raw ) ? $raw : ( is_string( $raw ) ? filter_var( $raw, FILTER_VALIDATE_INT ) : false );
+
+   if ( $value !== false && $value >= $min && ( $max === null || $value <= $max ) )
+   {
+      return $value;
+   }
+
+   error_log( "pick_cluster_default_config: \$GLOBALS['$global_key'] ("
+            . ( is_scalar( $raw ) ? var_export( $raw, true ) : gettype( $raw ) )
+            . ") is not a valid value (must be an int, or a numeric string, "
+            . ( $max === null ? ">= $min" : "from $min through $max" )
+            . "); using the default ($default)" );
+
+   return $default;
+}
+
+/**
  * Default thresholds, overridable from global_config.php. Kept as a function
  * (not a constant array) so a deployment can override individual keys via
  * $GLOBALS without having to restate every key.
@@ -126,16 +163,24 @@ function pick_cluster_default_config()
       ## is busy enough to try national instead". 0 disables local overflow
       ## entirely (every job goes national), which is never the intended
       ## default; a deployment that wants that should say so explicitly.
-      'saturation_threshold'   => isset( $GLOBALS[ 'global_cluster_saturation_threshold' ] )
-                                  ? (int) $GLOBALS[ 'global_cluster_saturation_threshold' ] : 20,
+      'saturation_threshold'   => pick_cluster_validated_tunable(
+                                  'global_cluster_saturation_threshold', 20, 0 ),
 
       ## Reuses the same staleness ceiling cluster_status.php's own callers
       ## already apply to a cluster_status row, so one config key governs
       ## both "is this row too old to show in the UI" and "is this row too
       ## old to pick a cluster from" -- a deployment that retunes one case
       ## retunes the other, rather than the two silently drifting apart.
-      'max_status_age_seconds' => isset( $GLOBALS[ 'global_cluster_status_max_age_seconds' ] )
-                                  ? (int) $GLOBALS[ 'global_cluster_status_max_age_seconds' ] : 900,
+      ##
+      ## 1800, not 900: global_config.php.template's own comment for
+      ## $global_cluster_status_max_age_seconds explicitly says "Unset, the
+      ## code uses 1800, which is what this matches" -- this function's
+      ## fallback was still 900, so a site that left it unset (as the
+      ## template's own comment describes as the normal case) got half the
+      ## documented staleness window instead (round-12 nit, common#32's
+      ## review -- moved here).
+      'max_status_age_seconds' => pick_cluster_validated_tunable(
+                                  'global_cluster_status_max_age_seconds', 1800, 0 ),
 
       ## How long a pick_cluster_reserve() nudge (see that function's own
       ## comment) stays counted in a snapshot after being written. Long
@@ -145,8 +190,8 @@ function pick_cluster_default_config()
       ## usefulness here used to persist, uncorrected, until the next probe,
       ## which could fabricate "every candidate saturated" for real jobs
       ## submitted minutes after a burst had already finished and drained.
-      'nudge_ttl_seconds'      => isset( $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] )
-                                  ? (int) $GLOBALS[ 'global_cluster_nudge_ttl_seconds' ] : 90,
+      'nudge_ttl_seconds'      => pick_cluster_validated_tunable(
+                                  'global_cluster_nudge_ttl_seconds', 90, 1 ),
 
       ## How long a gfac.metascheduler_decision row is kept before an
       ## opportunistic purge (see pick_cluster_record_decision()). That table
@@ -154,8 +199,8 @@ function pick_cluster_default_config()
       ## -- this exists only to bound its growth, not to serve any decision
       ## logic, so the default is deliberately long (a year) rather than
       ## tuned like the nudge TTL above. 0 disables the purge entirely.
-      'decision_retention_seconds' => isset( $GLOBALS[ 'global_metascheduler_decision_retention_seconds' ] )
-                                  ? (int) $GLOBALS[ 'global_metascheduler_decision_retention_seconds' ] : 31536000,
+      'decision_retention_seconds' => pick_cluster_validated_tunable(
+                                  'global_metascheduler_decision_retention_seconds', 31536000, 0 ),
    );
 }
 
