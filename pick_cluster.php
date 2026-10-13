@@ -34,11 +34,14 @@ function pick_cluster_is_metascheduler_entry( $entry )
  * decoded at submitone.php's pick time -- before any real cluster is
  * chosen, so before jobsubmit.php's own tasks_per_group_plan() can run (it
  * reads $this->grid[$cluster]['ppbj'], a per-cluster value that does not
- * exist yet). Mirrors that formula's *inputs*, deliberately without the
- * per-cluster ppbj clamp it also applies: omitting a clamp only ever makes
- * this number larger, which is the safe direction for a pre-filter -- it
- * can rule out a candidate clearly too small, never wrongly accept one
- * that is.
+ * exist yet). Mirrors that formula's *inputs* only, returning the raw,
+ * uncapped demand -- this function has no per-cluster ppbj to clamp
+ * against yet, since no candidate has been picked. The per-candidate
+ * clamp (round-12 should-fix, gridctl#35) is applied downstream, once a
+ * real ppbj exists, by pick_cluster_meets_requirements() itself, not
+ * here -- a stale version of this comment used to describe omitting the
+ * clamp as a deliberate, permanent choice for the whole pre-filter stage,
+ * which stopped being true the moment that function started clamping.
  *
  * $stage values other than 'PCSA' are treated as the 2DSA family (2DSA,
  * 2DSA-CG): submitone.php itself only ever reaches this call for one of
@@ -248,10 +251,22 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
       ## comparing to its maxproc.
       if ( $key === 'maxproc' )
       {
+         ## A candidate that never declared ppbj at all stays uncapped here,
+         ## deliberately (round-12): the clamp only narrows using a value
+         ## the candidate actually declares, so incomplete pre-filter data
+         ## is never read as "this candidate can only take one task" by
+         ## accident. But jobsubmit.php's own tasks_per_group_plan() reads
+         ## $ppbj = max(1, (int)$cfg['ppbj']) -- once a value IS declared,
+         ## even 0, that function clamps it to 1, never treats 0 as
+         ## "unlimited". Comparing is_numeric($ppbj) && > 0 here instead
+         ## skipped the clamp entirely for a declared-but-zero ppbj,
+         ## wrongly letting the raw, uncapped demand through for a
+         ## candidate the real sizing would clamp to a single task (round-13
+         ## nit, gridctl#35).
          $ppbj = $opt( 'ppbj', null );
-         if ( is_numeric( $ppbj ) && (int) $ppbj > 0 )
+         if ( is_numeric( $ppbj ) )
          {
-            $demand = min( (int) $demand, (int) $ppbj );
+            $demand = min( (int) $demand, max( 1, (int) $ppbj ) );
          }
       }
 
@@ -612,6 +627,43 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
  * @return array keyed by every entry in $candidates (0 when absent), so a
  *         caller can always add this directly onto a snapshot's 'queued'.
  */
+## FROM_UNIXTIME() turns an unambiguous unix timestamp into a wall-clock
+## string in the session's own time zone; storing or comparing that string
+## against a TIMESTAMP column re-interprets it as local wall-clock time all
+## over again to normalize it to the column's real (UTC) storage. During
+## the one repeated local hour a DST fall-back creates, that wall-clock
+## string is genuinely ambiguous -- MariaDB has to pick one of the two real
+## instants it could mean, and nothing says it picks the one $now actually
+## meant (round-13 nit, gridctl#35: confirmed storing/reading up to 3600s
+## off during that hour, on a session whose zone observes DST at all;
+## 'SYSTEM'/UTC/a fixed numeric offset never hit this, since none of those
+## has a repeated hour to begin with). Pinning the session to UTC for
+## exactly these two queries makes FROM_UNIXTIME()'s own conversion step a
+## no-op (every local-wall-clock string it produces already IS UTC), so
+## there is no ambiguous hour left to land in, regardless of what zone the
+## connection is normally in for anything else sharing it.
+function pick_cluster_in_utc_session( $gfac_link, callable $query )
+{
+   $saved = null;
+   $tz_result = mysqli_query( $gfac_link, 'SELECT @@session.time_zone AS tz' );
+   $tz_row    = $tz_result ? mysqli_fetch_assoc( $tz_result ) : null;
+   $saved     = $tz_row ? $tz_row[ 'tz' ] : null;
+
+   mysqli_query( $gfac_link, "SET SESSION time_zone = '+00:00'" );
+
+   try
+   {
+      $query();
+   }
+   finally
+   {
+      if ( $saved !== null )
+      {
+         mysqli_query( $gfac_link, 'SET SESSION time_zone = ' . "'" . mysqli_real_escape_string( $gfac_link, $saved ) . "'" );
+      }
+   }
+}
+
 function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_seconds )
 {
    $counts = array_fill_keys( $candidates, 0 );
@@ -639,31 +691,36 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
       ## reads as earlier, so an already-expired nudge still counts for the
       ## zone's own offset. Passing the raw cutoff through FROM_UNIXTIME()
       ## here instead makes both sides go through the identical conversion,
-      ## so they agree regardless of session zone.
+      ## so they agree regardless of session zone -- except during a DST
+      ## fall-back's one repeated local hour, which pick_cluster_in_utc_
+      ## session() (above) now also covers; see its own comment.
       $cutoff_unixtime = $now - max( 0, (int) $ttl_seconds );
       $placeholders = implode( ',', array_fill( 0, count( $candidates ), '?' ) );
-      $stmt         = mysqli_prepare( $gfac_link,
-         "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
-         . " WHERE cluster IN ($placeholders) AND time >= FROM_UNIXTIME(?)"
-         . " GROUP BY cluster" );
 
-      if ( $stmt )
-      {
-         $params = array_merge( $candidates, array( $cutoff_unixtime ) );
-         mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ) . 'i', ...$params );
-         mysqli_stmt_execute( $stmt );
-         $result = mysqli_stmt_get_result( $stmt );
+      pick_cluster_in_utc_session( $gfac_link, function () use ( $gfac_link, $placeholders, $candidates, $cutoff_unixtime, &$counts ) {
+         $stmt = mysqli_prepare( $gfac_link,
+            "SELECT cluster, COUNT(*) AS n FROM gfac.cluster_status_nudge"
+            . " WHERE cluster IN ($placeholders) AND time >= FROM_UNIXTIME(?)"
+            . " GROUP BY cluster" );
 
-         if ( $result )
+         if ( $stmt )
          {
-            while ( $row = mysqli_fetch_assoc( $result ) )
-            {
-               $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
-            }
-         }
+            $params = array_merge( $candidates, array( $cutoff_unixtime ) );
+            mysqli_stmt_bind_param( $stmt, str_repeat( 's', count( $candidates ) ) . 'i', ...$params );
+            mysqli_stmt_execute( $stmt );
+            $result = mysqli_stmt_get_result( $stmt );
 
-         mysqli_stmt_close( $stmt );
-      }
+            if ( $result )
+            {
+               while ( $row = mysqli_fetch_assoc( $result ) )
+               {
+                  $counts[ $row[ 'cluster' ] ] = (int) $row[ 'n' ];
+               }
+            }
+
+            mysqli_stmt_close( $stmt );
+         }
+      } );
    }
    catch ( \Throwable $e )
    {
@@ -688,26 +745,32 @@ function pick_cluster_record_nudge( $gfac_link, $cluster, $now, $ttl_seconds )
    ## caller as a prepare() that merely returned false already was.
    try
    {
-      $stmt = mysqli_prepare( $gfac_link,
-         'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );
+      ## Both queries go through pick_cluster_in_utc_session() -- see its
+      ## own comment -- so FROM_UNIXTIME()'s conversion into the session's
+      ## wall-clock zone can never land in a DST fall-back's ambiguous
+      ## repeated hour (round-13 nit, gridctl#35).
+      pick_cluster_in_utc_session( $gfac_link, function () use ( $gfac_link, $cluster, $now, $ttl_seconds ) {
+         $stmt = mysqli_prepare( $gfac_link,
+            'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );
 
-      if ( $stmt )
-      {
-         mysqli_stmt_bind_param( $stmt, 'si', $cluster, $now );
-         mysqli_stmt_execute( $stmt );
-         mysqli_stmt_close( $stmt );
-      }
+         if ( $stmt )
+         {
+            mysqli_stmt_bind_param( $stmt, 'si', $cluster, $now );
+            mysqli_stmt_execute( $stmt );
+            mysqli_stmt_close( $stmt );
+         }
 
-      $cutoff_stmt = mysqli_prepare( $gfac_link,
-         'DELETE FROM gfac.cluster_status_nudge WHERE time < FROM_UNIXTIME(?)' );
+         $cutoff_stmt = mysqli_prepare( $gfac_link,
+            'DELETE FROM gfac.cluster_status_nudge WHERE time < FROM_UNIXTIME(?)' );
 
-      if ( $cutoff_stmt )
-      {
-         $cutoff = $now - max( 0, (int) $ttl_seconds );
-         mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
-         mysqli_stmt_execute( $cutoff_stmt );
-         mysqli_stmt_close( $cutoff_stmt );
-      }
+         if ( $cutoff_stmt )
+         {
+            $cutoff = $now - max( 0, (int) $ttl_seconds );
+            mysqli_stmt_bind_param( $cutoff_stmt, 'i', $cutoff );
+            mysqli_stmt_execute( $cutoff_stmt );
+            mysqli_stmt_close( $cutoff_stmt );
+         }
+      } );
    }
    catch ( \Throwable $e )
    {
