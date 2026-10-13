@@ -202,19 +202,28 @@ if ( !function_exists( 'queuepos_report' ) ) {
 
             ## %P lists every partition a job was submitted to, comma-joined,
             ## until it is actually assigned one ("batch,fast") -- not just
-            ## the one it ends up running in. Treating that whole joined
-            ## string as one partition key gave a multi-partition job its
-            ## own exclusive bucket (nothing else's %P matches the same
-            ## joined string), so it always ranked 1 in that bucket
-            ## regardless of how many jobs it is really behind in either
-            ## partition it could actually land in -- round-12 nit,
-            ## gridctl#33 (position 1 reported, when the job was genuinely
-            ## behind others in both of its real candidate partitions).
-            ## Ranked against, and counted into, every partition it listed:
-            ## it really does occupy a queue slot in each one until the
-            ## scheduler picks, and its reported position is the best
-            ## (lowest) rank among them -- whichever partition is actually
-            ## closest to running it next.
+            ## the one it ends up running in. That job is never LIMS's own:
+            ## LIMS always resolves to one specific queue per cluster_details
+            ## entry (a center with more than one real partition, e.g.
+            ## Bridges2's shared/full-node split, gets two separate cluster
+            ## entries, never one job submitted to both). A multi-partition
+            ## row belongs to some other user sharing the same national HPC
+            ## center, and this squeue snapshot cannot say which of its
+            ## listed partitions Slurm's own scheduler will actually place it
+            ## in -- that choice hasn't been made yet, so there is no ground
+            ## truth to rank against, only a choice of which way to be
+            ## wrong. Counting it into every partition it listed (the
+            ## conservative choice: never understates how many jobs could
+            ## still take a slot in this partition before the one being
+            ## asked about) is what is done here; counting it into only its
+            ## best-ranked partition is what an earlier version did, and
+            ## both are estimates, not counts, regardless of which is
+            ## picked. $cluster isn't something LIMS schedules -- it only
+            ## decides which cluster to send a job to and polls the result,
+            ## the same as this whole function is read-only against
+            ## whatever Slurm itself decides. Nothing else in gridctl reads
+            ## $jinfo->pos: it reaches a human through the GUI and nothing
+            ## here retries or branches on its value.
             $bestRank = null;
             foreach ( explode( ',', $partition ) as $p ) {
                 $pdRankByPartition[ $p ] = ( $pdRankByPartition[ $p ] ?? 0 ) + 1;
