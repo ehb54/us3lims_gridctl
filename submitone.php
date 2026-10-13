@@ -81,6 +81,40 @@ function check_cli_errors_in_dump() {
     }
 }
 
+## Neither fail_job() nor error() ever told anyone a submission failed --
+## both only ever wrote statusMsg to the DB (round-13 should fix, dbinst#57:
+## "a refused submission ... tells no one"). $org_name/$admin_email/
+## $servhost all come from listen-config.php, same as mail_to_admin()
+## (jobmonitor/gridctl.php) already reads for a running job's own failure
+## mail -- that function isn't reused directly here since its message
+## format is written for a job already mid-poll ($updateTime/$status/
+## $cluster), not a submission that never got that far.
+function mail_submission_fail_to_admin( $reason ) {
+    global $org_name;
+    global $admin_email;
+    global $servhost;
+    global $lims_db;
+    global $ID;
+
+    if ( !isset( $admin_email ) || $admin_email === '' ) {
+        return;
+    }
+
+    $headers  = "From: $org_name Admin<$admin_email>"  . "\n";
+    $headers .= "Reply-To: $org_name<$admin_email>"    . "\n";
+    $headers .= "X-Mailer: PHP v" . phpversion()        . "\n";
+    $headers .= "MIME-Version: 1.0"                     . "\n";
+    $headers .= "Content-Transfer-Encoding: 8bit"       . "\n";
+
+    $subject = "US3 Submission Failure Notification";
+    $message = "UltraScan job submission failed on $servhost:\n\n"
+             . "Database       :  $lims_db\n"
+             . "Request ID     :  $ID\n"
+             . "Reason         :  $reason\n";
+
+    mail( $admin_email, $subject, $message, $headers );
+}
+
 function fail_job() {
     global $lims_db;
     global $cli_errors;
@@ -91,13 +125,16 @@ function fail_job() {
     global $self;
 
     $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
+    $joined_errors  = implode( '; ', quote_fix( $use_cli_errors ) );
 
-    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', quote_fix( $use_cli_errors ) ) . "' WHERE {$id_field} = {$ID}";
+    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='$joined_errors' WHERE {$id_field} = {$ID}";
     $result = mysqli_query( $db_handle, $query );
 
     if ( !$result ) {
         write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
     }
+
+    mail_submission_fail_to_admin( $joined_errors );
 }
 
 function write_logl( $msg, $this_level = 0 ) {
@@ -126,6 +163,8 @@ function error( $msg, $fail_job = true ) {
         if ( !$result ) {
             write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
         }
+
+        mail_submission_fail_to_admin( "Error submitting job: $msg" );
     }
     exit(-1);
 }
