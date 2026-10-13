@@ -982,6 +982,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       $normalised !== null ? queue_status_from_job( $normalised ) : null,
       $queue_msg );
 
+   ## Bounded here, immediately before the first finalizing write, not on
+   ## the connection as a whole: open_db_or_retry() used to set this same
+   ## 5s bound once at connection-open time, which meant it sat on every
+   ## routine poll query for the rest of the job's monitored life, not just
+   ## this write (round-13 nit) -- harmless in practice (a poll essentially
+   ## never contends for this lock), but the wrong place to express what is
+   ## actually a finalizing-write concern. global, not the function's own
+   ## $db_handle parameter: update_autoflow_status() reads job_machine()'s
+   ## global $db_handle fresh on every call, which is what this has to bind.
+   global $db_handle;
+   cleanup_job_bound_lock_wait( $db_handle );
+
    $status_recorded = update_autoflow_status( $status, $queue_msg );
 
    ## update_autoflow_status()'s own link comes from job_machine()'s global
