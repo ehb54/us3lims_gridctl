@@ -41,9 +41,26 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
     ## evaluates where it's written, so a copy living here would always
     ## print gridctl_bootstrap.php's own path in the remedy instead of the
     ## script that actually needs restarting as us3.
-    function gridctl_require_not_root( $file, $action ) {
+    ##
+    ## $replay_args, when given, replaces $action in the printed command
+    ## (round-13 nit): jobmonitor.php's own real invocation is "dbname
+    ## gfacID HPCAnalysisRequestID", not the literal word "start" used for
+    ## the "... refused" message, and printing "start" there left the
+    ## suggested command one argument short, exiting 255. $background,
+    ## when true, backgrounds the suggested command with the same
+    ## nohup/redirect/& pattern listen.php itself already uses to launch
+    ## manage-us3-pipe.php (round-13 nit): listen.php and
+    ## manage-us3-pipe.php are daemons meant to keep running after the
+    ## shell that started them exits, and the plain foreground example
+    ## left an admin's terminal blocked on it instead.
+    function gridctl_require_not_root( $file, $action, $replay_args = null, $background = false ) {
         if ( ! function_exists( 'posix_geteuid' ) || posix_geteuid() !== 0 ) {
             return;
+        }
+
+        $cmd = 'php ' . escapeshellarg( $file ) . ' ' . ( $replay_args !== null ? $replay_args : $action );
+        if ( $background ) {
+            $cmd = "nohup $cmd >/dev/null 2>&1 &";
         }
 
         fwrite( STDERR, basename( $file ) . " $action refused: these services submit and"
@@ -51,7 +68,7 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
             . " started as root, every submission fails at staging because root has no ssh"
             . " key or known_hosts entry for the cluster(s) us3 does.\n"
             . "Run this as us3 instead, for example:\n"
-            . "    runuser -l us3 -c " . escapeshellarg( 'php ' . escapeshellarg( $file ) . " $action" ) . "\n"
+            . "    runuser -l us3 -c " . escapeshellarg( $cmd ) . "\n"
             . "or let us3-listen.service start it, which already runs as us3.\n" );
         exit( 1 );
     }

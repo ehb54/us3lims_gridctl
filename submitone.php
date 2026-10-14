@@ -90,6 +90,55 @@ function check_cli_errors_in_dump() {
     }
 }
 
+## The Reason field has no guard against
+## whatever an included page's $cli_errors/error_get_last() text happens
+## to contain -- an included web page's own fatal can leave HTML tags or
+## a print_r()/var_export() dump of a response structure in there, which
+## then goes out verbatim as a several-hundred-character unreadable blob.
+## Pure (no mail/global access) so it is testable on strings alone, same
+## pattern as every other decision function in this file.
+function format_mail_reason( $reason, $max_length = 500 ) {
+    $text = trim( (string) preg_replace( '/\s+/', ' ', strip_tags( (string) $reason ) ) );
+    if ( strlen( $text ) > $max_length ) {
+        $text = substr( $text, 0, $max_length ) . '... (truncated)';
+    }
+    return $text;
+}
+
+## Neither fail_job() nor error() ever told anyone a submission failed --
+## both only ever wrote statusMsg to the DB (round-13 should fix, dbinst#57:
+## "a refused submission ... tells no one"). $org_name/$admin_email/
+## $servhost all come from listen-config.php, same as mail_to_admin()
+## (jobmonitor/gridctl.php) already reads for a running job's own failure
+## mail -- that function isn't reused directly here since its message
+## format is written for a job already mid-poll ($updateTime/$status/
+## $cluster), not a submission that never got that far.
+function mail_submission_fail_to_admin( $reason ) {
+    global $org_name;
+    global $admin_email;
+    global $servhost;
+    global $lims_db;
+    global $ID;
+
+    if ( !isset( $admin_email ) || $admin_email === '' ) {
+        return;
+    }
+
+    $headers  = "From: $org_name Admin<$admin_email>"  . "\n";
+    $headers .= "Reply-To: $org_name<$admin_email>"    . "\n";
+    $headers .= "X-Mailer: PHP v" . phpversion()        . "\n";
+    $headers .= "MIME-Version: 1.0"                     . "\n";
+    $headers .= "Content-Transfer-Encoding: 8bit"       . "\n";
+
+    $subject = "US3 Submission Failure Notification";
+    $message = "UltraScan job submission failed on $servhost:\n\n"
+             . "Database       :  $lims_db\n"
+             . "Request ID     :  $ID\n"
+             . "Reason         :  " . format_mail_reason( $reason ) . "\n";
+
+    mail( $admin_email, $subject, $message, $headers );
+}
+
 function fail_job() {
     global $lims_db;
     global $cli_errors;
@@ -100,13 +149,16 @@ function fail_job() {
     global $self;
 
     $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
+    $joined_errors  = implode( '; ', quote_fix( $use_cli_errors ) );
 
-    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='" . implode( '; ', quote_fix( $use_cli_errors ) ) . "' WHERE {$id_field} = {$ID}";
+    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='$joined_errors' WHERE {$id_field} = {$ID}";
     $result = mysqli_query( $db_handle, $query );
 
     if ( !$result ) {
         write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
     }
+
+    mail_submission_fail_to_admin( $joined_errors );
 }
 
 function write_logl( $msg, $this_level = 0 ) {
@@ -135,6 +187,8 @@ function error( $msg, $fail_job = true ) {
         if ( !$result ) {
             write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
         }
+
+        mail_submission_fail_to_admin( "Error submitting job: $msg" );
     }
     exit(-1);
 }
@@ -203,7 +257,13 @@ write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 ## The included web pages can fatal or exit() without reaching our error
 ## handlers, and submitctl.php never times out a READY row. If we shut down
 ## with the row still READY, the submission did not happen: fail it.
-register_shutdown_function( function () {
+##
+## A named function, not an inline closure:
+## gridctl_extract_functions() (the test-support tokenizer this file's own
+## tests already depend on) deliberately skips an anonymous closure -- it
+## has no name to extract a standalone function under -- so the inline
+## version could never be driven directly in a test at all.
+function submitone_shutdown_handler() {
     global $db_handle, $lims_db, $submit_request_table_name, $id_field, $ID, $self;
 
     if ( ! $db_handle ) {
@@ -239,10 +299,23 @@ register_shutdown_function( function () {
         return;
     }
 
-    $last = error_get_last();
-    $msg  = $last === null
-            ? "submitone.php exited without submitting the job"
-            : "submitone.php aborted: " . $last[ 'message' ];
+    ## A page this script include()s (e.g.
+    ## require_authorized_cluster(), lib/utility.php) can exit() with its
+    ## own specific, already-known reason for refusing -- $gridctl_
+    ## submission_failure_reason, when set, is that exact reason, checked
+    ## before falling back to PHP's own error_get_last(), which only ever
+    ## reports an unrelated incidental warning/notice (confirmed: "Undefined
+    ## index: authenticatePAM" from links.php on a PAM+GMP site), never the
+    ## actual refusal.
+    global $gridctl_submission_failure_reason;
+    if ( isset( $gridctl_submission_failure_reason ) && $gridctl_submission_failure_reason !== '' ) {
+        $msg = "submitone.php aborted: $gridctl_submission_failure_reason";
+    } else {
+        $last = error_get_last();
+        $msg  = $last === null
+                ? "submitone.php exited without submitting the job"
+                : "submitone.php aborted: " . $last[ 'message' ];
+    }
 
     write_logl( "$self: {$id_field} {$ID} still $status at shutdown, marking FAILED: $msg", 0 );
 
@@ -254,7 +327,18 @@ register_shutdown_function( function () {
     mysqli_stmt_bind_param( $statement, 'si', $msg, $request_id );
     mysqli_stmt_execute( $statement );
     mysqli_stmt_close( $statement );
-} );
+
+    ## A refused cluster, a page fatal,
+    ## or any other exit through this shutdown handler used to only ever
+    ## write $msg to statusMsg -- nothing here ever mailed anyone, unlike
+    ## fail_job()/error() below, which already call mail_submission_fail_
+    ## to_admin(). This is the one remaining choke point every such exit
+    ## passes through, so it is the one place that has to mail, not one
+    ## more path that bypasses it.
+    mail_submission_fail_to_admin( $msg );
+}
+
+register_shutdown_function( 'submitone_shutdown_handler' );
 
 $autoflowanalysis = db_obj_result( $db_handle,
     "SELECT clusterDefault, tripleName, filename, invID, aprofileGUID, statusJson FROM {$lims_db}.{$submit_request_table_name} WHERE {$id_field}=$ID" );

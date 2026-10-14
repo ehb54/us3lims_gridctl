@@ -6,8 +6,13 @@ $us3util = "$us3lims/database/utils";
 $us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
 require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
-gridctl_require_not_root( __FILE__, 'start' );
-include $class_dir . "../global_config.php";
+## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID",
+## not the literal word "start" -- pass the actual arguments through so the
+## printed remedy can be run as-is instead of failing with rc 255 for a
+## missing argument (round-13 nit).
+gridctl_require_not_root( __FILE__, 'start',
+    implode( ' ', array_map( 'escapeshellarg', array_slice( $argv, 1 ) ) ) );
+include_once $class_dir . "../global_config.php";
 
 include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
 include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"

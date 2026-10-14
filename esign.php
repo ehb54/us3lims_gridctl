@@ -2,6 +2,11 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
+## This is a while(1) daemon exactly like listen.php/manage-us3-pipe.php,
+## whose own suggested remedy already backgrounds correctly -- this one
+## didn't, so the suggested fix, copy-pasted as printed, ran the daemon
+## tied to the operator's own shell instead of surviving it.
+gridctl_require_not_root( __FILE__, 'start', null, true );
 
 # ********* start user defines *************
 

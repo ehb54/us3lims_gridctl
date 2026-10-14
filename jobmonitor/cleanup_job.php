@@ -129,6 +129,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    global $status;
    global $stdout;
    global $requestID;
+   global $us3util;
 
    $requestID = $reqID;
    $db = $us3_db;
@@ -990,6 +991,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       $normalised !== null ? queue_status_from_job( $normalised ) : null,
       $queue_msg );
 
+   ## Bounded here, immediately before the first finalizing write, not on
+   ## the connection as a whole: open_db_or_retry() used to set this same
+   ## 5s bound once at connection-open time, which meant it sat on every
+   ## routine poll query for the rest of the job's monitored life, not just
+   ## this write (round-13 nit) -- harmless in practice (a poll essentially
+   ## never contends for this lock), but the wrong place to express what is
+   ## actually a finalizing-write concern. global, not the function's own
+   ## $db_handle parameter: update_autoflow_status() reads job_machine()'s
+   ## global $db_handle fresh on every call, which is what this has to bind.
+   global $db_handle;
+   cleanup_job_bound_lock_wait( $db_handle );
+
    $status_recorded = update_autoflow_status( $status, $queue_msg );
 
    ## update_autoflow_status()'s own link comes from job_machine()'s global
@@ -1044,11 +1057,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       ## waiting on nothing. Results are already imported either way --
       ## --restart only needs to run once to close the marker out; it is
       ## not itself destructive to run again if nothing is pending.
+      ##
+      ## Prints a runnable command, not just the bare filename (round-13
+      ## should-fix): "uslims_jobs.php --restart" has no path and no
+      ## interpreter in front of it, and the file itself is 0644, so typed
+      ## as written it is "command not found", same class of bug as the
+      ## pre-round-12 services.php remedy.
+      $restart = "php " . escapeshellarg( "$us3util/uslims_jobs.php" ) . " --restart";
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
                    . " completed and the user has been notified; results are already imported."
                    . " A status-pending marker was left for this job. Run"
-                   . " 'uslims_jobs.php --restart' to close it out -- this does not happen on"
+                   . " '$restart' to close it out -- this does not happen on"
                    . " its own, nothing is scheduled to run it automatically. If it is still"
                    . " stuck after that, the autoflowAnalysis and/or HPCAnalysisResult status"
                    . " column may need to be corrected by hand." );
