@@ -658,7 +658,7 @@ function pick_cluster_in_utc_session( $gfac_link, callable $query )
    {
       if ( $saved !== null )
       {
-         mysqli_query( $gfac_link, 'SET SESSION time_zone = ' . "'" . mysqli_real_escape_string( $gfac_link, $saved ) . "'" );
+         mysqli_query( $gfac_link, 'SET SESSION time_zone = ' . "'" . mysqli_real_escape_string( $gfac_link, $saved ) . "'" ); // NOSONAR $saved is the server's own @@session.time_zone value, read back above and escaped, not user input
       }
    }
 }
