@@ -22,6 +22,24 @@ if ( count( $argv ) != 3 ) {
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 
+## Pulled into its own function, not a bare top-level statement, so a test
+## driven through gridctl_extract_functions() (tokenizer-based, pulls only
+## function bodies -- see tests/support/gridctl/extract-functions.php) can
+## call this directly to simulate "ran before anything else touches
+## $admin_email", the same as this script's own top-level call to it does.
+##
+## $admin_email itself gets overwritten later, once the job's own instance
+## config.php loads ($php_base below), with that instance's contact
+## address, not the site admin's. mail_submission_fail_to_admin() below
+## reads this dedicated copy instead of the raw global, so every failure
+## mail goes to the site admin regardless of when in the run it fires, not
+## only the ones that happen to run before the instance config loads.
+function capture_site_admin_email() {
+    global $admin_email, $site_admin_email;
+    $site_admin_email = $admin_email ?? null;
+}
+capture_site_admin_email();
+
 # ********* start user defines *************
 
 $poll_sleep_seconds = 30;
@@ -61,6 +79,22 @@ function check_cli_errors() {
     }
 }
 
+## A pool that lists a cluster the instance doesn't enable makes common's
+## class/jobsubmit.php print exactly this shape on every submission the
+## instance makes, direct ones included -- a configuration note about the
+## pool's own definition, not a reason THIS job failed to submit. Round 15
+## should-fix, gridctl#33 (see common#33 for printing it as ERROR: at
+## all): recognized by shape here, defensively, so a submission that
+## genuinely went through is never folded into $cli_errors -- and so
+## reported as a failed submission -- over a warning that has nothing to
+## do with whether this particular job's submission succeeded.
+function is_benign_metascheduler_config_note( $line ) {
+    return (bool) preg_match(
+        '/ERROR:\s*class\/jobsubmit\.php\s*:\s*metascheduler\b.*not enabled for this instance/',
+        $line
+    );
+}
+
 ## The included web pages (e.g. 2DSA_2.php) don't push job submission
 ## failures into $cli_errors themselves - they only echo an ERROR:
 ## line into the dumped output. Scan the dump for that and fold any
@@ -76,6 +110,9 @@ function check_cli_errors_in_dump() {
     $dump = file_get_contents( $dumpfile );
     if ( preg_match_all( '/^.*ERROR:.*$/m', $dump, $matches ) ) {
         foreach ( $matches[ 0 ] as $line ) {
+            if ( is_benign_metascheduler_config_note( $line ) ) {
+                continue;
+            }
             $cli_errors[] = $line;
         }
     }
@@ -104,19 +141,39 @@ function format_mail_reason( $reason, $max_length = 500 ) {
 ## mail -- that function isn't reused directly here since its message
 ## format is written for a job already mid-poll ($updateTime/$status/
 ## $cluster), not a submission that never got that far.
+## Round 15 should-fix, gridctl#33: a breaker trip, an sbatch rejection or
+## an "outcome unknown" result sent 2-3 of these for the one failure --
+## fail_job()/error() mail explicitly and then either exit() or fall
+## through to the script's natural end, both of which still run
+## submitone_shutdown_handler() (a registered shutdown function always
+## runs), and that handler mails again itself whenever it finds the row's
+## status still isn't FAILED/dealt with by the time it re-checks (a status
+## UPDATE that raced, failed, or simply hadn't committed yet). Each call
+## site reasoned about its own single path, not about every OTHER path
+## that can also reach a mail for the exact same request. A per-request
+## sent-once guard here, not another status check at each call site, is
+## what actually guarantees "exactly one," regardless of which path (or
+## combination of paths) gets there.
+$submission_fail_mail_sent = [];
 function mail_submission_fail_to_admin( $reason ) {
     global $org_name;
-    global $admin_email;
+    global $site_admin_email;
     global $servhost;
     global $lims_db;
     global $ID;
+    global $submission_fail_mail_sent;
 
-    if ( !isset( $admin_email ) || $admin_email === '' ) {
+    if ( !isset( $site_admin_email ) || $site_admin_email === '' ) {
         return;
     }
 
-    $headers  = "From: $org_name Admin<$admin_email>"  . "\n";
-    $headers .= "Reply-To: $org_name<$admin_email>"    . "\n";
+    if ( !empty( $submission_fail_mail_sent[ $ID ] ) ) {
+        return;
+    }
+    $submission_fail_mail_sent[ $ID ] = true;
+
+    $headers  = "From: $org_name Admin<$site_admin_email>"  . "\n";
+    $headers .= "Reply-To: $org_name<$site_admin_email>"    . "\n";
     $headers .= "X-Mailer: PHP v" . phpversion()        . "\n";
     $headers .= "MIME-Version: 1.0"                     . "\n";
     $headers .= "Content-Transfer-Encoding: 8bit"       . "\n";
@@ -127,7 +184,7 @@ function mail_submission_fail_to_admin( $reason ) {
              . "Request ID     :  $ID\n"
              . "Reason         :  " . format_mail_reason( $reason ) . "\n";
 
-    mail( $admin_email, $subject, $message, $headers );
+    mail( $site_admin_email, $subject, $message, $headers );
 }
 
 function fail_job() {
