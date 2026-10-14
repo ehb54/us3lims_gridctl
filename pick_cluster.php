@@ -389,8 +389,7 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
       ## chose to skip this (e.g. existing tests that predate this check);
       ## every other caller must pass the real list.
       ##
-      ## ROUND-14 SHOULD-FIX (gridctl#35/dbinst#82): an entry flagged
-      ## 'localhost' => true is exempt from this list entirely, matching
+      ## An entry flagged 'localhost' => true is exempt from this list entirely, matching
       ## dbinst's own cluster_is_authorized() (lib/utility.php) exactly --
       ## it is the appliance's own co-located node, inherent site
       ## infrastructure the LIMS host already controls, not an external
