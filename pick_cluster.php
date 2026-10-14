@@ -264,23 +264,22 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
       ## comparing to its maxproc.
       if ( $key === 'maxproc' )
       {
-         ## A candidate that never declared ppbj at all stays uncapped here,
-         ## deliberately (round-12): the clamp only narrows using a value
-         ## the candidate actually declares, so incomplete pre-filter data
-         ## is never read as "this candidate can only take one task" by
-         ## accident. But jobsubmit.php's own tasks_per_group_plan() reads
-         ## $ppbj = max(1, (int)$cfg['ppbj']) -- once a value IS declared,
-         ## even 0, that function clamps it to 1, never treats 0 as
-         ## "unlimited". Comparing is_numeric($ppbj) && > 0 here instead
-         ## skipped the clamp entirely for a declared-but-zero ppbj,
-         ## wrongly letting the raw, uncapped demand through for a
-         ## candidate the real sizing would clamp to a single task (round-13
-         ## nit, gridctl#35).
+         ## jobsubmit.php's own tasks_per_group_plan() reads
+         ## $ppbj = max(1, (int)$cfg['ppbj']) unconditionally -- absent,
+         ## empty, or a non-numeric string all cast to (int) 0, then clamp
+         ## to 1, exactly the same as a declared 0 does. An earlier version
+         ## of this clamp only applied when is_numeric($ppbj), leaving
+         ## absent/''/'abc' uncapped here while the real sizing still
+         ## clamped them to 1 -- the pre-filter's own declared invariant
+         ## ("must never reject a cluster the real sizing would accept")
+         ## does not fail for an uncapped pre-filter, but it also means
+         ## this pre-filter can no longer distinguish "unlimited" from
+         ## "whatever this candidate's ppbj casts to," since nothing in the
+         ## real sizing ever treats a missing/invalid value as unlimited
+         ## either (round 15 nit, gridctl#35). Matching it exactly, for
+         ## every value shape, not just numeric ones.
          $ppbj = $opt( 'ppbj', null );
-         if ( is_numeric( $ppbj ) )
-         {
-            $demand = min( (int) $demand, max( 1, (int) $ppbj ) );
-         }
+         $demand = min( (int) $demand, max( 1, (int) $ppbj ) );
       }
 
       $limit = $opt( $key, null );
