@@ -125,10 +125,20 @@ function check_cli_errors_in_dump() {
 ## then goes out verbatim as a several-hundred-character unreadable blob.
 ## Pure (no mail/global access) so it is testable on strings alone, same
 ## pattern as every other decision function in this file.
+## Round 15 nit, gridctl#33: three more things an included page's own
+## dump can leave in here besides HTML tags -- a print_r()-style array
+## index marker ("[0] => ", left behind when something upstream dumped an
+## array instead of joining it), the identical error duplicated (a direct
+## call's own $reason and the dump-scanned copy of that exact same line,
+## folded into one joined string by check_cli_errors_in_dump()), and a
+## byte-count truncation that can split a multi-byte UTF-8 character in
+## two, leaving invalid UTF-8 in the mail body.
 function format_mail_reason( $reason, $max_length = 500 ) {
     $text = trim( (string) preg_replace( '/\s+/', ' ', strip_tags( (string) $reason ) ) );
+    $text = preg_replace( '/\[\d+\]\s*=>\s*/', '', $text );
+    $text = implode( '; ', array_unique( array_filter( array_map( 'trim', explode( ';', $text ) ) ) ) );
     if ( strlen( $text ) > $max_length ) {
-        $text = substr( $text, 0, $max_length ) . '... (truncated)';
+        $text = mb_strcut( $text, 0, $max_length, 'UTF-8' ) . '... (truncated)';
     }
     return $text;
 }
