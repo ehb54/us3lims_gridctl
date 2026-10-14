@@ -18,6 +18,19 @@
 const PICK_CLUSTER_WARN_PENALTY = 100000;
 
 /**
+ * A cluster_details[...]['localhost'] flag, parsed the same way a human
+ * reads it, matching common#33's own remote_exec::is_local() fix for the
+ * identical mistake: a bare PHP bool is trusted as-is, but plain
+ * !empty()/! treats the STRING 'false' as truthy (PHP only treats an
+ * empty string/'0' as falsy), so a config written 'localhost' => 'false'
+ * was silently read as local. Round 15 nit, gridctl#35.
+ */
+function pick_cluster_entry_is_local( $localhost )
+{
+    return is_string( $localhost ) ? filter_var( $localhost, FILTER_VALIDATE_BOOLEAN ) : (bool) $localhost;
+}
+
+/**
  * True when a cluster_details entry is a metascheduler pseudo-entry (has a
  * "clusters" list to pick a real cluster from) rather than a real cluster.
  */
@@ -399,7 +412,14 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
       ## interactive path) had every pool refuse them: pool membership
       ## gated on the identical clusterAuth list this exemption already
       ## applies to for a direct submission, just never carried over here.
-      $is_local = !empty( $entry[ 'localhost' ] );
+      ## pick_cluster_entry_is_local(), not !empty() (round 15 nit,
+      ## gridctl#35, matching common#33's own remote_exec::is_local() fix
+      ## for the identical mistake): !empty() reads the STRING 'false' as
+      ## truthy (PHP only treats an empty string/'0' as falsy), so a pool
+      ## entry written 'localhost' => 'false' -- an easy mistake, since
+      ## every other boolean-ish setting in the template is a bare
+      ## true/false, not a quoted one -- was silently read as local.
+      $is_local = pick_cluster_entry_is_local( $entry[ 'localhost' ] ?? false );
       if ( !$is_local && $authorized_clusters !== null && ! in_array( $name, $authorized_clusters, true ) )
       {
          $scores[ $name ] = array( 'eligible' => false, 'reason' => 'not authorized for this user',
