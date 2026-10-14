@@ -388,7 +388,20 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
       ## submission would be. $authorized_clusters === null means the caller
       ## chose to skip this (e.g. existing tests that predate this check);
       ## every other caller must pass the real list.
-      if ( $authorized_clusters !== null && ! in_array( $name, $authorized_clusters, true ) )
+      ##
+      ## ROUND-14 SHOULD-FIX (gridctl#35/dbinst#82): an entry flagged
+      ## 'localhost' => true is exempt from this list entirely, matching
+      ## dbinst's own cluster_is_authorized() (lib/utility.php) exactly --
+      ## it is the appliance's own co-located node, inherent site
+      ## infrastructure the LIMS host already controls, not an external
+      ## allocation a site admin grants per account. Without this, an
+      ## owner whose only route to the local node is that flag (the exact
+      ## gap cluster_is_authorized() was already fixed for, on the
+      ## interactive path) had every pool refuse them: pool membership
+      ## gated on the identical clusterAuth list this exemption already
+      ## applies to for a direct submission, just never carried over here.
+      $is_local = !empty( $entry[ 'localhost' ] );
+      if ( !$is_local && $authorized_clusters !== null && ! in_array( $name, $authorized_clusters, true ) )
       {
          $scores[ $name ] = array( 'eligible' => false, 'reason' => 'not authorized for this user',
             'tier' => isset( $entry[ 'tier' ] ) ? $entry[ 'tier' ] : null, 'status' => null, 'load' => null );
@@ -614,19 +627,6 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
    return $snapshot;
 }
 
-/**
- * Count each candidate's not-yet-expired nudges from gfac.cluster_status_nudge
- * (written by pick_cluster_record_nudge()). Separate from cluster_status
- * itself -- which only a real probe ever writes -- so a nudge ages out on
- * its own after $ttl_seconds instead of persisting, uncorrected, until the
- * next probe (every 12 minutes by default): a burst of decisions large
- * enough to nudge every candidate past saturation_threshold used to read as
- * "every candidate saturated" for the full gap until the next probe, even
- * once every one of those jobs had already finished.
- *
- * @return array keyed by every entry in $candidates (0 when absent), so a
- *         caller can always add this directly onto a snapshot's 'queued'.
- */
 ## FROM_UNIXTIME() turns an unambiguous unix timestamp into a wall-clock
 ## string in the session's own time zone; storing or comparing that string
 ## against a TIMESTAMP column re-interprets it as local wall-clock time all
@@ -664,6 +664,19 @@ function pick_cluster_in_utc_session( $gfac_link, callable $query )
    }
 }
 
+/**
+ * Count each candidate's not-yet-expired nudges from gfac.cluster_status_nudge
+ * (written by pick_cluster_record_nudge()). Separate from cluster_status
+ * itself -- which only a real probe ever writes -- so a nudge ages out on
+ * its own after $ttl_seconds instead of persisting, uncorrected, until the
+ * next probe (every 12 minutes by default): a burst of decisions large
+ * enough to nudge every candidate past saturation_threshold used to read as
+ * "every candidate saturated" for the full gap until the next probe, even
+ * once every one of those jobs had already finished.
+ *
+ * @return array keyed by every entry in $candidates (0 when absent), so a
+ *         caller can always add this directly onto a snapshot's 'queued'.
+ */
 function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_seconds )
 {
    $counts = array_fill_keys( $candidates, 0 );
