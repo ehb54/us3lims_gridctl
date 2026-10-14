@@ -455,9 +455,18 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
 
       $status = isset( $row[ 'status' ] ) ? $row[ 'status' ] : 'unknown';
 
-      if ( $status === 'down' )
+      ## Round 15 nit, dbinst#82: 'draining' (an operator taking a cluster
+      ## out of rotation by hand, e.g. down_clusters.php) was never in
+      ## this function's own documented status vocabulary ('up'/'warn'/
+      ## 'down'/'unknown'), so it fell through the one explicit exclusion
+      ## above (=== 'down') and scored as eligible -- a cluster the
+      ## display side already shows as degraded/unavailable (dbinst's own
+      ## pool_status_from_members() treats 'draining' as down-like) could
+      ## still be picked for a real submission. Excluded the same way
+      ## 'down' is.
+      if ( $status === 'down' || $status === 'draining' )
       {
-         $scores[ $name ] = array( 'eligible' => false, 'reason' => 'down',
+         $scores[ $name ] = array( 'eligible' => false, 'reason' => $status,
             'tier' => $tier, 'status' => $status, 'load' => null );
          continue;
       }
