@@ -200,6 +200,7 @@ if (
       listen_db_obj_result( $db_handle
                      ,"select"
                      . " cluster"
+                     . " ,metaschedulerClusterExecuting"
                      . " ,status"
                      . " ,queue_msg"
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
@@ -214,7 +215,17 @@ if (
     error_exit( "gfacID $gfacID not found in gfac.analysis" );
 }
 
-$cluster            = $res_analysis->{"cluster"};
+## A metascheduler pseudo-cluster submission (cluster_shortname stays the
+## pseudo name, e.g. 'metascheduler') has no real sshport/workdir of its own;
+## the real destination pick_cluster() resolved to lives in this column
+## instead (see pick_cluster.php, submit_slurm.php's update_db()). Probing
+## the pseudo name directly would try to SSH into a destination that does
+## not exist. queue_viewer.php and queuepos.php already apply this same
+## preference; this is the one place in the monitor itself that fetches the
+## job's cluster, once, at startup, so the fix belongs only here.
+$cluster            = empty( $res_analysis->{"metaschedulerClusterExecuting"} )
+                      ? $res_analysis->{"cluster"}
+                      : $res_analysis->{"metaschedulerClusterExecuting"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
 ## gfac.analysis.time twice: the epoch for the stall clocks, the text for the admin mail.

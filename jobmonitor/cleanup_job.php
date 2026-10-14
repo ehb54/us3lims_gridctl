@@ -249,7 +249,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result );
 
    ## The caller's connection already reaches the central job-tracking database.
-   $query = "SELECT status, cluster, id FROM gfac.analysis " .
+   $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
             "WHERE gfacID='$gfacID'";
 
    $result = mysqli_query( $db_handle, $query );
@@ -280,7 +280,16 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 ##write_logld( "$me:    db=$db; num_rows=$num_rows; queuestatus=$queuestatus" );
 ##}
 
-   list( $status, $cluster, $id ) = mysqli_fetch_array( $result );
+   list( $status, $cluster, $metaschedulerClusterExecuting, $id ) = mysqli_fetch_array( $result );
+
+   ## A metascheduler pseudo-cluster submission has no real sshport/workdir of
+   ## its own to fetch results from; pick_cluster()'s resolved real
+   ## destination lives in metaschedulerClusterExecuting instead (see
+   ## jobmonitor.php's own fetch above, queue_viewer.php, queuepos.php).
+   if ( ! empty( $metaschedulerClusterExecuting ) )
+   {
+      $cluster = $metaschedulerClusterExecuting;
+   }
 
    ## Stage the results into the job-tracking row. An unreachable cluster (-1)
    ## is retried until the ceiling, then the job is failed; -2 fails it now.
