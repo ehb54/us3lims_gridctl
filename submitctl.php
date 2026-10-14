@@ -3,11 +3,10 @@
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 $home   = dirname( $us3bin );
 require_once __DIR__ . '/gridctl_bootstrap.php';
-## Round-14 nit (gridctl#33): this is a while(1) daemon exactly like
-## listen.php/manage-us3-pipe.php below, whose own suggested remedy already
-## backgrounds correctly (round-13 nit) -- this one didn't, so the
-## suggested fix, copy-pasted as printed, ran the daemon tied to the
-## operator's own shell instead of surviving it.
+## This is a while(1) daemon exactly like listen.php/manage-us3-pipe.php
+## below, whose own suggested remedy already backgrounds correctly -- this
+## one didn't, so the suggested fix, copy-pasted as printed, ran the daemon
+## tied to the operator's own shell instead of surviving it.
 gridctl_require_not_root( __FILE__, 'start', null, true );
 include_once $class_dir . "../global_config.php";   ## $cluster_details
 include_once __DIR__ . "/cluster_probe.php";   ## ask a cluster about a job

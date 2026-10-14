@@ -81,7 +81,7 @@ function check_cli_errors_in_dump() {
     }
 }
 
-## Round-14 nit (gridctl#33): the Reason field has no guard against
+## The Reason field has no guard against
 ## whatever an included page's $cli_errors/error_get_last() text happens
 ## to contain -- an included web page's own fatal can leave HTML tags or
 ## a print_r()/var_export() dump of a response structure in there, which
@@ -249,7 +249,7 @@ write_logl( "connected to mysql: $dbhost, $user, $db.", 2 );
 ## handlers, and submitctl.php never times out a READY row. If we shut down
 ## with the row still READY, the submission did not happen: fail it.
 ##
-## A named function, not an inline closure (round-14 should-fix, gridctl#33):
+## A named function, not an inline closure:
 ## gridctl_extract_functions() (the test-support tokenizer this file's own
 ## tests already depend on) deliberately skips an anonymous closure -- it
 ## has no name to extract a standalone function under -- so the inline
@@ -290,7 +290,7 @@ function submitone_shutdown_handler() {
         return;
     }
 
-    ## ROUND-14 SHOULD-FIX (dbinst#57): a page this script include()s (e.g.
+    ## A page this script include()s (e.g.
     ## require_authorized_cluster(), lib/utility.php) can exit() with its
     ## own specific, already-known reason for refusing -- $gridctl_
     ## submission_failure_reason, when set, is that exact reason, checked
@@ -319,7 +319,7 @@ function submitone_shutdown_handler() {
     mysqli_stmt_execute( $statement );
     mysqli_stmt_close( $statement );
 
-    ## ROUND-14 SHOULD-FIX (gridctl#33): a refused cluster, a page fatal,
+    ## A refused cluster, a page fatal,
     ## or any other exit through this shutdown handler used to only ever
     ## write $msg to statusMsg -- nothing here ever mailed anyone, unlike
     ## fail_job()/error() below, which already call mail_submission_fail_
