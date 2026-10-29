@@ -124,7 +124,13 @@ function format_mail_reason( $reason, $max_length = 500 ) {
     $text = preg_replace( '/\[\d+\]\s*=>\s*/', '', $text );
     $text = implode( '; ', array_unique( array_filter( array_map( 'trim', explode( ';', $text ) ) ) ) );
     if ( strlen( $text ) > $max_length ) {
-        $text = mb_strcut( $text, 0, $max_length, 'UTF-8' ) . '... (truncated)';
+        ## Byte cut backed off past UTF-8 continuation bytes (10xxxxxx) to a character start, so
+        ## no character is split; plain PHP, since a host may lack php-mbstring.
+        $cut = $max_length;
+        while ( $cut > 0 && ( ord( $text[ $cut ] ) & 0xC0 ) === 0x80 ) {
+            $cut--;
+        }
+        $text = substr( $text, 0, $cut ) . '... (truncated)';
     }
     return $text;
 }
@@ -166,7 +172,6 @@ function mail_submission_fail_to_admin( $reason ) {
     if ( !empty( $submission_fail_mail_sent[ $ID ] ) ) {
         return;
     }
-    $submission_fail_mail_sent[ $ID ] = true;
 
     $headers  = "From: $org_name Admin<$site_admin_email>"  . "\n";
     $headers .= "Reply-To: $org_name<$site_admin_email>"    . "\n";
@@ -181,6 +186,8 @@ function mail_submission_fail_to_admin( $reason ) {
              . "Reason         :  " . format_mail_reason( $reason ) . "\n";
 
     mail( $site_admin_email, $subject, $message, $headers );
+    ## Set once the mail is handed off, so a fatal while building it does not silence the next path.
+    $submission_fail_mail_sent[ $ID ] = true;
 }
 
 function fail_job() {
