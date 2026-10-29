@@ -455,15 +455,7 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
 
       $status = isset( $row[ 'status' ] ) ? $row[ 'status' ] : 'unknown';
 
-      ## Round 15 nit, dbinst#82: 'draining' (an operator taking a cluster
-      ## out of rotation by hand, e.g. down_clusters.php) was never in
-      ## this function's own documented status vocabulary ('up'/'warn'/
-      ## 'down'/'unknown'), so it fell through the one explicit exclusion
-      ## above (=== 'down') and scored as eligible -- a cluster the
-      ## display side already shows as degraded/unavailable (dbinst's own
-      ## pool_status_from_members() treats 'draining' as down-like) could
-      ## still be picked for a real submission. Excluded the same way
-      ## 'down' is.
+      ## 'draining' comes from the operator's down_clusters.php (pick_cluster_apply_operator_overrides())
       if ( $status === 'down' || $status === 'draining' )
       {
          $scores[ $name ] = array( 'eligible' => false, 'reason' => $status,
@@ -578,7 +570,47 @@ function pick_cluster_log_line( $pseudo_cluster, array $result )
  *
  * @return array keyed by cluster name, in the shape pick_cluster() expects.
  */
-function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = null, $nudge_ttl_seconds = null )
+/**
+ * The clusters an operator has taken out of rotation in down_clusters.php ($down_clusters,
+ * $draining_clusters): the file dbinst's cluster list reads, one level above the instance
+ * directory both callers run in. Empty lists when the file is absent.
+ */
+function pick_cluster_operator_overrides( $path = '../down_clusters.php' )
+{
+   $down_clusters     = array();
+   $draining_clusters = array();
+   if ( is_file( $path ) )
+   {
+      include $path;
+   }
+   return array(
+      'down'     => is_array( $down_clusters ) ? array_values( $down_clusters ) : array(),
+      'draining' => is_array( $draining_clusters ) ? array_values( $draining_clusters ) : array(),
+   );
+}
+
+/**
+ * Marks the operator's down and draining clusters in a status snapshot, as dbinst's cluster list
+ * does (draining after down); pick_cluster() excludes both. A cluster without a status row keeps
+ * none: an override never creates status data.
+ */
+function pick_cluster_apply_operator_overrides( array $snapshot, array $overrides )
+{
+   foreach ( array( 'down', 'draining' ) as $mark )
+   {
+      foreach ( $overrides[ $mark ] as $name )
+      {
+         if ( isset( $snapshot[ $name ] ) )
+         {
+            $snapshot[ $name ][ 'status' ] = $mark;
+         }
+      }
+   }
+   return $snapshot;
+}
+
+function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = null, $nudge_ttl_seconds = null,
+                                       $operator_file = '../down_clusters.php' )
 {
    $snapshot = array();
 
@@ -651,7 +683,7 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
       }
    }
 
-   return $snapshot;
+   return pick_cluster_apply_operator_overrides( $snapshot, pick_cluster_operator_overrides( $operator_file ) );
 }
 
 ## FROM_UNIXTIME() turns an unambiguous unix timestamp into a wall-clock
