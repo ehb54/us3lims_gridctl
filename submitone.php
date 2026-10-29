@@ -43,9 +43,11 @@ require_once __DIR__ . '/pick_cluster_reserve.php';
 ## reads this dedicated copy instead of the raw global, so every failure
 ## mail goes to the site admin regardless of when in the run it fires, not
 ## only the ones that happen to run before the instance config loads.
+## The host's org name is captured with it, since the instance config also overwrites $org_name.
 function capture_site_admin_email() {
-    global $admin_email, $site_admin_email;
+    global $admin_email, $site_admin_email, $org_name, $site_org_name;
     $site_admin_email = $admin_email ?? null;
+    $site_org_name    = $org_name ?? null;
 }
 capture_site_admin_email();
 
@@ -138,9 +140,11 @@ function check_cli_errors_in_dump() {
 ## byte-count truncation that can split a multi-byte UTF-8 character in
 ## two, leaving invalid UTF-8 in the mail body.
 function format_mail_reason( $reason, $max_length = 500 ) {
-    $text = trim( (string) preg_replace( '/\s+/', ' ', strip_tags( (string) $reason ) ) );
-    $text = preg_replace( '/\[\d+\]\s*=>\s*/', '', $text );
-    $text = implode( '; ', array_unique( array_filter( array_map( 'trim', explode( ';', $text ) ) ) ) );
+    ## Lines and ';' both separate items, so a duplicate on another line is dropped too.
+    $text  = preg_replace( '/\[\d+\]\s*=>\s*/', '', strip_tags( (string) $reason ) );
+    $items = array_map( function ( $item ) { return trim( (string) preg_replace( '/\s+/', ' ', $item ) ); },
+                        preg_split( '/[;\r\n]+/', $text ) );
+    $text  = implode( '; ', array_unique( array_filter( $items, 'strlen' ) ) );
     if ( strlen( $text ) > $max_length ) {
         ## Byte cut backed off past UTF-8 continuation bytes (10xxxxxx) to a character start, so
         ## no character is split; plain PHP, since a host may lack php-mbstring.
@@ -175,23 +179,26 @@ function format_mail_reason( $reason, $max_length = 500 ) {
 ## combination of paths) gets there.
 $submission_fail_mail_sent = [];
 function mail_submission_fail_to_admin( $reason ) {
-    global $org_name;
+    global $org_name, $site_org_name;
     global $site_admin_email;
     global $servhost;
     global $lims_db;
     global $ID;
     global $submission_fail_mail_sent;
 
-    if ( !isset( $site_admin_email ) || $site_admin_email === '' ) {
-        return;
-    }
-
     if ( !empty( $submission_fail_mail_sent[ $ID ] ) ) {
         return;
     }
 
-    $headers  = "From: $org_name Admin<$site_admin_email>"  . "\n";
-    $headers .= "Reply-To: $org_name<$site_admin_email>"    . "\n";
+    $to = $site_admin_email ?? '';
+    if ( $to === '' ) {
+        $to = 'root@localhost';
+        write_log( "listen-config.php sets no admin_email; sending the submission failure notice for $ID to $to" );
+    }
+    $from_name = $site_org_name ?? $org_name ?? 'LIMS';
+
+    $headers  = "From: $from_name Admin<$to>"  . "\n";
+    $headers .= "Reply-To: $from_name<$to>"    . "\n";
     $headers .= "X-Mailer: PHP v" . phpversion()        . "\n";
     $headers .= "MIME-Version: 1.0"                     . "\n";
     $headers .= "Content-Transfer-Encoding: 8bit"       . "\n";
@@ -202,7 +209,7 @@ function mail_submission_fail_to_admin( $reason ) {
              . "Request ID     :  $ID\n"
              . "Reason         :  " . format_mail_reason( $reason ) . "\n";
 
-    mail( $site_admin_email, $subject, $message, $headers );
+    mail( $to, $subject, $message, $headers );
     ## Set once the mail is handed off, so a fatal while building it does not silence the next path.
     $submission_fail_mail_sent[ $ID ] = true;
 }
