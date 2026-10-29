@@ -46,7 +46,7 @@ if ( ! function_exists( 'gridctl_service_account' ) ) {
 
 if ( ! function_exists( 'gridctl_require_not_root' ) ) {
     ## Shared by every daemon entry point (services.php, listen.php,
-    ## jobmonitor.php, manage-us3-pipe.php) -- round-12 should-fix, gridctl#33:
+    ## jobmonitor.php, manage-us3-pipe.php):
     ## the old SysV us3-listen script still runs "php ~us3/lims/bin/listen.php &"
     ## as root, and none of the daemons refused that themselves. These
     ## processes submit and manage cluster jobs as the us3 account (mkdir,
@@ -61,14 +61,14 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
     ## print gridctl_bootstrap.php's own path in the remedy instead of the
     ## script that actually needs restarting as us3.
     ##
-    ## $replay_args, when given, replaces $action in the printed command
-    ## (round-13 nit): jobmonitor.php's own real invocation is "dbname
+    ## $replay_args, when given, replaces $action in the printed command:
+    ## jobmonitor.php's own real invocation is "dbname
     ## gfacID HPCAnalysisRequestID", not the literal word "start" used for
     ## the "... refused" message, and printing "start" there left the
     ## suggested command one argument short, exiting 255. $background,
     ## when true, backgrounds the suggested command with the same
     ## nohup/redirect/& pattern listen.php itself already uses to launch
-    ## manage-us3-pipe.php (round-13 nit): listen.php and
+    ## manage-us3-pipe.php: listen.php and
     ## manage-us3-pipe.php are daemons meant to keep running after the
     ## shell that started them exits, and the plain foreground example
     ## left an admin's terminal blocked on it instead.
