@@ -26,15 +26,16 @@ mysqli_report( MYSQLI_REPORT_OFF );
 require_once __DIR__ . '/listen_functions.php';
 
 if ( ! function_exists( 'gridctl_service_account' ) ) {
-    ## The uid the daemons run as: the owner of their checkout, or the us3 account when the
-    ## checkout is root-owned (a root clone or bind mount). Null when neither is known.
+    ## The uid the daemons run as: the us3 account their paths are built on (~us3/lims), or, on a
+    ## host without one, the owner of their checkout. Checkout ownership alone is not reliable: a
+    ## bind mount can report every file as owned by whoever asks. Null when neither is known.
     function gridctl_service_account( $dir ) {
-        $owner = @fileowner( $dir );
-        if ( $owner !== false && $owner !== 0 ) {
-            return $owner;
-        }
         $us3 = function_exists( 'posix_getpwnam' ) ? posix_getpwnam( 'us3' ) : false;
-        return $us3 ? $us3[ 'uid' ] : null;
+        if ( $us3 ) {
+            return $us3[ 'uid' ];
+        }
+        $owner = @fileowner( $dir );
+        return $owner !== false && $owner !== 0 ? $owner : null;
     }
 
     ## Root never runs the daemons; any other account only when it is the service account.
