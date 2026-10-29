@@ -88,22 +88,6 @@ function check_cli_errors() {
     }
 }
 
-## A pool that lists a cluster the instance doesn't enable makes common's
-## class/jobsubmit.php print exactly this shape on every submission the
-## instance makes, direct ones included -- a configuration note about the
-## pool's own definition, not a reason THIS job failed to submit. Round 15
-## should-fix, gridctl#33 (see common#33 for printing it as ERROR: at
-## all): recognized by shape here, defensively, so a submission that
-## genuinely went through is never folded into $cli_errors -- and so
-## reported as a failed submission -- over a warning that has nothing to
-## do with whether this particular job's submission succeeded.
-function is_benign_metascheduler_config_note( $line ) {
-    return (bool) preg_match(
-        '/ERROR:\s*class\/jobsubmit\.php\s*:\s*metascheduler\b.*not enabled for this instance/',
-        $line
-    );
-}
-
 ## The included web pages (e.g. 2DSA_2.php) don't push job submission
 ## failures into $cli_errors themselves - they only echo an ERROR:
 ## line into the dumped output. Scan the dump for that and fold any
@@ -118,10 +102,8 @@ function check_cli_errors_in_dump() {
 
     $dump = file_get_contents( $dumpfile );
     if ( preg_match_all( '/^.*ERROR:.*$/m', $dump, $matches ) ) {
+        ## common prints pool-definition findings as WARNING:, so only an ERROR: fails the stage
         foreach ( $matches[ 0 ] as $line ) {
-            if ( is_benign_metascheduler_config_note( $line ) ) {
-                continue;
-            }
             $cli_errors[] = $line;
         }
     }
