@@ -40,6 +40,10 @@ function capture_site_admin_email() {
 }
 capture_site_admin_email();
 
+## The pages this script drives leave the admin notice for this submission to
+## mail_submission_fail_to_admin() below (common's submit_slurm checks this).
+define( 'US3_GRIDCTL_SUBMISSION', true );
+
 # ********* start user defines *************
 
 $poll_sleep_seconds = 30;
