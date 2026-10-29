@@ -88,6 +88,15 @@ function check_cli_errors() {
     }
 }
 
+## The pool members this instance enables in its cluster_config.php: the only ones the driven
+## page's own pick (require_cluster.php, through dbinst's instance-filtered cluster list) can choose.
+function instance_pool_candidates( $members, $cluster_configuration ) {
+    return array_values( array_filter( $members, function ( $member ) use ( $cluster_configuration ) {
+        return isset( $cluster_configuration[ $member ] ) && is_array( $cluster_configuration[ $member ] )
+            && !empty( $cluster_configuration[ $member ][ 'active' ] );
+    } ) );
+}
+
 ## The included web pages (e.g. 2DSA_2.php) don't push job submission
 ## failures into $cli_errors themselves - they only echo an ERROR:
 ## line into the dumped output. Scan the dump for that and fold any
@@ -532,6 +541,19 @@ if ( $cluster == "localhost" ) {
     ## one authoritative, lock-protected pick for both this autoflow path
     ## and an interactive submission -- can read it back once it runs
     ## inside the driven _2.php page, in this same PHP process.
+    ## The instance's cluster_config.php, found the way common's jobsubmit finds it, so this preview
+    ## picks from the same members the driven page will.
+    foreach ( array( "$php_base/cluster_config.php", "$www_uslims3/cluster_config.php",
+                     "$www_uslims3/uslims3_newlims/cluster_config.php" ) as $instance_cluster_config ) {
+        if ( is_file( $instance_cluster_config ) ) {
+            include $instance_cluster_config;
+            break;
+        }
+    }
+    $pool_candidates = isset( $cluster_configuration ) && is_array( $cluster_configuration )
+        ? instance_pool_candidates( $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ], $cluster_configuration )
+        : $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ];
+
     $job_requirements_estimate = pick_cluster_estimate_job_requirements(
         $stage, $xmljson, $stage === 'PCSA' ? 'p_pcsa' : 'p_2dsa' );
 
@@ -577,10 +599,9 @@ if ( $cluster == "localhost" ) {
                 ## second, discarded decision every autoflow job -- this call is
                 ## read-only and only feeds the host_name/queue shown below for
                 ## display/record purposes.
-                $snapshot = pick_cluster_status_snapshot( $gfac_link,
-                    $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ] );
+                $snapshot = pick_cluster_status_snapshot( $gfac_link, $pool_candidates );
                 $pick = pick_cluster(
-                    $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ],
+                    $pool_candidates,
                     $cluster_details,
                     $snapshot,
                     $job_requirements_estimate,
