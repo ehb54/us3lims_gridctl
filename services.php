@@ -89,8 +89,7 @@ $cmd[ "esign"     ] = "$us3bin/esign.php";
 ## "cannot happen", and a silently-wrong pattern here is the same class of
 ## bug this whole function exists to avoid.
 ## Moved to gridctl_bootstrap.php as gridctl_require_not_root() so every
-## daemon entry point can share it, not just this one -- round-12
-## should-fix, gridctl#33.
+## daemon entry point can share it, not just this one.
 function require_not_root( $action ) {
     gridctl_require_not_root( __FILE__, $action );
 }

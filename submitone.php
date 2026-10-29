@@ -111,7 +111,7 @@ function check_cli_errors_in_dump() {
 ## then goes out verbatim as a several-hundred-character unreadable blob.
 ## Pure (no mail/global access) so it is testable on strings alone, same
 ## pattern as every other decision function in this file.
-## Round 15 nit, gridctl#33: three more things an included page's own
+## Three more things an included page's own
 ## dump can leave in here besides HTML tags -- a print_r()-style array
 ## index marker ("[0] => ", left behind when something upstream dumped an
 ## array instead of joining it), the identical error duplicated (a direct
@@ -136,14 +136,13 @@ function format_mail_reason( $reason, $max_length = 500 ) {
 }
 
 ## Neither fail_job() nor error() ever told anyone a submission failed --
-## both only ever wrote statusMsg to the DB (round-13 should fix, dbinst#57:
-## "a refused submission ... tells no one"). $org_name/$admin_email/
+## both only ever wrote statusMsg to the DB. $org_name/$admin_email/
 ## $servhost all come from listen-config.php, same as mail_to_admin()
 ## (jobmonitor/gridctl.php) already reads for a running job's own failure
 ## mail -- that function isn't reused directly here since its message
 ## format is written for a job already mid-poll ($updateTime/$status/
 ## $cluster), not a submission that never got that far.
-## Round 15 should-fix, gridctl#33: a breaker trip, an sbatch rejection or
+## A breaker trip, an sbatch rejection or
 ## an "outcome unknown" result sent 2-3 of these for the one failure --
 ## fail_job()/error() mail explicitly and then either exit() or fall
 ## through to the script's natural end, both of which still run

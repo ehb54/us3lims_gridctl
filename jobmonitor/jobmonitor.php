@@ -9,7 +9,7 @@ require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
 ## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID",
 ## not the literal word "start" -- pass the actual arguments through so the
 ## printed remedy can be run as-is instead of failing with rc 255 for a
-## missing argument (round-13 nit).
+## missing argument.
 gridctl_require_not_root( __FILE__, 'start',
     implode( ' ', array_map( 'escapeshellarg', array_slice( $argv, 1 ) ) ) );
 include_once $class_dir . "../global_config.php";

@@ -61,12 +61,12 @@ function open_db_or_retry() {
     while ( true ) {
         $db_handle = @mysqli_connect( $dbhost, $user, $passwd );
         if ( $db_handle ) {
-            ## The 5s row-lock bound (round-12 should-fix) is applied in
+            ## The 5s row-lock bound is applied in
             ## cleanup_job.php, immediately before the finalizing status
             ## write it actually protects -- not here. This connection is
             ## reused for every routine poll query for the rest of the
             ## job's monitored life, and setting the bound at open time
-            ## used to apply it to all of them too (round-13 nit), not
+            ## used to apply it to all of them too, not
             ## just the one write it was meant for.
             return;
         }

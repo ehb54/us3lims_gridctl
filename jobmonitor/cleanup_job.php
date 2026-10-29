@@ -61,7 +61,7 @@ function reopen_global_db_handle( $dbhost, $user, $passwd )
 }
 
 ## Caps how long a single query here can sit on a row lock before failing
-## with errno 1205 (round-12 should-fix). Without this, MariaDB's own
+## with errno 1205. Without this, MariaDB's own
 ## default (50s) stacks with the finalizing write's own outer backoff
 ## (finalizing_retry_wait_schedule(), ~120s) and update_autoflow_status()'s
 ## inner retry (2 more attempts on a connection-class error, which 1205 is
@@ -969,7 +969,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## Leave a status-pending marker before even the first attempt below, not
    ## only once it has already failed: a process killed while that first
    ## write is still in flight used to leave no marker at all for --restart
-   ## to find (round-12 should-fix) -- the same gap this marker exists to
+   ## to find -- the same gap this marker exists to
    ## close, just one write earlier. Resolved to final column values up
    ## front (job_status.php's maps are not available to dbutils), same as
    ## job_state_machine's own update_autoflow_status()/
@@ -986,7 +986,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## the connection as a whole: open_db_or_retry() used to set this same
    ## 5s bound once at connection-open time, which meant it sat on every
    ## routine poll query for the rest of the job's monitored life, not just
-   ## this write (round-13 nit) -- harmless in practice (a poll essentially
+   ## this write -- harmless in practice (a poll essentially
    ## never contends for this lock), but the wrong place to express what is
    ## actually a finalizing-write concern. global, not the function's own
    ## $db_handle parameter: update_autoflow_status() reads job_machine()'s
@@ -1011,7 +1011,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    ## Doubling backoff over about two minutes, not 2 retries 2s apart: the
    ## old budget (~4-6s total) only covered a MariaDB restart that happened
    ## to land within about 4s on an autoflow job, 3s on a non-autoflow one
-   ## (round 11 should-fix) -- shorter than a real restart under load can
+   ## -- shorter than a real restart under load can
    ## take. finalizing_retry_wait_schedule() is the pure sequence, kept
    ## separate so a test can assert its shape without a live DB.
    foreach ( finalizing_retry_wait_schedule() as $wait )
@@ -1042,18 +1042,18 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
       ## be the only write that failed on a non-autoflow (DMGA/GA) job,
       ## which has no autoflowAnalysis row to point at in the first place.
       ##
-      ## Spells out the exact command, not just "will retry automatically"
-      ## (round-12 should-fix): there is no cron running --restart on its
+      ## Spells out the exact command, not just "will retry automatically":
+      ## there is no cron running --restart on its
       ## own, so a mail implying it happens by itself just left an admin
       ## waiting on nothing. Results are already imported either way --
       ## --restart only needs to run once to close the marker out; it is
       ## not itself destructive to run again if nothing is pending.
       ##
-      ## Prints a runnable command, not just the bare filename (round-13
-      ## should-fix): "uslims_jobs.php --restart" has no path and no
+      ## Prints a runnable command, not just the bare filename:
+      ## "uslims_jobs.php --restart" has no path and no
       ## interpreter in front of it, and the file itself is 0644, so typed
       ## as written it is "command not found", same class of bug as the
-      ## pre-round-12 services.php remedy.
+      ## earlier services.php remedy.
       $restart = "php " . escapeshellarg( "$us3util/uslims_jobs.php" ) . " --restart";
       mail_to_admin( "fail", "update_autoflow_status() did not land for gfacID=$gfacID"
                    . " (requestID=$requestID, status=$status) after retrying. The job itself"
