@@ -25,6 +25,24 @@ mysqli_report( MYSQLI_REPORT_OFF );
 
 require_once __DIR__ . '/listen_functions.php';
 
+if ( ! function_exists( 'gridctl_service_account' ) ) {
+    ## The uid the daemons run as: the owner of their checkout, or the us3 account when the
+    ## checkout is root-owned (a root clone or bind mount). Null when neither is known.
+    function gridctl_service_account( $dir ) {
+        $owner = @fileowner( $dir );
+        if ( $owner !== false && $owner !== 0 ) {
+            return $owner;
+        }
+        $us3 = function_exists( 'posix_getpwnam' ) ? posix_getpwnam( 'us3' ) : false;
+        return $us3 ? $us3[ 'uid' ] : null;
+    }
+
+    ## Root never runs the daemons; any other account only when it is the service account.
+    function gridctl_wrong_account( $euid, $service_uid ) {
+        return $euid === 0 || ( $service_uid !== null && $euid !== $service_uid );
+    }
+}
+
 if ( ! function_exists( 'gridctl_require_not_root' ) ) {
     ## Shared by every daemon entry point (services.php, listen.php,
     ## jobmonitor.php, manage-us3-pipe.php) -- round-12 should-fix, gridctl#33:
@@ -54,9 +72,18 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
     ## shell that started them exits, and the plain foreground example
     ## left an admin's terminal blocked on it instead.
     function gridctl_require_not_root( $file, $action, $replay_args = null, $background = false ) {
-        if ( ! function_exists( 'posix_geteuid' ) || posix_geteuid() !== 0 ) {
+        if ( ! function_exists( 'posix_geteuid' ) ) {
             return;
         }
+        ## Not only root: a unit with User=apache (or any other account) has no cluster ssh keys either.
+        $service_uid = gridctl_service_account( dirname( $file ) );
+        if ( ! gridctl_wrong_account( posix_geteuid(), $service_uid ) ) {
+            return;
+        }
+        $service_entry = $service_uid !== null && function_exists( 'posix_getpwuid' ) ? posix_getpwuid( $service_uid ) : false;
+        $service_name  = $service_entry ? $service_entry[ 'name' ] : 'us3';
+        $current_entry = function_exists( 'posix_getpwuid' ) ? posix_getpwuid( posix_geteuid() ) : false;
+        $current_name  = $current_entry ? $current_entry[ 'name' ] : (string) posix_geteuid();
 
         $cmd = 'php ' . escapeshellarg( $file ) . ' ' . ( $replay_args !== null ? $replay_args : $action );
         if ( $background ) {
@@ -64,12 +91,12 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
         }
 
         fwrite( STDERR, basename( $file ) . " $action refused: these services submit and"
-            . " manage cluster jobs as the us3 account, and must run as us3, not root --"
-            . " started as root, every submission fails at staging because root has no ssh"
-            . " key or known_hosts entry for the cluster(s) us3 does.\n"
-            . "Run this as us3 instead, for example:\n"
-            . "    runuser -l us3 -c " . escapeshellarg( $cmd ) . "\n"
-            . "or let us3-listen.service start it, which already runs as us3.\n" );
+            . " manage cluster jobs as the $service_name account, and must run as $service_name,"
+            . " not $current_name -- any other account has no ssh key or known_hosts entry for"
+            . " the cluster(s) $service_name does, so every submission fails at staging.\n"
+            . "Run this as $service_name instead, for example:\n"
+            . "    runuser -l $service_name -c " . escapeshellarg( $cmd ) . "\n"
+            . "or let us3-listen.service start it, which runs as $service_name.\n" );
         exit( 1 );
     }
 }
