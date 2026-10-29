@@ -112,7 +112,9 @@ function finalizing_retry_wait_schedule()
    return $schedule;
 }
 
-function job_cleanup( $us3_db, $reqID, $db_handle )
+## $exec_cluster is the job's execution cluster when known; it fixes which gfac.analysis row is
+## this job's when two clusters reuse a job number, and names the job's directories.
+function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 {
    global $dbhost;
    global $user;
@@ -250,7 +252,8 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
+            "WHERE gfacID='$gfacID'" . job_cluster_condition( $db_handle, $exec_cluster );
+   $key   = job_key( $gfacID, $exec_cluster );
 
    $result = mysqli_query( $db_handle, $query );
    if ( ! $result )
@@ -283,7 +286,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    list( $status, $cluster, $metaschedulerClusterExecuting, $id ) = mysqli_fetch_array( $result );
 
    ## A metascheduler pseudo-cluster submission has no real sshport/workdir of
-   ## its own to fetch results from; pick_cluster()'s resolved real
+   ## its own to fetch results from; the dispatch worker's chosen real
    ## destination lives in metaschedulerClusterExecuting instead (see
    ## jobmonitor.php's own fetch above, queue_viewer.php, queuepos.php).
    if ( ! empty( $metaschedulerClusterExecuting ) )
@@ -293,10 +296,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## Stage the results into the job-tracking row. An unreachable cluster (-1)
    ## is retried until the ceiling, then the job is failed; -2 fails it now.
-   $seen_file     = job_state_path( $db, $gfacID, 'complete_seen' );
+   $seen_file     = job_state_path( $db, $key, 'complete_seen' );
    $fetch_failure = '';
 
-   $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID );
+   $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key );
 
    if ( $fetched === -1 )
    {
@@ -317,7 +320,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    }
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
+            "WHERE id='" . (int) $id . "'";
 
    $result = mysqli_query( $db_handle, $query );
 
@@ -450,7 +453,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## Save stdout, stderr, etc. for message log
    $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM gfac.analysis " .
-             "WHERE gfacID='$gfacID' ";
+             "WHERE id='" . (int) $id . "' ";
    $result = mysqli_query( $db_handle, $query );
    $autoflowAnalysisID = 0;
    try
@@ -484,10 +487,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    ## row, so nothing would restart a monitor for it. Record enough to close the
    ## stage out if this worker dies in that span; uslims_jobs.php --restart looks
    ## for these.
-   cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID );
+   cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $exec_cluster );
 
    ## Delete the completed central job-tracking records.
-   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
+   $query = "DELETE from gfac.analysis WHERE id='" . (int) $id . "'";
 
    $result = mysqli_query( $db_handle, $query );
 
@@ -619,7 +622,7 @@ write_logld( "$me: *messages.txt written" );
    ## it must not be emptied here: a reused job ID is dealt with before the fetch,
    ## in job_staging_dir_prepare(). The id is still checked, since the path is
    ## composed from it.
-   $staging = job_staging_dir( $work, $gfacID );
+   $staging = job_staging_dir( $work, $key );
 
    if ( $staging === null || ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) ) )
    {
@@ -642,7 +645,7 @@ write_logld( "$me: *messages.txt written" );
    if ( $err != 0 )
    {
       chdir( $work );
-      exec( "rm -r $gfacID" );
+      exec( "rm -r " . escapeshellarg( basename( $staging ) ) );
       $output = implode( "\n", $tar_out );
 
       update_autoflow_status( 'FAILED', "Bad output tarfile: $output" );
@@ -989,7 +992,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID,
       $normalised !== null ? stage_status_from_job( $normalised ) : null,
       $normalised !== null ? queue_status_from_job( $normalised ) : null,
-      $queue_msg );
+      $queue_msg, $exec_cluster );
 
    ## Bounded here, immediately before the first finalizing write, not on
    ## the connection as a whole: open_db_or_retry() used to set this same
@@ -1039,7 +1042,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
    if ( $status_recorded )
    {
-      cleanup_status_pending_end( $us3_db, $gfacID );
+      cleanup_status_pending_end( $us3_db, $gfacID, $exec_cluster );
    }
    else
    {

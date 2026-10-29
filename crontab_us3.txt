@@ -1,6 +1,8 @@
 #nolog(true)
 */12 * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/cluster_status.php
 */20 * * * *  cd /home/us3/lims/bin; cronic /usr/bin/php /home/us3/lims/bin/update_notice.php
+# the dispatch worker's independent heartbeat check
+*/5 * * * *   cd /home/us3/lims/bin; /usr/bin/php /home/us3/lims/bin/dispatch_heartbeat_check.php >/dev/null 2>&1
 
 # each morning: save data directory */job_statistics.xml files
 # MAILTO=                    # set to admin email to receive jobstats output

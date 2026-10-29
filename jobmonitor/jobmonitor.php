@@ -6,7 +6,7 @@ $us3util = "$us3lims/database/utils";
 $us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
 require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
-## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID",
+## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID [cluster]",
 ## not the literal word "start" -- pass the actual arguments through so the
 ## printed remedy can be run as-is instead of failing with rc 255 for a
 ## missing argument.
@@ -53,19 +53,25 @@ $ll_base_dir  = "$us3lims/etc/joblog";
 
 # process arguments or die
 
-$notes = "usage: $self dbname gfacID HPCAnalysisRequestID
+$notes = "usage: $self dbname gfacID HPCAnalysisRequestID [cluster]
+cluster is the job's execution cluster; without it the job ID must be unique in gfac.analysis
 ";
 
 $u_argv = $argv;
 array_shift( $u_argv ); # first element is program name
 
-if ( count( $u_argv ) != 3 ) {
+if ( count( $u_argv ) != 3 && count( $u_argv ) != 4 ) {
     error_exit( $notes );
 }
 
 $us3_db = array_shift( $u_argv );
 $gfacID = array_shift( $u_argv );
 $hpcrid = array_shift( $u_argv );
+$job_cluster = count( $u_argv ) ? array_shift( $u_argv ) : '';
+
+if ( $job_cluster !== '' && !preg_match( '/^[A-Za-z0-9._-]+$/', $job_cluster ) ) {
+    $errors .= "cluster has an invalid format\n";
+}
 
 if ( !preg_match( '/^uslims3_[A-Za-z0-9_]*$/', $us3_db ) ) {
     $errors .= "dbname has an invalid format\n";
@@ -81,7 +87,7 @@ if ( !filter_var( $hpcrid, FILTER_VALIDATE_INT ) ) {
 
 flush_errors_exit();
 
-$lock_dir = "$ll_base_dir/$us3_db/$gfacID";
+$lock_dir = "$ll_base_dir/$us3_db/" . job_key( $gfacID, $job_cluster );
 
 if ( !is_dir( $lock_dir ) ) {
     mkdir( $lock_dir, 0770, true );
@@ -194,6 +200,18 @@ $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
 $loop      = 0;
 
+## Without a cluster argument the job ID alone must identify one row: two
+## clusters can issue the same Slurm number, and guessing would monitor (and
+## later finalize) the wrong job.
+if ( $job_cluster === '' ) {
+    $count_res = mysqli_query( $db_handle, "select count(*) from gfac.analysis where gfacID = \"$gfacID\"" );
+    $count_row = $count_res ? mysqli_fetch_row( $count_res ) : null;
+    if ( $count_row && (int) $count_row[ 0 ] > 1 ) {
+        mysqli_close( $db_handle );
+        error_exit( "gfacID $gfacID matches more than one gfac.analysis row; restart with its cluster argument" );
+    }
+}
+
 if (
     false ===
     ( $res_analysis =
@@ -208,6 +226,7 @@ if (
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
                      . " where gfacID = \"$gfacID\""
+                     . job_cluster_condition( $db_handle, $job_cluster )
                      ,false
                      ,true
       ) ) ) {
@@ -217,8 +236,8 @@ if (
 
 ## A metascheduler pseudo-cluster submission (cluster_shortname stays the
 ## pseudo name, e.g. 'metascheduler') has no real sshport/workdir of its own;
-## the real destination pick_cluster() resolved to lives in this column
-## instead (see pick_cluster.php, submit_slurm.php's update_db()). Probing
+## the real destination the dispatch worker chose lives in this column
+## instead (see submit_slurm.php's update_db()). Probing
 ## the pseudo name directly would try to SSH into a destination that does
 ## not exist. queue_viewer.php and queuepos.php already apply this same
 ## preference; this is the one place in the monitor itself that fetches the
@@ -258,7 +277,8 @@ while( 1 ) {
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
-                     . " where gfacID = ?" );
+                     . " where gfacID = ?"
+                     . job_cluster_condition( $db_handle, $job_cluster ) );
 
     $poll_result = $poll_statement
                  && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )

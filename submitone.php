@@ -21,16 +21,7 @@ if ( count( $argv ) != 3 ) {
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
-require_once __DIR__ . '/pick_cluster.php';
-require_once __DIR__ . '/pick_cluster_reserve.php';
-## db_connection_pool.php is required lazily, right before the one place
-## below that actually uses it (inside the metascheduler pseudo-cluster
-## branch), not here. Older common checkouts do not
-## ship this file at all -- requiring it unconditionally here killed
-## every autoflow submission outright (dies before the row can even be
-## marked, no statusMsg, no mail), including on a host with the
-## metascheduler entirely turned off, where this file is never needed.
-
+require_once __DIR__ . '/dispatch_policy.php';
 ## Pulled into its own function, not a bare top-level statement, so a test
 ## driven through gridctl_extract_functions() (tokenizer-based, pulls only
 ## function bodies -- see tests/support/gridctl/extract-functions.php) can
@@ -92,15 +83,6 @@ function check_cli_errors() {
         fail_job();
         exit(-1);
     }
-}
-
-## The pool members this instance enables in its cluster_config.php: the only ones the driven
-## page's own pick (require_cluster.php, through dbinst's instance-filtered cluster list) can choose.
-function instance_pool_candidates( $members, $cluster_configuration ) {
-    return array_values( array_filter( $members, function ( $member ) use ( $cluster_configuration ) {
-        return isset( $cluster_configuration[ $member ] ) && is_array( $cluster_configuration[ $member ] )
-            && !empty( $cluster_configuration[ $member ][ 'active' ] );
-    } ) );
 }
 
 ## The included web pages (e.g. 2DSA_2.php) don't push job submission
@@ -373,6 +355,10 @@ function submitone_shutdown_handler() {
     if ( $status !== 'READY' && $status !== 'SUBMIT_TIMEOUT' ) {
         return;
     }
+    ## A pool stage received for dispatch stays READY until the worker reports.
+    if ( ! empty( $GLOBALS[ 'dispatch_intake_committed' ] ) ) {
+        return;
+    }
 
     ## A page this script include()s (e.g.
     ## require_authorized_cluster(), lib/utility.php) can exit() with its
@@ -528,128 +514,26 @@ if ( $cluster == "localhost" ) {
 } elseif ( isset( $cluster_details )
            && is_array( $cluster_details )
            && array_key_exists( $cluster, $cluster_details )
-           && pick_cluster_is_metascheduler_entry( $cluster_details[ $cluster ] ) ) {
-    ## $cluster names a metascheduler pseudo-entry (a "clusters" list to pick
-    ## a real cluster from), not a real cluster. $cluster itself is left
-    ## unchanged below -- it still becomes the stored gfac.analysis.cluster
-    ## value exactly as it does for a named cluster today (see
-    ## METASCHEDULER-DESIGN.md section 3); only host_name/queue are resolved
-    ## from the cluster pick_cluster() actually chose.
+           && dispatch_is_pool_entry( $cluster_details[ $cluster ] ) ) {
+    ## A pool stage is not resolved here: the driven _2.php page records the
+    ## request for the dispatch queue (require_cluster.php, lib/dispatch_intake.php)
+    ## and the dispatch worker submits it. A disabled pool refuses the stage.
     $metascheduler_pseudo_cluster = $cluster;
-
-    ## Required here, not at the top of this file: this is the only branch
-    ## that actually uses db_connection_pool, so a host with no metascheduler
-    ## pseudo-cluster entry configured at all never needs it -- and a common
-    ## checkout that predates this file can still run every other
-    ## submission normally.
-    $db_connection_pool_file = $class_dir . 'db_connection_pool.php';
-    $db_connection_pool_available = class_exists( 'db_connection_pool', false );
-    if ( ! $db_connection_pool_available && is_file( $db_connection_pool_file ) ) {
-        require_once $db_connection_pool_file;
-        $db_connection_pool_available = true;
+    if ( array_key_exists( 'active', $cluster_details[ $cluster ] ) && ! $cluster_details[ $cluster ][ 'active' ] ) {
+        $cluster_error = "metascheduler '$cluster' is disabled (active=false)";
     }
-
-    ## Approximated from the analysis profile's own XML, already decoded
-    ## into $xmljson above -- real sizing (jobsubmit.php's own
-    ## tasks_per_group_plan()) cannot run yet, since it needs the real
-    ## cluster's own ppbj/ppn, not resolved until after this pick. Stashed
-    ## into $_SESSION (not $_SESSION['cluster'], which the driven _1.php
-    ## page below unconditionally overwrites) so require_cluster.php -- the
-    ## one authoritative, lock-protected pick for both this autoflow path
-    ## and an interactive submission -- can read it back once it runs
-    ## inside the driven _2.php page, in this same PHP process.
-    ## The instance's cluster_config.php, found the way common's jobsubmit finds it, so this preview
-    ## picks from the same members the driven page will.
-    foreach ( array( "$php_base/cluster_config.php", "$www_uslims3/cluster_config.php",
-                     "$www_uslims3/uslims3_newlims/cluster_config.php" ) as $instance_cluster_config ) {
-        if ( is_file( $instance_cluster_config ) ) {
-            include $instance_cluster_config; // NOSONAR read for its variables; include_once would make the driven page skip its own include
-            break;
+    $host_name = $cluster_details[ $cluster ][ 'name' ] ?? $cluster;
+    $queue     = $cluster_details[ $cluster ][ 'queue' ] ?? 'batch';
+    ## The stage occurrence: a rerun of this stage is a new request, a retry of
+    ## this one returns the original receipt.
+    $stage_occurrence = 1;
+    foreach ( $statusJson->{ 'processed' } ?? array() as $done ) {
+        if ( isset( $done->{ is_string( $stage ) ? $stage : json_encode( $stage ) } ) ) {
+            $stage_occurrence++;
         }
     }
-    $pool_candidates = isset( $cluster_configuration ) && is_array( $cluster_configuration )
-        ? instance_pool_candidates( $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ], $cluster_configuration )
-        : $cluster_details[ $metascheduler_pseudo_cluster ][ 'clusters' ];
-
-    $job_requirements_estimate = pick_cluster_estimate_job_requirements(
-        $stage, $xmljson, $stage === 'PCSA' ? 'p_pcsa' : 'p_2dsa' );
-
-    ## Kill switch: flipping the pseudo-entry's own 'active' to false must
-    ## stop this resolution outright, not just hide it from the UI's cluster
-    ## list (collect_config_info() filtering). Without this check, an
-    ## autoflowAnalysis row whose clusterDefault was already set to this
-    ## pseudo-name before it was disabled would still reach pick_cluster()
-    ## here and keep resolving to a real cluster -- 'active' only stopped new
-    ## selections, not jobs already pointed at it.
-    if ( array_key_exists( 'active', $cluster_details[ $metascheduler_pseudo_cluster ] )
-         && ! $cluster_details[ $metascheduler_pseudo_cluster ][ 'active' ] ) {
-        $pick = array( 'chosen' => null,
-            'reason' => "metascheduler '$metascheduler_pseudo_cluster' is disabled (active=false)",
-            'tier' => null, 'scores' => array() );
-    } elseif ( ! $db_connection_pool_available ) {
-        write_logl( "submitone.php: metascheduler pseudo-cluster"
-                   . " '$metascheduler_pseudo_cluster' posted, but $db_connection_pool_file"
-                   . " is missing (common checkout predates it) -- cannot pool this cluster" );
-        $pick = array( 'chosen' => null,
-            'reason' => 'db_connection_pool.php is not installed on this host',
-            'tier' => null, 'scores' => array() );
-    } else {
-        $gfac_link = db_connection_pool::shared()->checkout( $dbhost, $guser, $gpasswd, $gDB );
-
-        if ( ! $gfac_link ) {
-            ## No status data is learnable without this connection: every
-            ## candidate reads as ineligible and pick_cluster() reports
-            ## "no eligible cluster" rather than guessing -- never treat a
-            ## failed connection here as permission to pick blindly.
-            $pick = array( 'chosen' => null, 'reason' => 'could not connect to gfac for cluster status',
-                'tier' => null, 'scores' => array() );
-        } else {
-            try {
-                ## pick_cluster(), not pick_cluster_reserve(): $cluster itself
-                ## stays the pseudo name below (see comment above), so the
-                ## simulated $_POST this script builds still names the pseudo
-                ## pool, not a real cluster -- the driven _1.php/_2.php pages
-                ## re-detect it as unresolved and require_cluster.php makes the
-                ## one authoritative, lock-protected, logged reservation when
-                ## they run (same as an interactive submission). Resolving here
-                ## too, with pick_cluster_reserve(), would reserve and log a
-                ## second, discarded decision every autoflow job -- this call is
-                ## read-only and only feeds the host_name/queue shown below for
-                ## display/record purposes.
-                $snapshot = pick_cluster_status_snapshot( $gfac_link, $pool_candidates );
-                $pick = pick_cluster(
-                    $pool_candidates,
-                    $cluster_details,
-                    $snapshot,
-                    $job_requirements_estimate,
-                    array(),
-                    null,
-                    ## $clusterAuth (resolved above from {$lims_db}.people for this
-                    ## job's owning person, $invID) -- being allowed to select the
-                    ## metascheduler pseudo-entry is never authorization for every
-                    ## real cluster behind it, so every candidate is checked against
-                    ## this same per-person allowlist a direct submission would be.
-                    $clusterAuth
-                );
-            } finally {
-                db_connection_pool::shared()->release( $gfac_link );
-            }
-        }
-    }
-
-    write_logl( pick_cluster_log_line( $metascheduler_pseudo_cluster, $pick ) );
-
-    if ( $pick[ 'chosen' ] === null ) {
-        $cluster_error = "metascheduler '$metascheduler_pseudo_cluster': " . $pick[ 'reason' ];
-    } else {
-        $real = $pick[ 'chosen' ];
-        $host_name = $cluster_details[ $real ][ 'name' ];
-        if ( array_key_exists( 'queue', $cluster_details[ $real ] ) ) {
-            $queue = $cluster_details[ $real ][ 'queue' ];
-        }
-        echo "metascheduler $metascheduler_pseudo_cluster resolved to $real"
-             . " (reason={$pick['reason']}) host_name=$host_name queue=$queue\n";
-    }
+    $dispatch_intake_key = "autoflow-$ID-" . substr( sha1( json_encode( $stage ) ), 0, 12 ) . "-$stage_occurrence";
+    echo "metascheduler $cluster: the stage is queued for dispatch ($dispatch_intake_key)\n";
 } else {
     if ( isset( $cluster_details )
          && is_array( $cluster_details )
@@ -681,14 +565,10 @@ $_SESSION[ 'advancelevel' ]    = $person->{'advancelevel'};
 $_SESSION[ 'clusterAuth' ]     = $clusterAuth;
 $_SESSION[ 'gwhostid' ]        = $host_name;
 
-## Read back by require_cluster.php, if set above -- a top-level key, not
-## $_SESSION['cluster'], which the driven _1.php page below (2DSA_1.php,
-## PCSA_1.php, ...) unconditionally reinitializes to array() before setting
-## its own 'name'/'shortname'/'queue' keys, which would wipe this if it were
-## nested there instead. Unset for a direct (non-metascheduler) submission,
-## in which case require_cluster.php never looks for it at all.
-if ( isset( $job_requirements_estimate ) ) {
-    $_SESSION[ 'metascheduler_job_requirements_estimate' ] = $job_requirements_estimate;
+## Read back by lib/dispatch_intake.php as the request's intake key: a
+## top-level key, since the driven _1.php page reinitializes $_SESSION['cluster'].
+if ( isset( $dispatch_intake_key ) ) {
+    $_SESSION[ 'dispatch_intake_key' ] = $dispatch_intake_key;
 }
 
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";

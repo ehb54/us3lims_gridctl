@@ -64,6 +64,7 @@ class job_state_machine
 
    ## Per job, set by for_job().
    private $gfacID     = '';
+   private $requestID  = 0;
    private $cluster    = '';
    private $us3_db     = '';
    private $autoflowID = 0;
@@ -77,12 +78,15 @@ class job_state_machine
       $this->mailer      = $mailer;
    }
 
-   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID )
+   ## $cluster is the execution cluster (a pool job's metaschedulerClusterExecuting);
+   ## with $requestID it fixes which rows are this job's when two clusters reuse a job number.
+   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0 )
    {
       $this->gfacID     = $gfacID;
       $this->cluster    = $cluster;
       $this->us3_db     = $us3_db;
       $this->autoflowID = (int) $autoflowID;
+      $this->requestID  = (int) $requestID;
 
       return $this;
    }
@@ -143,6 +147,23 @@ class job_state_machine
    }
 
    ## Best-effort: log a failed statement rather than abort the daemon.
+   ## This job's gfac.analysis row: job ID plus execution cluster, when known.
+   private function gfac_job_where()
+   {
+      $where = " WHERE gfacID='{$this->gfacID}'";
+      if ( (string) $this->cluster !== '' )
+         $where .= " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
+                 . $this->quote( $this->gfac, $this->cluster ) . "'";
+      return $where;
+   }
+
+   ## This job's HPCAnalysisResult row: job ID plus its own request, when known.
+   private function us3_job_where()
+   {
+      return " WHERE gfacID='{$this->gfacID}'"
+           . ( $this->requestID > 0 ? " AND HPCAnalysisRequestID='{$this->requestID}'" : '' );
+   }
+
    protected function exec( $handle, $query )
    {
       $result = mysqli_query( $handle, $query );
@@ -307,7 +328,7 @@ class job_state_machine
       ## cadence rather than every poll.
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -348,7 +369,7 @@ class job_state_machine
       ## poll instead of once per window.
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -514,7 +535,7 @@ class job_state_machine
 
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$status'"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $message = $this->status_message( $status );
 
@@ -547,14 +568,14 @@ class job_state_machine
 
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT status FROM $analysis WHERE gfacID='{$this->gfacID}'" );
+         "SELECT status FROM $analysis" . $this->gfac_job_where() );
       $row      = $result ? $this->fetch_row( $result ) : null;
 
       if ( $row && $row[ 0 ] === $status )
          return $status;
 
       $this->exec( $this->gfac,
-         "UPDATE $analysis SET status='$status' WHERE gfacID='{$this->gfacID}'" );
+         "UPDATE $analysis SET status='$status'" . $this->gfac_job_where() );
 
       $message = $this->status_message( $status );
 
@@ -588,7 +609,7 @@ class job_state_machine
    {
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT id FROM $analysis WHERE gfacID = '{$this->gfacID}'" );
+         "SELECT id FROM $analysis" . $this->gfac_job_where() );
 
       if ( ! $result )
          return;
@@ -636,6 +657,9 @@ class job_state_machine
    ## resolve_and_cleanup_job()) already distinguishes all three.
    public function get_us3_data()
    {
+      if ( $this->requestID > 0 )
+         return $this->requestID;
+
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
@@ -791,7 +815,7 @@ class job_state_machine
       ## would fall through to the stale row, which is the bug again.
       $found = $this->exec( $us3,
          "SELECT HPCAnalysisResultID FROM $table"
-         . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+         . $this->us3_job_where() . " ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
       ## The query itself failing is a real problem (false); finding no
       ## matching row is not (true) -- a non-autoflow job that predates this

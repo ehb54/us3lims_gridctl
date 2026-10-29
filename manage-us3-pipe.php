@@ -88,7 +88,8 @@ function process( $msg )
    // Read the current job-tracking state before processing the message.
    list( $gfacID ) = mysqli_fetch_row( $result );
 
-   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'";
+   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'"
+           . pipe_job_condition( $resource, $db, $requestID );
    $result2 = mysqli_query( $resource, $query2 );
    
    if ( ! $result2 )
@@ -111,25 +112,25 @@ function process( $msg )
    if ( $is_finished )
    {  // Local job finished — data should be there already
       update_db( $db, $requestID, 'finished', $message );
-      update_gfac( $gfacID, "COMPLETE", $message );
+      update_gfac( $gfacID, "COMPLETE", $message, $db, $requestID );
    }
 
    else if ( preg_match( "/^Starting/i", $message ) )
    {
      update_db( $db, $requestID, 'starting', $message );
-     update_gfac( $gfacID, "RUNNING", $message );
+     update_gfac( $gfacID, "RUNNING", $message, $db, $requestID );
    }
 
    else if ( preg_match( "/^Abort/i", $message ) )
    {
      update_db( $db, $requestID, 'aborted', $message );
-     update_gfac( $gfacID, "CANCELED", $message );
+     update_gfac( $gfacID, "CANCELED", $message, $db, $requestID );
    }
 
    else
    {
      update_db( $db, $requestID, 'update', $message );
-     update_gfac( $gfacID, "UPDATING", $message );
+     update_gfac( $gfacID, "UPDATING", $message, $db, $requestID );
    }
 }
 
@@ -205,7 +206,23 @@ function update_db( $db, $requestID, $action, $message )
 }
 
 // Update the central job-tracking status and append its message history.
-function update_gfac( $gfacID, $status, $message )
+## This message's gfac.analysis row: the job number alone is not unique once
+## two clusters reuse it, so also its instance and, after the 4.3.0 upgrade
+## adds the column, its own request.
+function pipe_job_condition( $link, $db, $requestID )
+{
+  static $has_request_column = null;
+  if ( $has_request_column === null )
+  {
+    $gdb = isset( $GLOBALS[ 'gDB' ] ) && $GLOBALS[ 'gDB' ] !== '' ? $GLOBALS[ 'gDB' ] : 'gfac';
+    $res = mysqli_query( $link, "SHOW COLUMNS FROM `$gdb`.analysis LIKE 'HPCAnalysisRequestID'" );
+    $has_request_column = $res && mysqli_num_rows( $res ) > 0;
+  }
+  return " AND us3_db='" . mysqli_real_escape_string( $link, $db ) . "'"
+       . ( $has_request_column ? " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID=" . (int) $requestID . ")" : '' );
+}
+
+function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )
 {
   global $dbhost;
   global $guser;
@@ -227,6 +244,8 @@ function update_gfac( $gfacID, $status, $message )
     return;
   }
 
+  $job_where = "WHERE gfacID='$gfacID'" . ( $db !== '' ? pipe_job_condition( $gLink, $db, $requestID ) : '' );
+
   $status = strtoupper( $status );
   if ( ! in_array( $status, $allowed_status ) )
   {
@@ -239,7 +258,7 @@ function update_gfac( $gfacID, $status, $message )
   {
      $query = "UPDATE analysis " .
               "SET queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
-              "WHERE gfacID='$gfacID'";
+              $job_where;
 
 //write_log( "$self process(): updgf-u : status=$status" );
      mysqli_query( $gLink, $query );
@@ -249,15 +268,14 @@ function update_gfac( $gfacID, $status, $message )
   {
      $query = "UPDATE analysis SET status='$status', " .
               "queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
-              "WHERE gfacID='$gfacID'";
+              $job_where;
 
 //write_log( "$self process(): updgf-s : status=$status" );
      mysqli_query( $gLink, $query );
   }
 
   // Also update the queue_messages table
-  $query  = "SELECT id FROM analysis " .
-            "WHERE gfacID = '$gfacID'";
+  $query  = "SELECT id FROM analysis " . $job_where;
   $result = mysqli_query( $gLink, $query );
   if ( ! $result )
   {
