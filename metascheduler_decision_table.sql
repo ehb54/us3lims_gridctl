@@ -36,7 +36,7 @@ KEY `pseudo_cluster_time` (`pseudo_cluster`, `time`),
 -- pick_cluster_record_decision()'s retention purge (pick_cluster_reserve.php)
 -- deletes by `time` alone, with no pseudo_cluster predicate -- a composite
 -- index led by pseudo_cluster cannot serve that range scan, forcing a full
--- table scan on every write (round-12 should-fix, gridctl#35: measured
+-- table scan on every write (measured
 -- 0.33s at 262k rows without this index, 0.000s with it).
 KEY `time` (`time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci

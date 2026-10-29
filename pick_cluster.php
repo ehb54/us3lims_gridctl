@@ -19,11 +19,11 @@ const PICK_CLUSTER_WARN_PENALTY = 100000;
 
 /**
  * A cluster_details[...]['localhost'] flag, parsed the same way a human
- * reads it, matching common#33's own remote_exec::is_local() fix for the
+ * reads it, same as remote_exec::is_local() for the
  * identical mistake: a bare PHP bool is trusted as-is, but plain
  * !empty()/! treats the STRING 'false' as truthy (PHP only treats an
  * empty string/'0' as falsy), so a config written 'localhost' => 'false'
- * was silently read as local. Round 15 nit, gridctl#35.
+ * was silently read as local.
  */
 function pick_cluster_entry_is_local( $localhost )
 {
@@ -50,7 +50,7 @@ function pick_cluster_is_metascheduler_entry( $entry )
  * exist yet). Mirrors that formula's *inputs* only, returning the raw,
  * uncapped demand -- this function has no per-cluster ppbj to clamp
  * against yet, since no candidate has been picked. The per-candidate
- * clamp (round-12 should-fix, gridctl#35) is applied downstream, once a
+ * clamp is applied downstream, once a
  * real ppbj exists, by pick_cluster_meets_requirements() itself, not
  * here -- a stale version of this comment used to describe omitting the
  * clamp as a deliberate, permanent choice for the whole pre-filter stage,
@@ -131,9 +131,8 @@ function pick_cluster_estimate_job_requirements( $stage, $xmljson, $paramgroup )
 }
 
 /**
- * One $GLOBALS-overridable tunable, validated instead of a bare (int) cast:
- * round-12 nit (common#32's review, moved here since the tunables it found
- * loose actually live in gridctl, not common). A bare (int) cast silently
+ * One $GLOBALS-overridable tunable, validated instead of a bare (int) cast.
+ * A bare (int) cast silently
  * turns a typo'd non-numeric value into 0 (which several of these callers
  * treat as "disabled", not "misconfigured"), and silently accepts a
  * negative value a caller never guards against either. Anything that isn't
@@ -193,8 +192,7 @@ function pick_cluster_default_config()
       ## code uses 1800, which is what this matches" -- this function's
       ## fallback was still 900, so a site that left it unset (as the
       ## template's own comment describes as the normal case) got half the
-      ## documented staleness window instead (round-12 nit, common#32's
-      ## review -- moved here).
+      ## documented staleness window instead.
       'max_status_age_seconds' => pick_cluster_validated_tunable(
                                   'global_cluster_status_max_age_seconds', 1800, 0 ),
 
@@ -258,7 +256,7 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
       ## 2DSA/PCSA job regardless of real fit -- confirmed: a 2DSA job
       ## that actually asks for 8 tasks read this pre-filter's own 36 as
       ## "needs 36", sending it to a billed national allocation or "no
-      ## eligible cluster" instead (round-12 should-fix, gridctl#35). The
+      ## eligible cluster" instead. The
       ## pre-filter must never reject a cluster the real sizing would
       ## accept, so the same clamp is applied here, per candidate, before
       ## comparing to its maxproc.
@@ -276,7 +274,7 @@ function pick_cluster_meets_requirements( $cluster_entry, $job_requirements )
          ## this pre-filter can no longer distinguish "unlimited" from
          ## "whatever this candidate's ppbj casts to," since nothing in the
          ## real sizing ever treats a missing/invalid value as unlimited
-         ## either (round 15 nit, gridctl#35). Matching it exactly, for
+         ## either. Matching it exactly, for
          ## every value shape, not just numeric ones.
          $ppbj = $opt( 'ppbj', null );
          $demand = min( (int) $demand, max( 1, (int) $ppbj ) );
@@ -369,8 +367,8 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
    ## Unpenalized load, parallel to $by_tier -- the saturation test below
    ## must judge whether local as a WHOLE is busy enough to try national,
    ## never whether one candidate's probe happened to come back 'warn'.
-   ## Using the penalized $scored_load there (round-12 should-fix,
-   ## gridctl#35) added PICK_CLUSTER_WARN_PENALTY before that test ran, so
+   ## Using the penalized $scored_load there added
+   ## PICK_CLUSTER_WARN_PENALTY before that test ran, so
    ## a single 'warn' probe on an otherwise-idle local cluster read as
    ## saturated and sent the job national -- the opposite of this file's
    ## own stated intent (see the comment above PICK_CLUSTER_WARN_PENALTY).
@@ -411,9 +409,8 @@ function pick_cluster( array $candidates, array $cluster_details, array $status_
       ## interactive path) had every pool refuse them: pool membership
       ## gated on the identical clusterAuth list this exemption already
       ## applies to for a direct submission, just never carried over here.
-      ## pick_cluster_entry_is_local(), not !empty() (round 15 nit,
-      ## gridctl#35, matching common#33's own remote_exec::is_local() fix
-      ## for the identical mistake): !empty() reads the STRING 'false' as
+      ## pick_cluster_entry_is_local(), not !empty(), same as
+      ## remote_exec::is_local(): !empty() reads the STRING 'false' as
       ## truthy (PHP only treats an empty string/'0' as falsy), so a pool
       ## entry written 'localhost' => 'false' -- an easy mistake, since
       ## every other boolean-ish setting in the template is a bare
@@ -693,7 +690,7 @@ function pick_cluster_status_snapshot( $gfac_link, array $candidates, $now = nul
 ## the one repeated local hour a DST fall-back creates, that wall-clock
 ## string is genuinely ambiguous -- MariaDB has to pick one of the two real
 ## instants it could mean, and nothing says it picks the one $now actually
-## meant (round-13 nit, gridctl#35: confirmed storing/reading up to 3600s
+## meant (confirmed storing/reading up to 3600s
 ## off during that hour, on a session whose zone observes DST at all;
 ## 'SYSTEM'/UTC/a fixed numeric offset never hit this, since none of those
 ## has a repeated hour to begin with). Pinning the session to UTC for
@@ -751,8 +748,8 @@ function pick_cluster_nudge_counts( $gfac_link, array $candidates, $now, $ttl_se
    ## throws there instead.
    try
    {
-      ## FROM_UNIXTIME(?), not a pre-formatted gmdate() string (round-12
-      ## should-fix, gridctl#35): pick_cluster_record_nudge() writes `time`
+      ## FROM_UNIXTIME(?), not a pre-formatted gmdate() string:
+      ## pick_cluster_record_nudge() writes `time`
       ## via FROM_UNIXTIME(), which MySQL/MariaDB expresses in the
       ## connection's own session time zone -- but a bound string literal
       ## compared against that TIMESTAMP column is interpreted in that same
@@ -820,7 +817,7 @@ function pick_cluster_record_nudge( $gfac_link, $cluster, $now, $ttl_seconds )
       ## Both queries go through pick_cluster_in_utc_session() -- see its
       ## own comment -- so FROM_UNIXTIME()'s conversion into the session's
       ## wall-clock zone can never land in a DST fall-back's ambiguous
-      ## repeated hour (round-13 nit, gridctl#35).
+      ## repeated hour.
       pick_cluster_in_utc_session( $gfac_link, function () use ( $gfac_link, $cluster, $now, $ttl_seconds ) {
          $stmt = mysqli_prepare( $gfac_link,
             'INSERT INTO gfac.cluster_status_nudge (cluster, time) VALUES (?, FROM_UNIXTIME(?))' );

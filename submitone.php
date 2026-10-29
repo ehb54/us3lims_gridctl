@@ -25,8 +25,8 @@ require_once __DIR__ . '/pick_cluster.php';
 require_once __DIR__ . '/pick_cluster_reserve.php';
 ## db_connection_pool.php is required lazily, right before the one place
 ## below that actually uses it (inside the metascheduler pseudo-cluster
-## branch), not here. Round-12 blocker, gridctl#35: common#24/#29 never
-## shipped this file at all -- requiring it unconditionally here killed
+## branch), not here. Older common checkouts do not
+## ship this file at all -- requiring it unconditionally here killed
 ## every autoflow submission outright (dies before the row can even be
 ## marked, no statusMsg, no mail), including on a host with the
 ## metascheduler entirely turned off, where this file is never needed.
@@ -533,8 +533,8 @@ if ( $cluster == "localhost" ) {
     ## Required here, not at the top of this file: this is the only branch
     ## that actually uses db_connection_pool, so a host with no metascheduler
     ## pseudo-cluster entry configured at all never needs it -- and a common
-    ## checkout that predates this file (common#24/#29, before common#33's
-    ## consolidation) can still run every other submission normally.
+    ## checkout that predates this file can still run every other
+    ## submission normally.
     $db_connection_pool_file = $class_dir . 'db_connection_pool.php';
     $db_connection_pool_available = class_exists( 'db_connection_pool', false );
     if ( ! $db_connection_pool_available && is_file( $db_connection_pool_file ) ) {

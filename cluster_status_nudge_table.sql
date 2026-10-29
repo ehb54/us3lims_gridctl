@@ -32,8 +32,7 @@ PRIMARY KEY (`id`),
 KEY `cluster_time` (`cluster`, `time`),
 -- pick_cluster_record_nudge()'s own purge (pick_cluster.php) deletes by
 -- `time` alone too, with no `cluster` predicate -- same reasoning and same
--- fix as metascheduler_decision's own `time` index (round-12 should-fix,
--- gridctl#35).
+-- fix as metascheduler_decision's own `time` index.
 KEY `time` (`time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
   COMMENT='Short-lived pick_cluster_reserve() load nudges, independent of the real cluster_status probe';
