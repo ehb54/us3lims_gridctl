@@ -215,7 +215,10 @@ function pipe_job_condition( $link, $db, $requestID )
   if ( $has_request_column === null )
   {
     $gdb = isset( $GLOBALS[ 'gDB' ] ) && $GLOBALS[ 'gDB' ] !== '' ? $GLOBALS[ 'gDB' ] : 'gfac';
-    $res = mysqli_query( $link, "SHOW COLUMNS FROM `$gdb`.analysis LIKE 'HPCAnalysisRequestID'" );
+    $stmt = mysqli_prepare( $link, "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? "
+                                 . "AND TABLE_NAME = 'analysis' AND COLUMN_NAME = 'HPCAnalysisRequestID'" );
+    $res  = $stmt && mysqli_stmt_bind_param( $stmt, 's', $gdb ) && mysqli_stmt_execute( $stmt )
+          ? mysqli_stmt_get_result( $stmt ) : false;
     $has_request_column = $res && mysqli_num_rows( $res ) > 0;
   }
   return " AND us3_db='" . mysqli_real_escape_string( $link, $db ) . "'"

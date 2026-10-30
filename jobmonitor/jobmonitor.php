@@ -204,8 +204,10 @@ $loop      = 0;
 ## clusters can issue the same Slurm number, and guessing would monitor (and
 ## later finalize) the wrong job.
 if ( $job_cluster === '' ) {
-    $count_res = mysqli_query( $db_handle, "select count(*) from gfac.analysis where gfacID = \"$gfacID\"" );
-    $count_row = $count_res ? mysqli_fetch_row( $count_res ) : null;
+    $count_stmt = mysqli_prepare( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" );
+    $count_res  = $count_stmt && mysqli_stmt_bind_param( $count_stmt, 's', $gfacID ) && mysqli_stmt_execute( $count_stmt )
+                ? mysqli_stmt_get_result( $count_stmt ) : false;
+    $count_row  = $count_res ? mysqli_fetch_row( $count_res ) : null;
     if ( $count_row && (int) $count_row[ 0 ] > 1 ) {
         mysqli_close( $db_handle );
         error_exit( "gfacID $gfacID matches more than one gfac.analysis row; restart with its cluster argument" );

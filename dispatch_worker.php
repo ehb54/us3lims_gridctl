@@ -35,7 +35,7 @@ function dispatch_worker_instances( $link )
 function dispatch_worker_backoff( $waits, $jitter = null )
 {
    $base = 30 * ( 1 << min( max( 0, (int) $waits ), 5 ) );
-   return min( 900, $base ) + ( $jitter !== null ? (int) $jitter : mt_rand( 0, 5 ) );
+   return min( 900, $base ) + ( $jitter !== null ? (int) $jitter : random_int( 0, 5 ) );
 }
 
 /**
