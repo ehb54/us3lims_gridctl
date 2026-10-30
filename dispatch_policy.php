@@ -25,7 +25,7 @@ function dispatch_operator_overrides( $path )
    $down_clusters = array();
    $draining_clusters = array();
    if ( is_file( $path ) )
-      include $path;
+      include $path; // NOSONAR read on every call for the variables it defines; include_once would skip a second read
    $out = array();
    foreach ( array( 'draining' => $draining_clusters, 'down' => $down_clusters ) as $state => $names ) {
       foreach ( is_array( $names ) ? $names : array() as $name )
