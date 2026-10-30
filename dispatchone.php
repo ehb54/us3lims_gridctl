@@ -39,8 +39,8 @@ $_SERVER[ 'LIMS_INSTANCE' ] = $lims_db;
 $php_base = "{$www_uslims3}/{$lims_db}";
 chdir( $php_base );
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
-include "$php_base/config.php";
-include "$php_base/lib/utility.php";
+include_once "$php_base/config.php";
+include_once "$php_base/lib/utility.php";
 include_once "$php_base/lib/motd.php";
 mysqli_report( MYSQLI_REPORT_OFF );
 

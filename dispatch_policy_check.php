@@ -18,7 +18,7 @@ if ( ! is_file( $global_config ) ) {
    fwrite( STDERR, "dispatch_policy_check: $global_config not found\n" );
    exit( 2 );
 }
-include $global_config;
+include_once $global_config;
 
 if ( ! isset( $cluster_details ) || ! is_array( $cluster_details ) ) {
    fwrite( STDERR, "dispatch_policy_check: $global_config defines no \$cluster_details\n" );
