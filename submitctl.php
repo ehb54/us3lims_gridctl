@@ -10,6 +10,9 @@ require_once __DIR__ . '/gridctl_bootstrap.php';
 gridctl_require_not_root( __FILE__, 'start', null, true );
 include_once $class_dir . "../global_config.php";   ## $cluster_details
 include_once __DIR__ . "/cluster_probe.php";   ## ask a cluster about a job
+require_once $class_dir . "dispatch_ledger.php";
+require_once $class_dir . "dispatch_alerts.php";
+require_once __DIR__ . "/dispatch_worker.php";
 
 # ********* start user defines *************
 
@@ -84,6 +87,33 @@ if ( !function_exists( 'debug_json' ) ) {
         echo json_encode( $json, JSON_PRETTY_PRINT );
         echo "\n";
     }
+}
+
+## Child processes (submitone.php, dispatchone.php) run concurrently up to
+## $max_children; each is tracked until it exits.
+function spawn_child( array $args, $log ) {
+    global $children;
+    $cmd  = implode( ' ', array_map( 'escapeshellarg', $args ) ) . ' >> ' . escapeshellarg( $log ) . ' 2>&1';
+    $proc = proc_open( $cmd, array( 0 => array( 'file', '/dev/null', 'r' ) ), $pipes );
+    if ( ! is_resource( $proc ) ) {
+        write_logls( "could not start $cmd", 0 );
+        return false;
+    }
+    $children[] = $proc;
+    write_logls( "running $cmd", 1 );
+    return true;
+}
+
+function reap_children() {
+    global $children;
+    foreach ( $children as $i => $proc ) {
+        $status = proc_get_status( $proc );
+        if ( ! $status[ 'running' ] ) {
+            proc_close( $proc );
+            unset( $children[ $i ] );
+        }
+    }
+    return count( $children );
 }
 
 function quote_fix( $str ) {
@@ -224,10 +254,69 @@ if ( !count( $limsdbs ) ) {
 
 exit_if_errors();
 
+$children     = array();
+$max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
+$dispatch_dbs = dispatch_worker_instances( $db_handle );
+$dispatch_owner = gethostname() . ':' . getmypid();
+## The site address from listen-config.php, for optional dispatch alert email.
+$admin_email  = isset( $admin_email ) ? $admin_email : '';
+$org_name     = isset( $org_name ) ? $org_name : 'UltraScan';
+$last_purge   = 0;
+write_logls( "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
+             . "; at most $max_children submissions at once", 1 );
+
 while( 1 ) {
     write_logls( "checking mysql", 2 );
 
     $work_done = 0;
+
+    ## Liveness for the independent heartbeat check, then the ledger's housekeeping:
+    ## finished jobs close their requests, autoflow stages show their dispatch
+    ## state, long waits are flagged and operator alert items are kept current.
+    dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
+    dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
+    foreach ( $dispatch_dbs as $dispatch_db ) {
+        dispatch_close_finished( $db_handle, $dispatch_db );
+        dispatch_mirror_autoflow( $db_handle, $dispatch_db );
+        dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
+    }
+    dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
+    dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ),
+        function ( $subject, $body ) use ( $admin_email, $org_name ) {
+            return ! empty( $admin_email ) && mail( $admin_email, $subject, $body,
+                "From: $org_name Admin<$admin_email>\nReply-To: $org_name<$admin_email>\nMIME-Version: 1.0\n" );
+        } );
+
+    $claimed = dispatch_worker_pass( $db_handle, $dispatch_dbs,
+        array( 'capacity' => $max_children - reap_children(), 'owner' => $dispatch_owner,
+               'spool' => dispatch_spool_dir() ),
+        function ( $lims_db, $id, $generation ) use ( $home, $dispatch_owner ) {
+            spawn_child( array( 'php', "{$home}/bin/dispatchone.php", $lims_db, $id, $generation, $dispatch_owner ),
+                         "{$home}/etc/submit.log" );
+        } );
+    if ( $claimed ) {
+        write_logls( "dispatch claimed " . implode( ', ', $claimed ), 1 );
+        $work_done = 1;
+    }
+
+    ## Hourly: terminal dispatch history ages out on the configured schedule,
+    ## interrupted intakes are failed and their unrecorded uploads removed.
+    if ( time() - $last_purge >= 3600 ) {
+        $retention = dispatch_retention_settings();
+        foreach ( $dispatch_dbs as $dispatch_db ) {
+            dispatch_purge_terminal( $db_handle, $dispatch_db, $retention[ 'requests' ] );
+        }
+        dispatch_purge_decisions( $db_handle, 'gfac', $retention[ 'decisions' ] );
+        dispatch_purge_legacy_decisions( $db_handle, 'gfac', $retention[ 'legacy_decisions' ] );
+        foreach ( $dispatch_dbs as $dispatch_db ) {
+            dispatch_abandon_unsealed( $db_handle, $dispatch_db, 3600 );
+        }
+        foreach ( dispatch_orphan_upload_dirs( $db_handle, $dispatch_dbs, 86400 ) as $orphan ) {
+            write_logls( "removing upload $orphan: its intake was never recorded", 1 );
+            dispatch_remove_upload_dir( $orphan );
+        }
+        $last_purge = time();
+    }
 
     foreach ( $limsdbs as $lims_db ) {
         write_logls( "checking mysql db {$lims_db}", 2 );
@@ -311,6 +400,10 @@ while( 1 ) {
             if ( !$failed &&
                  isset( $statusJson->{ "to_process" } ) &&
                  count( $statusJson->{ "to_process" } ) ) {
+                if ( reap_children() >= $max_children ) {
+                    write_logls( "{$submit_request_table_name} {$id_field} $ID waits: $max_children submissions running", 2 );
+                    continue;
+                }
                 $stage = array_shift( $statusJson->{ "to_process" } );
                 $statusJson->{ $processing_key } = $stage;
 
@@ -328,11 +421,7 @@ while( 1 ) {
                 ## Quoted: $lims_db comes from the instance list and $ID from a
                 ## table row, so neither is typed by a user here, but both reach a
                 ## shell and a database name is operator-supplied upstream.
-                $cmd = "php " . escapeshellarg( "{$home}/bin/submitone.php" ) . " "
-                       . escapeshellarg( $lims_db ) . " " . escapeshellarg( $ID )
-                       . " >> " . escapeshellarg( "{$home}/etc/submit.log" ) . " 2>&1 &";
-                write_logls( "running $cmd" );
-                shell_exec( $cmd );
+                spawn_child( array( 'php', "{$home}/bin/submitone.php", $lims_db, $ID ), "{$home}/etc/submit.log" );
                 $work_done = 1;
                 continue;
             }
@@ -351,7 +440,8 @@ while( 1 ) {
 
             if ( $failed ) {
                 if ( $currentGfacID = $obj->{ 'currentGfacID' } ) {
-                    cancel_stage_job( $currentGfacID, $obj->{ 'clusterDefault' } ?? '' );
+                    cancel_stage_job( $currentGfacID, $obj->{ 'clusterDefault' } ?? '', $lims_db,
+                                      (int) ( $obj->{ 'currentHPCARID' } ?? 0 ) );
                 }
                 $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET currentGfacID=NULL, currentHPCARID=NULL, statusjson='" . json_encode( $statusJson ) . "' WHERE {$id_field} = {$ID}";
                 $result = mysqli_query( $db_handle, $query );
@@ -401,18 +491,34 @@ while( 1 ) {
  * Cancel the job a failed stage left behind, and report whether it landed.
  * Short and unretried: this runs inside the loop over every pending request.
  */
-function cancel_stage_job( $gfacID, $cluster_default ) {
+function cancel_stage_job( $gfacID, $cluster_default, $lims_db, $hpcarid ) {
     global $db_handle;
 
     ## The executing cluster wins over the requested one: a metascheduler
     ## submission can land somewhere other than where it was aimed.
     $cluster = $cluster_default;
 
-    $stmt = mysqli_prepare( $db_handle,
-        "SELECT cluster, metaschedulerClusterExecuting FROM gfac.analysis WHERE gfacID = ?" );
+    ## Two clusters can reuse a job number: also match this stage's instance
+    ## and, once the 4.3.0 upgrade has added the column, its request.
+    try {
+        $stmt = mysqli_prepare( $db_handle,
+            "SELECT cluster, metaschedulerClusterExecuting FROM gfac.analysis WHERE gfacID = ? AND us3_db = ?"
+            . " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID = ?)" );
+    } catch ( mysqli_sql_exception $e ) {
+        $stmt = false;
+    }
+    if ( ! $stmt ) {
+        $stmt = mysqli_prepare( $db_handle,
+            "SELECT cluster, metaschedulerClusterExecuting FROM gfac.analysis WHERE gfacID = ? AND us3_db = ?" );
+        $hpcarid = null;
+    }
 
     if ( $stmt ) {
-        mysqli_stmt_bind_param( $stmt, 's', $gfacID );
+        if ( $hpcarid === null ) {
+            mysqli_stmt_bind_param( $stmt, 'ss', $gfacID, $lims_db );
+        } else {
+            mysqli_stmt_bind_param( $stmt, 'ssi', $gfacID, $lims_db, $hpcarid );
+        }
         mysqli_stmt_execute( $stmt );
         $row = mysqli_fetch_assoc( mysqli_stmt_get_result( $stmt ) );
         mysqli_stmt_close( $stmt );

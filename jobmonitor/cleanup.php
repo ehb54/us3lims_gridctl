@@ -26,9 +26,11 @@ const CLEANUP_FINALIZING_INTERRUPTED = -2;
 ## Returns -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
 ## marker survives for --restart, -1 terminal, 0 retry (not yet finalizable),
 ## 1 finalized / nothing to do.
-function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
+function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn, $cluster = '' )
 {
-   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
+   $key    = job_key( $gfacID, $cluster );
+   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'"
+           . job_cluster_condition( $db_handle, $cluster );
    $result = mysqli_query( $db_handle, $query );
 
    if ( ! $result )
@@ -57,7 +59,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    ## job_cleanup() imports with plain INSERTs, so only the claim holder runs it.
    ## One monitor per job is the rule, but --restart decides what is unmonitored by
    ## reading the process table, which has misread it before.
-   $claim = cleanup_claim_path( $us3_db, $gfacID );
+   $claim = cleanup_claim_path( $us3_db, $key );
 
    ## 0, not 1: the claim may be left from a killed worker, and a caller that
    ## stopped here would leave the job unfinished until the claim goes stale.
@@ -88,7 +90,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       }
 
       $log_fn( "calling job_cleanup() reqID=$requestID" );
-      $outcome = job_cleanup( $us3_db, $requestID, $db_handle );
+      $outcome = job_cleanup( $us3_db, $requestID, $db_handle, $cluster );
 
       ## Terminal either way means the stage has been written, so the finalizing
       ## span is over. One place rather than every exit path in job_cleanup: what
@@ -105,7 +107,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       ## no marker, and a stage stuck at 'running' forever.
       if ( $outcome !== 0 && $outcome !== CLEANUP_FINALIZING_INTERRUPTED )
       {
-         cleanup_finalizing_end( $us3_db, $gfacID );
+         cleanup_finalizing_end( $us3_db, $gfacID, $cluster );
       }
 
       return $outcome;
@@ -118,6 +120,26 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
 ## Per-job directory under the job log tree; jobmonitor.php's $lock_dir.
 ## uslims_jobs.php, which scans these directories, does not set $ll_base_dir.
+## Per-job path name: the job ID alone when its execution cluster is not known
+## (monitors started before clusters were passed), else "<job ID>@<cluster>",
+## so the same Slurm number from two clusters never shares a directory.
+function job_key( $gfacID, $cluster = '' )
+{
+   return (string) $cluster === '' ? (string) $gfacID : "$gfacID@$cluster";
+}
+
+## SQL condition fixing a gfac.analysis row to one execution cluster (a pool
+## job's metaschedulerClusterExecuting, otherwise cluster); '' when unknown.
+function job_cluster_condition( $db_handle, $cluster )
+{
+   if ( (string) $cluster === '' )
+   {
+      return '';
+   }
+   return " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
+        . mysqli_real_escape_string( $db_handle, $cluster ) . "'";
+}
+
 function cleanup_job_dir( $us3_db, $gfacID )
 {
    global $ll_base_dir;
@@ -222,13 +244,15 @@ function cleanup_finalizing_path( $us3_db, $gfacID )
    return job_state_path( $us3_db, $gfacID, 'finalizing' );
 }
 
-function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID )
+## Markers store the raw job ID and its execution cluster; only the path uses job_key().
+function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $cluster = '' )
 {
-   $path = cleanup_finalizing_path( $us3_db, $gfacID );
+   $path = cleanup_finalizing_path( $us3_db, job_key( $gfacID, $cluster ) );
    @mkdir( dirname( $path ), 0770, true );
    @file_put_contents( $path, json_encode( array(
       'us3_db'             => $us3_db,
       'gfacID'             => $gfacID,
+      'cluster'            => (string) $cluster,
       'autoflowAnalysisID' => (int) $autoflowAnalysisID,
       'requestID'          => (int) $requestID,
       'pid'                => getmypid(),
@@ -236,9 +260,9 @@ function cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $reque
    ) ) );
 }
 
-function cleanup_finalizing_end( $us3_db, $gfacID )
+function cleanup_finalizing_end( $us3_db, $gfacID, $cluster = '' )
 {
-   @unlink( cleanup_finalizing_path( $us3_db, $gfacID ) );
+   @unlink( cleanup_finalizing_path( $us3_db, job_key( $gfacID, $cluster ) ) );
 }
 
 ## Marker for a job whose results are already fully imported but whose final
@@ -256,13 +280,15 @@ function cleanup_status_pending_path( $us3_db, $gfacID )
 ## status), not the raw job status -- dbutils's uslims_jobs.php has no access
 ## to gridctl's status vocabulary maps, so the mapping happens once, here,
 ## and the marker carries the answer.
-function cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $stage, $queue_status, $message )
+function cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $stage, $queue_status, $message,
+                                       $cluster = '' )
 {
-   $path = cleanup_status_pending_path( $us3_db, $gfacID );
+   $path = cleanup_status_pending_path( $us3_db, job_key( $gfacID, $cluster ) );
    @mkdir( dirname( $path ), 0770, true );
    @file_put_contents( $path, json_encode( array(
       'us3_db'             => $us3_db,
       'gfacID'             => $gfacID,
+      'cluster'            => (string) $cluster,
       'autoflowAnalysisID' => (int) $autoflowAnalysisID,
       'requestID'          => (int) $requestID,
       'stage'              => $stage,
@@ -273,9 +299,9 @@ function cleanup_status_pending_begin( $us3_db, $gfacID, $autoflowAnalysisID, $r
    ) ) );
 }
 
-function cleanup_status_pending_end( $us3_db, $gfacID )
+function cleanup_status_pending_end( $us3_db, $gfacID, $cluster = '' )
 {
-   @unlink( cleanup_status_pending_path( $us3_db, $gfacID ) );
+   @unlink( cleanup_status_pending_path( $us3_db, job_key( $gfacID, $cluster ) ) );
 }
 
 ## Seconds since cleanup first found this job not yet finalizable. The first
@@ -640,7 +666,7 @@ function resolve_remote_workdir( $rx, $lworkdir )
 ## Returns 1 staged (or the cluster confirmed there is nothing to stage),
 ## -1 cluster unreachable, so not known yet: do not finalize on this,
 ## -2 can never be staged (cluster not configured, or the row rejects the tar).
-function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
+function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key = null )
 {
    global $work;
    global $work_remote;
@@ -697,7 +723,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID )
 
    ## Local staging directory, emptied first so a reused job ID cannot leave one
    ## job's files to be imported as another's.
-   $staging = job_staging_dir_prepare( $work, $gfacID,
+   $staging = job_staging_dir_prepare( $work, $key !== null ? $key : $gfacID,
                                        function ( $m ) use ( $me ) { write_logld( "$me: $m" ); } );
 
    if ( $staging === null )
@@ -806,7 +832,7 @@ write_logld( "$me:  es-tarfile size: $lenf");
             "stderr='"  . $esstde . "'," .
             "stdout='"  . $esstdo . "'," .
             "tarfile='" . $estarf . "'" .
-            "WHERE gfacID='$gfacID'";
+            "WHERE id='" . (int) $id . "'";
             ;
 
    $result = mysqli_query( $db_handle, $query );

@@ -21,7 +21,7 @@ if ( count( $argv ) != 3 ) {
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
-
+require_once __DIR__ . '/dispatch_policy.php';
 ## Pulled into its own function, not a bare top-level statement, so a test
 ## driven through gridctl_extract_functions() (tokenizer-based, pulls only
 ## function bodies -- see tests/support/gridctl/extract-functions.php) can
@@ -355,6 +355,10 @@ function submitone_shutdown_handler() {
     if ( $status !== 'READY' && $status !== 'SUBMIT_TIMEOUT' ) {
         return;
     }
+    ## A pool stage received for dispatch stays READY until the worker reports.
+    if ( ! empty( $GLOBALS[ 'dispatch_intake_committed' ] ) ) {
+        return;
+    }
 
     ## A page this script include()s (e.g.
     ## require_authorized_cluster(), lib/utility.php) can exit() with its
@@ -507,6 +511,29 @@ if ( $cluster == "localhost" ) {
         $queue     = $cluster_details[$cluster]['queue'] ?? 'batch';
     }
     echo "localhost cluster resolved to $cluster host_name $host_name queue $queue\n";
+} elseif ( isset( $cluster_details )
+           && is_array( $cluster_details )
+           && array_key_exists( $cluster, $cluster_details )
+           && dispatch_is_pool_entry( $cluster_details[ $cluster ] ) ) {
+    ## A pool stage is not resolved here: the driven _2.php page records the
+    ## request for the dispatch queue (require_cluster.php, lib/dispatch_intake.php)
+    ## and the dispatch worker submits it. A disabled pool refuses the stage.
+    $metascheduler_pseudo_cluster = $cluster;
+    if ( array_key_exists( 'active', $cluster_details[ $cluster ] ) && ! $cluster_details[ $cluster ][ 'active' ] ) {
+        $cluster_error = "metascheduler '$cluster' is disabled (active=false)";
+    }
+    $host_name = $cluster_details[ $cluster ][ 'name' ] ?? $cluster;
+    $queue     = $cluster_details[ $cluster ][ 'queue' ] ?? 'batch';
+    ## The stage occurrence: a rerun of this stage is a new request, a retry of
+    ## this one returns the original receipt.
+    $stage_occurrence = 1;
+    foreach ( $statusJson->{ 'processed' } ?? array() as $done ) {
+        if ( isset( $done->{ is_string( $stage ) ? $stage : json_encode( $stage ) } ) ) {
+            $stage_occurrence++;
+        }
+    }
+    $dispatch_intake_key = "autoflow-$ID-" . substr( sha1( json_encode( $stage ) ), 0, 12 ) . "-$stage_occurrence";
+    echo "metascheduler $cluster: the stage is queued for dispatch ($dispatch_intake_key)\n";
 } else {
     if ( isset( $cluster_details )
          && is_array( $cluster_details )
@@ -537,6 +564,12 @@ $_SESSION[ 'user_id' ]         = $person->{'fname'} . "_" . $person->{'lname'} .
 $_SESSION[ 'advancelevel' ]    = $person->{'advancelevel'};
 $_SESSION[ 'clusterAuth' ]     = $clusterAuth;
 $_SESSION[ 'gwhostid' ]        = $host_name;
+
+## Read back by lib/dispatch_intake.php as the request's intake key: a
+## top-level key, since the driven _1.php page reinitializes $_SESSION['cluster'].
+if ( isset( $dispatch_intake_key ) ) {
+    $_SESSION[ 'dispatch_intake_key' ] = $dispatch_intake_key;
+}
 
 echo "session now is:\n" . json_encode( $_SESSION, JSON_PRETTY_PRINT ) . "\n";
 

@@ -2,7 +2,7 @@
 <?php
 
 /*
- * queuepos.php <gfacID>
+ * queuepos.php <gfacID> [cluster]
  *
  * Reports a job's queue position and state as JSON. Asks through remote_exec,
  * so a transport failure is reported as such rather than parsed as an answer.
@@ -16,9 +16,10 @@ include_once __DIR__ . "/../cluster_probe.php";
 $self = __FILE__;
 
 $notes = <<<__EOD
-usage: $self jobid
+usage: $self jobid [cluster]
 
-reports queue position and status for job
+reports queue position and status for job; give its cluster when the
+job number is in use at more than one cluster
 
 
 __EOD;
@@ -34,6 +35,7 @@ if ( count( $u_argv ) ) {
     exit;
 }
 
+$job_cluster = count( $u_argv ) ? array_shift( $u_argv ) : '';
 if ( count( $u_argv ) ) {
     echo $notes;
     exit;
@@ -50,25 +52,14 @@ if ( ! $gLink ) {
     exit;
 }
 
-$stmt = mysqli_prepare( $gLink,
-    "SELECT cluster, metaschedulerClusterExecuting FROM analysis WHERE gfacID = ?" );
-if ( ! $stmt ) {
-    fwrite( $STDERR, "query failed: " . mysqli_error( $gLink ) . "\n" );
-    exit( 1 );
-}
-mysqli_stmt_bind_param( $stmt, 's', $gfacid );
-mysqli_stmt_execute( $stmt );
-$row = mysqli_fetch_assoc( mysqli_stmt_get_result( $stmt ) );
-mysqli_stmt_close( $stmt );
+$found = queuepos_job_cluster( $gLink, $gfacid, $job_cluster );
 mysqli_close( $gLink );
 
-if ( ! $row ) {
-    echo "{\"error\":\"job not found in the job database\"}";
+if ( isset( $found[ 'error' ] ) ) {
+    echo json_encode( $found );
     exit;
 }
-
-$cluster = empty( $row[ 'metaschedulerClusterExecuting' ] )
-         ? $row[ 'cluster' ] : $row[ 'metaschedulerClusterExecuting' ];
+$cluster = $found[ 'cluster' ];
 
 ## Short budget and no retry: a human is waiting.
 $rx  = cluster_probe_remote( $cluster, function ( $m ) use ( $STDERR ) {
@@ -265,3 +256,26 @@ if ( !function_exists( 'queuepos_report' ) ) {
 }
 
 echo json_encode( queuepos_report( $res, $gfacid ) );
+
+## The job's execution cluster, or an error when the number is unknown or,
+## without $job_cluster, in use at more than one cluster.
+function queuepos_job_cluster( $link, $gfacid, $job_cluster ) {
+    $stmt = mysqli_prepare( $link,
+        "SELECT COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster) AS c FROM analysis WHERE gfacID = ?"
+        . " AND ( ? = '' OR COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster) = ? )" );
+    if ( ! $stmt ) {
+        return [ 'error' => 'job lookup failed: ' . mysqli_error( $link ) ];
+    }
+    mysqli_stmt_bind_param( $stmt, 'sss', $gfacid, $job_cluster, $job_cluster );
+    mysqli_stmt_execute( $stmt );
+    $clusters = array_unique( array_column( mysqli_fetch_all( mysqli_stmt_get_result( $stmt ), MYSQLI_ASSOC ), 'c' ) );
+    mysqli_stmt_close( $stmt );
+
+    if ( count( $clusters ) > 1 ) {
+        return [ 'error' => 'job number is in use at more than one cluster; give the cluster' ];
+    }
+    if ( ! $clusters ) {
+        return [ 'error' => 'job not found in the job database' ];
+    }
+    return [ 'cluster' => reset( $clusters ) ];
+}
