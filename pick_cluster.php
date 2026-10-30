@@ -578,7 +578,7 @@ function pick_cluster_operator_overrides( $path = '../down_clusters.php' )
    $draining_clusters = array();
    if ( is_file( $path ) )
    {
-      include $path;
+      include $path; // NOSONAR read on every call for the variables it defines; include_once would skip a second read
    }
    return array(
       'down'     => is_array( $down_clusters ) ? array_values( $down_clusters ) : array(),

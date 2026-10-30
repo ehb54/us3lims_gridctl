@@ -563,7 +563,7 @@ if ( $cluster == "localhost" ) {
     foreach ( array( "$php_base/cluster_config.php", "$www_uslims3/cluster_config.php",
                      "$www_uslims3/uslims3_newlims/cluster_config.php" ) as $instance_cluster_config ) {
         if ( is_file( $instance_cluster_config ) ) {
-            include $instance_cluster_config;
+            include $instance_cluster_config; // NOSONAR read for its variables; include_once would make the driven page skip its own include
             break;
         }
     }
