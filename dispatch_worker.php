@@ -128,6 +128,7 @@ function dispatch_worker_release_lanes( $link, $gdb, array $held, $owner )
  *   submit           fn( array $plan, $token ) => submission outcome (SUBMIT_* certainty)
  *   failed           fn( $reason ) runs the existing failure reporting (optional)
  *   reachable        member => false for a member known to be down (optional)
+ *   operator         member => 'down' | 'draining' from down_clusters.php (optional)
  *   submission_blocked  fn() => whether the site has blocked job submission (optional)
  *   batch_preflight  fn( $member, array $children ) => array( ok, failed ): every child of the
  *                    batch planned at $member before the batch is pinned there (optional)
@@ -251,6 +252,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       $decision = dispatch_select( array(
          'policy' => $policy, 'plans' => $plans, 'observations' => $observations, 'authorized' => $auth,
          'reachable' => isset( $io[ 'reachable' ] ) ? $io[ 'reachable' ] : array(),
+         'operator' => isset( $io[ 'operator' ] ) ? $io[ 'operator' ] : array(),
          'rotation' => $rotation, 'pinned' => $pinned,
       ) );
       dispatch_record_decision( $link, $gdb, $db, $id, $req[ 'pool' ], $decision, dispatch_policy_summary( $policy ) );

@@ -69,6 +69,7 @@ function dispatch_pick( array $group, array $eligible, array $state )
  *   observations  member => assessment observation (optional under queue admission)
  *   authorized    member => dispatch_cluster_authorization() result
  *   reachable     member => true | false | null (null: not known, treated as reachable)
+ *   operator      member => 'down' | 'draining' from down_clusters.php: no new work, a wait
  *   rotation      array( 'primary' => state, 'overflow' => state )
  *   pinned        a member a batch is already pinned to, or null
  *
@@ -82,6 +83,7 @@ function dispatch_select( array $in )
    $obs = isset( $in[ 'observations' ] ) ? $in[ 'observations' ] : array();
    $auth = isset( $in[ 'authorized' ] ) ? $in[ 'authorized' ] : array();
    $reach = isset( $in[ 'reachable' ] ) ? $in[ 'reachable' ] : array();
+   $operator = isset( $in[ 'operator' ] ) ? $in[ 'operator' ] : array();
    $rotation = isset( $in[ 'rotation' ] ) ? $in[ 'rotation' ] : array();
    $pinned = isset( $in[ 'pinned' ] ) ? $in[ 'pinned' ] : null;
 
@@ -140,6 +142,10 @@ function dispatch_select( array $in )
             $c[ 'cause' ] = 'rejected';
             $permanent++;
          }
+         elseif ( isset( $operator[ $m ] ) ) {
+            $c[ 'reason' ] = "taken out of service by the operator ({$operator[ $m ]})";
+            $c[ 'cause' ] = 'operator';
+         }
          elseif ( isset( $reach[ $m ] ) && $reach[ $m ] === false ) {
             $c[ 'reason' ] = 'unreachable';
             $c[ 'cause' ] = 'unreachable';
@@ -180,8 +186,8 @@ function dispatch_select( array $in )
          return $decision;
       }
       $decision[ 'reason' ] = "pinned destination $pinned cannot take work now";
-      $decision[ 'code' ] = isset( $decision[ 'candidates' ][ $pinned ] )
-                          && $decision[ 'candidates' ][ $pinned ][ 'cause' ] === 'unreachable' ? 'unreachable' : 'occupied';
+      $cause = isset( $decision[ 'candidates' ][ $pinned ] ) ? $decision[ 'candidates' ][ $pinned ][ 'cause' ] : '';
+      $decision[ 'code' ] = in_array( $cause, array( 'unreachable', 'operator' ), true ) ? $cause : 'occupied';
       return $decision;
    }
 
@@ -269,7 +275,7 @@ function dispatch_select_cause_code( array $candidates, $permanent )
       }
    }
    if ( ! $permanent ) {
-      return isset( $causes[ 'unreachable' ] ) ? 'unreachable' : 'occupied';
+      return isset( $causes[ 'unreachable' ] ) ? 'unreachable' : ( isset( $causes[ 'operator' ] ) ? 'operator' : 'occupied' );
    }
    if ( isset( $causes[ 'authorization' ] ) && count( $causes ) === 1 ) {
       return 'no_permission';

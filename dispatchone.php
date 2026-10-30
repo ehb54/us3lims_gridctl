@@ -91,6 +91,8 @@ $load_job = function () use ( $req, &$job, $open_input ) {
 
 $io = array(
     'cluster_details' => is_array( $global_cluster_details ) ? $global_cluster_details : array(),
+    ## read for each attempt, so putting a cluster back takes effect on the next one
+    'operator'        => dispatch_operator_overrides( "$www_uslims3/down_clusters.php" ),
     'configured'      => array_map( function ( $c ) { return $c->short_name; }, is_array( $clusters ) ? $clusters : array() ),
     'plans' => function ( array $members, array $request ) use ( $load_job ) {
         $loaded = $load_job();

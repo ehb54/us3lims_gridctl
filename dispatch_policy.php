@@ -1,5 +1,6 @@
 <?php
-/* Dispatch policy for metascheduler pools: settings, upgrade defaults and validation. Pure; PHP 7.2 compatible. */
+/* Dispatch policy for metascheduler pools: settings, upgrade defaults and validation. Pure except
+   dispatch_operator_overrides(), which reads the operator's file; PHP 7.2 compatible. */
 
 const DISPATCH_STRATEGIES = array( 'ordered', 'round_robin', 'weighted_round_robin' );
 const DISPATCH_ADMISSIONS = array( 'queue', 'start_within_allowance' );
@@ -12,6 +13,25 @@ const DISPATCH_RETIRED_GLOBALS = array( 'global_cluster_saturation_threshold', '
 function dispatch_is_pool_entry( $entry )
 {
    return is_array( $entry ) && isset( $entry[ 'clusters' ] ) && is_array( $entry[ 'clusters' ] );
+}
+
+/**
+ * The clusters the operator took out of service in down_clusters.php ($down_clusters,
+ * $draining_clusters), the file dbinst's cluster list reads: cluster => 'down' | 'draining',
+ * down winning when a cluster is in both. Empty when the file is absent.
+ */
+function dispatch_operator_overrides( $path )
+{
+   $down_clusters = array();
+   $draining_clusters = array();
+   if ( is_file( $path ) )
+      include $path;
+   $out = array();
+   foreach ( array( 'draining' => $draining_clusters, 'down' => $down_clusters ) as $state => $names ) {
+      foreach ( is_array( $names ) ? $names : array() as $name )
+         $out[ (string) $name ] = $state;
+   }
+   return $out;
 }
 
 /** Physical scheduler identity: an explicit 'controller', else the login host 'name'. */
