@@ -162,16 +162,14 @@ $io = array(
         }
         return array( 'ok' => $check[ 'ok' ], 'failed' => $failed );
     },
-    ## Blocked work waits for an operator: tell the site admin.
-    'blocked' => function ( $reason ) use ( $lims_db, $dispatch_id, $req, $listen_admin_email ) {
+    ## Blocked work waits for an operator: tell the site admin and the submitter.
+    'blocked' => function ( $reason ) use ( $dispatch_link, $lims_db, $dispatch_id, $req, $listen_admin_email ) {
         global $global_site_admin_email, $org_name;
         $send = dispatch_site_admin_sender(
             dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '', $listen_admin_email ),
             isset( $org_name ) ? $org_name : '' );
-        $send( "UltraScan dispatch: request $dispatch_id in $lims_db is blocked",
-               "Dispatch request $dispatch_id (HPC request " . (int) $req[ 'HPCAnalysisRequestID' ] . ", pool {$req['pool']})"
-               . " in $lims_db is blocked and needs an administrator:\n\n$reason\n\n"
-               . "Retry it from the dispatch dashboard once the cause is fixed.\n" );
+        $who = dispatch_request_submitters( $dispatch_link, $lims_db, array( $dispatch_id ) );
+        dispatch_notify_blocked( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '' );
     },
     'failed' => function ( $reason ) use ( $load_job ) {
         $loaded = $load_job();
