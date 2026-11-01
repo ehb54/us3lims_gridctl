@@ -6,7 +6,7 @@ $us3util = "$us3lims/database/utils";
 $us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
 require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
-## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID",
+## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID [cluster]",
 ## not the literal word "start" -- pass the actual arguments through so the
 ## printed remedy can be run as-is instead of failing with rc 255 for a
 ## missing argument.
@@ -53,19 +53,25 @@ $ll_base_dir  = "$us3lims/etc/joblog";
 
 # process arguments or die
 
-$notes = "usage: $self dbname gfacID HPCAnalysisRequestID
+$notes = "usage: $self dbname gfacID HPCAnalysisRequestID [cluster]
 ";
 
 $u_argv = $argv;
 array_shift( $u_argv ); # first element is program name
 
-if ( count( $u_argv ) != 3 ) {
+if ( count( $u_argv ) != 3 && count( $u_argv ) != 4 ) {
     error_exit( $notes );
 }
 
 $us3_db = array_shift( $u_argv );
 $gfacID = array_shift( $u_argv );
 $hpcrid = array_shift( $u_argv );
+## Optional execution cluster, passed by common's submit path and uslims_jobs.php --restart.
+$job_cluster = count( $u_argv ) ? array_shift( $u_argv ) : '';
+
+if ( $job_cluster !== '' && !preg_match( '/^[A-Za-z0-9._-]+$/', $job_cluster ) ) {
+    $errors .= "cluster has an invalid format\n";
+}
 
 if ( !preg_match( '/^uslims3_[A-Za-z0-9_]*$/', $us3_db ) ) {
     $errors .= "dbname has an invalid format\n";
@@ -190,6 +196,11 @@ write_logld( "db opened" );
 
 # Load the current central job-tracking row.
 
+$job_cluster_sql = $job_cluster === ''
+    ? ''
+    : " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
+      . mysqli_real_escape_string( $db_handle, $job_cluster ) . "'";
+
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
 $loop      = 0;
@@ -207,6 +218,7 @@ if (
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
                      . " where gfacID = \"$gfacID\""
+                     . $job_cluster_sql
                      ,false
                      ,true
       ) ) ) {
@@ -247,7 +259,8 @@ while( 1 ) {
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
-                     . " where gfacID = ?" );
+                     . " where gfacID = ?"
+                     . $job_cluster_sql );
 
     $poll_result = $poll_statement
                  && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
