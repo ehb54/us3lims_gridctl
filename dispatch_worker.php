@@ -44,7 +44,8 @@ function dispatch_worker_backoff( $waits, $jitter = null )
  * across instances so none starves the others, at most $opts['per_instance']
  * each and $opts['capacity'] in all. Recovery of held and accepted requests
  * comes before new attempts. $spawn( $db, $id, $generation ) starts the child.
- * $opts['spool'] names the receipt spool directory. Returns the claims as "db:id".
+ * $opts['spool'] names the receipt spool directory; $opts['expired']( $db, $ids ) is told of
+ * the requests this pass expired. Returns the claims as "db:id".
  */
 function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
 {
@@ -60,7 +61,10 @@ function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
    $queues = array();
    foreach ( $dbs as $db ) {
       dispatch_hold_lost_submissions( $link, $db );
-      dispatch_expire_due( $link, $db );
+      $expired = dispatch_expire_due( $link, $db );
+      if ( $expired && isset( $opts[ 'expired' ] ) ) {
+         $opts[ 'expired' ]( $db, $expired );
+      }
       if ( $capacity > 0 ) {
          $queues[ $db ] = array();
          foreach ( dispatch_recovery_ready( $link, $db, $per ) as $id ) {
@@ -156,6 +160,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       }
       if ( $to === DISPATCH_FAILED && isset( $io[ 'failed' ] ) ) {
          $io[ 'failed' ]( $reason );
+      }
+      if ( $to === DISPATCH_BLOCKED && isset( $io[ 'blocked' ] ) ) {
+         $io[ 'blocked' ]( $reason );
       }
       return $to;
    };

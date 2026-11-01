@@ -7,12 +7,18 @@
  * alert item on the dispatch dashboard. When the database itself cannot be
  * reached, the problem is appended to a durable log and mailed to the site
  * administrator at most once an hour, since alert items cannot be written.
+ * A dead worker is mailed to the site administrator once per outage.
  */
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 gridctl_require_not_root( __FILE__, 'run', '' );
+include_once $class_dir . "../global_config.php";   ## $global_site_admin_email
 require_once $class_dir . 'dispatch_alerts.php';
+
+$site_admin = dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '',
+                                           isset( $admin_email ) ? $admin_email : '' );
+$send = dispatch_site_admin_sender( $site_admin, isset( $org_name ) ? $org_name : '' );
 
 $log = dirname( $us3bin ) . '/etc/dispatch-health.log';
 $note = function ( $msg ) use ( $log ) {
@@ -24,11 +30,10 @@ $link = @mysqli_connect( $dbhost, $user, $passwd, 'gfac' );
 if ( ! $link ) {
     $note( "the dispatch database could not be reached: " . mysqli_connect_error() );
     $stamp = dirname( $us3bin ) . '/etc/dispatch-health.mailed';
-    if ( ! empty( $admin_email ) && ( ! is_file( $stamp ) || filemtime( $stamp ) < time() - 3600 ) ) {
-        mail( $admin_email, 'UltraScan dispatch: database unreachable',
-              "The dispatch heartbeat check could not reach the gfac database on " . gethostname()
-              . ". Alert items and the dashboard are unavailable until it is back; see $log.\n",
-              "From: " . ( isset( $org_name ) ? $org_name : 'UltraScan' ) . " Admin<$admin_email>\n" );
+    if ( ! is_file( $stamp ) || filemtime( $stamp ) < time() - 3600 ) {
+        $send( 'UltraScan dispatch: database unreachable',
+               "The dispatch heartbeat check could not reach the gfac database on " . gethostname()
+               . ". Alert items and the dashboard are unavailable until it is back; see $log.\n" );
         touch( $stamp );
     }
     exit( 1 );
@@ -44,4 +49,6 @@ $detail = $status[ 'age' ] === null
           . " check submitctl.php under us3-listen (services.php) and its log";
 dispatch_alert_raise( $link, 'gfac', 'worker_heartbeat', 'worker_heartbeat', 'urgent', null, null, $detail );
 $note( $detail );
+## The worker cannot mail its own death; once per outage, whatever $global_dispatch_alert_email says.
+dispatch_alert_email_pending( $link, 'gfac', true, $send, 'worker_heartbeat' );
 exit( 2 );

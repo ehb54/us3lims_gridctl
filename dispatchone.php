@@ -32,6 +32,9 @@ if ( ! $dispatch_link ) {
     exit( 1 );
 }
 
+## listen-config.php's host address, before the instance configuration sets its own $admin_email.
+$listen_admin_email = isset( $admin_email ) ? $admin_email : '';
+
 ## The instance's own configuration, as the pages submitone.php includes see it.
 $www_uslims3 = isset( $www_uslims3 ) ? $www_uslims3 : "/srv/www/htdocs/uslims3";
 putenv( "LIMS_INSTANCE=$lims_db" );
@@ -45,6 +48,7 @@ include_once "$php_base/lib/motd.php";
 mysqli_report( MYSQLI_REPORT_OFF );
 
 require_once $class_dir . 'dispatch_ledger.php';
+require_once $class_dir . 'dispatch_alerts.php';
 require_once $class_dir . 'dispatch_authorization.php';
 require_once $class_dir . 'slurm_assessment.php';
 require_once $class_dir . 'remote_exec.php';
@@ -157,6 +161,17 @@ $io = array(
             $failed[] = "request $id: $error";
         }
         return array( 'ok' => $check[ 'ok' ], 'failed' => $failed );
+    },
+    ## Blocked work waits for an operator: tell the site admin.
+    'blocked' => function ( $reason ) use ( $lims_db, $dispatch_id, $req, $listen_admin_email ) {
+        global $global_site_admin_email, $org_name;
+        $send = dispatch_site_admin_sender(
+            dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '', $listen_admin_email ),
+            isset( $org_name ) ? $org_name : '' );
+        $send( "UltraScan dispatch: request $dispatch_id in $lims_db is blocked",
+               "Dispatch request $dispatch_id (HPC request " . (int) $req[ 'HPCAnalysisRequestID' ] . ", pool {$req['pool']})"
+               . " in $lims_db is blocked and needs an administrator:\n\n$reason\n\n"
+               . "Retry it from the dispatch dashboard once the cause is fixed.\n" );
     },
     'failed' => function ( $reason ) use ( $load_job ) {
         $loaded = $load_job();

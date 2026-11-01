@@ -258,9 +258,26 @@ $children     = array();
 $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
 $dispatch_dbs = dispatch_worker_instances( $db_handle );
 $dispatch_owner = gethostname() . ':' . getmypid();
-## The site address from listen-config.php, for optional dispatch alert email.
-$admin_email  = isset( $admin_email ) ? $admin_email : '';
 $org_name     = isset( $org_name ) ? $org_name : 'UltraScan';
+$site_admin_send = dispatch_site_admin_sender(
+    dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '',
+                                 isset( $admin_email ) ? $admin_email : '' ), $org_name );
+## Expired requests: one notice to the site admin per pass, and one to each submitter.
+$dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_send ) {
+    $submitters = dispatch_request_submitters( $db_handle, $db, $ids );
+    $site_admin_send( "UltraScan dispatch: " . count( $ids ) . " request(s) expired in $db",
+        "These dispatch requests in $db were not submitted within the maximum wait and have expired:\n\n"
+        . implode( "\n", array_map( function ( $id ) use ( $submitters ) {
+              return "request $id" . ( isset( $submitters[ $id ] ) ? " (HPC request {$submitters[$id][1]}, {$submitters[$id][0]})" : '' );
+          }, $ids ) ) . "\n\nThe dispatch dashboard lists the reasons they waited.\n" );
+    foreach ( $submitters as $id => $who ) {
+        if ( $who[ 0 ] !== '' ) {
+            $site_admin_send( "US3 job submission expired",
+                "Your analysis (HPC request {$who[1]}) in $db could not be submitted within the maximum wait"
+                . " and was not run. The system administrator has been notified.\n", $who[ 0 ] );
+        }
+    }
+};
 $last_purge   = 0;
 write_logls( "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
@@ -281,15 +298,11 @@ while( 1 ) {
         dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
     }
     dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
-    dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ),
-        function ( $subject, $body ) use ( $admin_email, $org_name ) {
-            return ! empty( $admin_email ) && mail( $admin_email, $subject, $body,
-                "From: $org_name Admin<$admin_email>\nReply-To: $org_name<$admin_email>\nMIME-Version: 1.0\n" );
-        } );
+    dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
 
     $claimed = dispatch_worker_pass( $db_handle, $dispatch_dbs,
         array( 'capacity' => $max_children - reap_children(), 'owner' => $dispatch_owner,
-               'spool' => dispatch_spool_dir() ),
+               'spool' => dispatch_spool_dir(), 'expired' => $dispatch_expired ),
         function ( $lims_db, $id, $generation ) use ( $home, $dispatch_owner ) {
             spawn_child( array( 'php', "{$home}/bin/dispatchone.php", $lims_db, $id, $generation, $dispatch_owner ),
                          "{$home}/etc/submit.log" );
