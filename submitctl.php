@@ -259,6 +259,7 @@ exit_if_errors();
 $children     = array();
 $child_kinds  = array();   ## child index => dispatch | autoflow
 $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
+$max_autoflow_children = isset( $global_autoflow_submit_children ) ? max( 1, (int) $global_autoflow_submit_children ) : 32;
 $dispatch_dbs = dispatch_worker_instances( $db_handle );
 $dispatch_dbs_read = time();
 $dispatch_owner = gethostname() . ':' . getmypid();
@@ -290,6 +291,7 @@ while( 1 ) {
     write_logls( "checking mysql", 2 );
 
     $work_done = 0;
+    $autoflow_waiting = false;
 
     ## An instance created after start, once it has the dispatch tables, is served from the next minute.
     if ( time() - $dispatch_dbs_read >= 60 ) {
@@ -423,6 +425,11 @@ while( 1 ) {
             if ( !$failed &&
                  isset( $statusJson->{ "to_process" } ) &&
                  count( $statusJson->{ "to_process" } ) ) {
+                if ( reap_children( 'autoflow' ) >= $max_autoflow_children ) {
+                    write_logls( "{$submit_request_table_name} {$id_field} $ID waits: $max_autoflow_children autoflow submissions running", 2 );
+                    $autoflow_waiting = true;
+                    continue;
+                }
                 $stage = array_shift( $statusJson->{ "to_process" } );
                 $statusJson->{ $processing_key } = $stage;
 
@@ -440,7 +447,7 @@ while( 1 ) {
                 ## Quoted: $lims_db comes from the instance list and $ID from a
                 ## table row, so neither is typed by a user here, but both reach a
                 ## shell and a database name is operator-supplied upstream.
-                ## Every ready stage starts at once, as 4.2.0: only dispatch attempts count against $max_children.
+                ## Bounded apart from dispatch attempts, and high enough that ready stages start at once as in 4.2.0.
                 spawn_child( array( 'php', "{$home}/bin/submitone.php", $lims_db, $ID ), "{$home}/etc/submit.log", 'autoflow' );
                 $work_done = 1;
                 continue;
@@ -501,8 +508,10 @@ while( 1 ) {
         }
     }
     if ( !$work_done ) {
-        write_logls( "no requests to process sleeping {$poll_sleep_seconds}s", 2 );
-        sleep( $poll_sleep_seconds );
+        ## A stage waiting for a free autoflow slot is checked again in a second, not a full poll.
+        $nap = $autoflow_waiting ? 1 : $poll_sleep_seconds;
+        write_logls( "no requests to process sleeping {$nap}s", 2 );
+        sleep( $nap );
     }
 }
 
