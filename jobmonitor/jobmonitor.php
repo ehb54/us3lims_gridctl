@@ -202,9 +202,19 @@ $loop      = 0;
 
 ## A reset controller reuses job numbers: where gfac.analysis records the request, this job's row is
 ## the one for this monitor's request (an older row with the same number is another job).
+## The row carrying this request is the one; a row from before the column existed (NULL) is used
+## only when there is none.
+$job_request_sql = "";
 $job_request_column = mysqli_query( $db_handle, "SHOW COLUMNS FROM gfac.analysis LIKE 'HPCAnalysisRequestID'" );
-$job_request_sql = $job_request_column && mysqli_num_rows( $job_request_column ) > 0
-    ? " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID = " . (int) $hpcrid . ")" : "";
+if ( $job_request_column && mysqli_num_rows( $job_request_column ) > 0 ) {
+    $own_stmt = mysqli_prepare( $db_handle, "select count(*) from gfac.analysis where gfacID = ? and HPCAnalysisRequestID = ?" );
+    $own_res  = $own_stmt && mysqli_stmt_bind_param( $own_stmt, 'si', $gfacID, $hpcrid ) && mysqli_stmt_execute( $own_stmt )
+              ? mysqli_stmt_get_result( $own_stmt ) : false;
+    $own_row  = $own_res ? mysqli_fetch_row( $own_res ) : null;
+    $job_request_sql = $own_row && (int) $own_row[ 0 ] > 0
+        ? " AND HPCAnalysisRequestID = " . (int) $hpcrid
+        : " AND HPCAnalysisRequestID IS NULL";
+}
 
 ## Without a cluster argument the job ID alone must identify one row: two
 ## clusters can issue the same Slurm number, and guessing would monitor (and
