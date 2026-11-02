@@ -103,7 +103,7 @@ $io = array(
         $plans = array();
         foreach ( $members as $m ) {
             $plans[ $m ] = is_string( $loaded )
-                ? array( 'ok' => false, 'cluster' => $m, 'error' => $loaded )
+                ? array( 'ok' => false, 'cluster' => $m, 'error' => $loaded, 'input' => true )
                 : $loaded->candidate_plan( $m, array( 'priority_directive' => (string) $request[ 'priorityDirective' ] ) );
         }
         return $plans;

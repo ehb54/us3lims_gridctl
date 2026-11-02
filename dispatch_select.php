@@ -134,7 +134,8 @@ function dispatch_select( array $in )
          }
          elseif ( ! isset( $plans[ $m ] ) || empty( $plans[ $m ][ 'ok' ] ) ) {
             $c[ 'reason' ] = isset( $plans[ $m ][ 'error' ] ) ? $plans[ $m ][ 'error' ] : 'no plan for this member';
-            $c[ 'cause' ] = 'plan';
+            ## A received input that is gone or changed is the request's problem, not a member's limits.
+            $c[ 'cause' ] = ! empty( $plans[ $m ][ 'input' ] ) ? 'input' : 'plan';
             $permanent++;
          }
          elseif ( $o && $o[ 'verdict' ] === SELECT_VERDICT_REJECTED ) {
@@ -279,6 +280,9 @@ function dispatch_select_cause_code( array $candidates, $permanent )
    }
    if ( isset( $causes[ 'authorization' ] ) && count( $causes ) === 1 ) {
       return 'no_permission';
+   }
+   if ( isset( $causes[ 'input' ] ) ) {
+      return 'input';
    }
    return isset( $causes[ 'plan' ] ) || isset( $causes[ 'rejected' ] ) ? 'no_fit' : 'configuration';
 }
