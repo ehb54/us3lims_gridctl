@@ -14,14 +14,20 @@ $us3etc  = exec( "ls -d ~us3/lims/etc" );
 $us3util = exec( "ls -d ~us3/lims/database/utils 2>/dev/null" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 
+## The account check first: under another account the lock directory is not writable either,
+## and that message (with exit 0) used to hide the refusal and its remedy.
+if ( in_array( $argv[ 1 ] ?? '', array( 'start', 'restart', '_restart-retry-background' ), true ) ) {
+    gridctl_require_not_root( __FILE__, $argv[ 1 ] );
+}
+
 if ( !file_exists( $lock_dir ) ) {
     print "Directory $lock_dir does not exist\n";
-    exit;
+    exit( 1 );
 }
 
 if ( !is_writeable( $lock_dir ) ) {
     print "Directory $lock_dir exists but is not writable\n";
-    exit;
+    exit( 1 );
 }
 
 global $lock;

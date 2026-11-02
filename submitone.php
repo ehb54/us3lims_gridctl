@@ -206,10 +206,15 @@ function fail_job() {
     global $self;
 
     $use_cli_errors = preg_replace( '/ERROR: \S*\.php /', 'ERROR: ', $cli_errors );
-    $joined_errors  = implode( '; ', quote_fix( $use_cli_errors ) );
+    ## Bound, so the reason keeps its apostrophes in statusMsg and the mail.
+    $joined_errors  = implode( '; ', $use_cli_errors );
 
-    $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='$joined_errors' WHERE {$id_field} = {$ID}";
-    $result = mysqli_query( $db_handle, $query );
+    $query     = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg=? WHERE {$id_field} = " . (int) $ID;
+    $statement = mysqli_prepare( $db_handle, $query );
+    $result    = $statement && mysqli_stmt_bind_param( $statement, 's', $joined_errors ) && mysqli_stmt_execute( $statement );
+    if ( $statement ) {
+        mysqli_stmt_close( $statement );
+    }
 
     if ( !$result ) {
         write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
