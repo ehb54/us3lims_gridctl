@@ -77,7 +77,7 @@ function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
    $gdb = isset( $opts[ 'gdb' ] ) ? $opts[ 'gdb' ] : 'gfac';
 
    if ( ! empty( $opts[ 'spool' ] ) ) {
-      dispatch_spool_replay( $link, $gdb, $opts[ 'spool' ] );
+      dispatch_spool_replay( $link, $opts[ 'spool' ] );
    }
 
    $queues = array();
@@ -241,9 +241,10 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
                                               : dispatch_batch_pin( $link, $db, $req[ 'parentBatchKey' ] );
    $availability = $policy[ 'admission' ] === 'start_within_allowance';
 
-   ## One rotation lane per instance, pool and policy version: rotation state is
-   ## read, chosen from and spent by one process at a time. Availability decisions
-   ## also hold every candidate's scheduler until the outcome is known.
+   ## One rotation lane per instance, pool and policy version: one process at a
+   ## time reads the rotation state, chooses and saves the turn, and the lane is
+   ## released before staging. Availability decisions also hold every
+   ## candidate's scheduler until the outcome is known.
    $keys = array( dispatch_lane_rotation( $db, $req[ 'pool' ], $policy[ 'version' ] ) );
    if ( $availability ) {
       foreach ( $members as $m ) {
@@ -271,6 +272,15 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
 
    $state = DISPATCH_ASSESSING;
    for ( $round = 0; ; $round++ ) {
+      ## A reselection after staging takes the rotation lane again.
+      if ( ! isset( $lanes[ $rotation_lane ] ) ) {
+         $again = dispatch_worker_take_lanes( $link, $gdb, array( $rotation_lane ), $lane_owner, $lease );
+         if ( $again === null ) {
+            return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
+                            array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
+         }
+         $lanes += $again;
+      }
       $observations = $availability && $pinned === null && $plans
                     ? $io[ 'assess' ]( array_filter( $plans, function ( $p ) { return ! empty( $p[ 'ok' ] ); } ),
                                        $policy[ 'wait_allowance_seconds' ] )
@@ -318,13 +328,30 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
             continue;
          }
       }
-      if ( ! dispatch_stage( $link, $db, $id, $generation, $chosen, $plan[ 'hash' ], $policy[ 'version' ], $why ) ) {
-         dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
-         return 'lost';
+      ## The turn is saved with the move to STAGING and never refunded. A pinned
+      ## batch child has one eligible member and takes no turn.
+      $group = $decision[ 'group' ];
+      $turn = $pinned === null && isset( $decision[ 'rotation' ][ $group ] )
+            ? array( $gdb, $scopes[ $group ], $decision[ 'rotation' ][ $group ],
+                     $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] ) : null;
+      $staged_ok = dispatch_stage( $link, $db, $id, $generation, $chosen, $plan[ 'hash' ], $policy[ 'version' ], $why, $turn );
+      dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
+      unset( $lanes[ $rotation_lane ] );
+      if ( ! $staged_ok ) {
+         ## The rotation lane lapsed, or a sibling pinned the batch elsewhere: decide again shortly.
+         return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
+                         array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
       }
       $state = DISPATCH_STAGING;
       ## Staging may copy for up to DISPATCH_WORKER_STAGING_LEASE seconds; a shorter claim was taken over mid-copy.
+      ## The scheduler lanes of an availability decision are held as long.
       dispatch_renew( $link, $db, $id, $generation, $owner, max( $lease, DISPATCH_WORKER_STAGING_LEASE ) );
+      foreach ( array_keys( $lanes ) as $key ) {
+         $lanes[ $key ] = dispatch_controller_claim( $link, $gdb, $key, $lane_owner, max( $lease, DISPATCH_WORKER_STAGING_LEASE ) );
+         if ( $lanes[ $key ] === 0 ) {
+            unset( $lanes[ $key ] );
+         }
+      }
 
       $staged = $io[ 'stage' ]( $plan );
       if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
@@ -373,22 +400,8 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
                       array( 'retry_seconds' => 0, 'reasonCode' => 'no_permission' ) );
    }
 
-   $group = $decision[ 'group' ];
-   $unit = $req[ 'parentBatchKey' ] !== null ? $req[ 'parentBatchKey' ] : $req[ 'logicalKey' ];
-   $turn = null;
-   if ( isset( $decision[ 'rotation' ][ $group ] ) ) {
-      $old = isset( $rotation[ $group ][ 'current' ][ $chosen ] ) ? (int) $rotation[ $group ][ 'current' ][ $chosen ] : 0;
-      $w = isset( $policy[ $group ][ 'weights' ][ $chosen ] ) ? (int) $policy[ $group ][ 'weights' ][ $chosen ] : 1;
-      $round_total = $old + $w - (int) $decision[ 'rotation' ][ $group ][ 'current' ][ $chosen ];
-      $turn = array( $gdb, $scopes[ $group ], $unit, $chosen, $decision[ 'rotation' ][ $group ], $round_total );
-   }
-
    $artifact = isset( $staged[ 'artifact' ] ) && $staged[ 'artifact' ] !== '' ? $staged[ 'artifact' ] : null;
-   $token = dispatch_submission_gate( $link, $db, $id, $generation, $chosen, $plan, $turn,
-                                      DISPATCH_SUBMIT_LEASE_SECONDS, $artifact );
-   ## The rotation is spent and saved; other requests of the pool may decide now.
-   dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
-   unset( $lanes[ $rotation_lane ] );
+   $token = dispatch_submission_gate( $link, $db, $id, $generation, $chosen, $plan, DISPATCH_SUBMIT_LEASE_SECONDS, $artifact );
    if ( $token === '' ) {
       dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
       return 'lost';
@@ -396,10 +409,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
 
    $outcome = $io[ 'submit' ]( $plan, $token );
    $next = ! empty( $outcome[ 'retryable' ] ) ? DISPATCH_WAITING : DISPATCH_FAILED;
-   $turn_ref = $turn !== null ? array( $turn[ 0 ], $turn[ 1 ], $turn[ 2 ] ) : null;
    $retry = $next === DISPATCH_WAITING ? dispatch_worker_backoff( dispatch_worker_waits( $link, $db, $id ) ) : null;
    ## The receipt is stored before any tracking is written.
-   $recorded = dispatch_record_outcome( $link, $db, $token, $outcome, $next, $turn_ref, $retry );
+   $recorded = dispatch_record_outcome( $link, $db, $token, $outcome, $next, $retry );
    dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
    if ( ! $recorded ) {
       ## sbatch ran but the ledger could not take its answer: keep it where a
@@ -480,8 +492,7 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
       }
       $outcome = array( 'certainty' => SUBMIT_ACCEPTED, 'retryable' => false, 'job_id' => $jobs[ 0 ],
                         'reason' => 'reconciled by attempt token' );
-      if ( ! dispatch_record_outcome( $link, $db, $attempt[ 'attemptToken' ], $outcome, DISPATCH_WAITING,
-                                      dispatch_turn_for_token( $link, $gdb, $attempt[ 'attemptToken' ] ) ) ) {
+      if ( ! dispatch_record_outcome( $link, $db, $attempt[ 'attemptToken' ], $outcome ) ) {
          return 'lost';
       }
       $job = $jobs[ 0 ];

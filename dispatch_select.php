@@ -74,7 +74,7 @@ function dispatch_pick( array $group, array $eligible, array $state )
  *   pinned        a member a batch is already pinned to, or null
  *
  * Returns: outcome (SELECT_*), chosen, group, reason, candidates (member => reasons),
- * rotation (array( group => tentative state ) to commit only on acceptance), policy_version.
+ * rotation (array( group => new state ), saved with the move to staging), policy_version.
  */
 function dispatch_select( array $in )
 {
