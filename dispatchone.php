@@ -125,11 +125,11 @@ $io = array(
         $loaded = $load_job();
         return ! is_string( $loaded ) && $loaded->track_accepted( $job_id, $plan );
     },
-    ## Jobs at $cluster carrying the attempt token in their comment. squeue
-    ## lists live jobs only, so an empty answer never proves nonacceptance.
+    ## Jobs at $cluster carrying the attempt token in their comment. --states=all keeps a job that
+    ## already finished (within MinJobAge); an empty answer still never proves nonacceptance.
     'find' => function ( $cluster, $token ) use ( $global_cluster_details ) {
         $rx = new remote_exec( $cluster, $global_cluster_details, 'elog2' );
-        $res = $rx->run( "squeue --noheader --all --user=\"\$(id -un)\" --format='%i|%k'",
+        $res = $rx->run( "squeue --noheader --all --states=all --user=\"\$(id -un)\" --format='%i|%k'",
                          array( 'retries' => 1, 'label' => 'dispatch reconcile' ) );
         if ( ! $res[ 'ok' ] ) {
             return array( 'ok' => false, 'jobs' => array(), 'reason' => $res[ 'class' ] );

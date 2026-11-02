@@ -14,6 +14,8 @@ const DISPATCH_WORKER_MAX_RESELECTION = 2;
 const DISPATCH_WORKER_FRESHNESS       = 15;
 ## How long a member whose staging failed as unreachable is left out of new decisions.
 const DISPATCH_WORKER_UNREACHABLE_SECONDS = 300;
+## The claim held across staging: the 900 s copy limit plus a margin.
+const DISPATCH_WORKER_STAGING_LEASE = 960;
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
 function dispatch_spool_dir()
@@ -201,7 +203,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          return null;
       }
       $blocked = isset( $io[ 'submission_blocked' ] ) && $io[ 'submission_blocked' ]() && $person[ 'userlevel' ] < 4;
-      return dispatch_member_authorizations( $members, $person[ 'userlevel' ], $io[ 'configured' ],
+      ## submitone.php runs an autoflow stage at userlevel 2 at least, as a direct stage does.
+      $level = $req[ 'stageName' ] === 'autoflow' ? max( 2, $person[ 'userlevel' ] ) : $person[ 'userlevel' ];
+      return dispatch_member_authorizations( $members, $level, $io[ 'configured' ],
                                              $io[ 'cluster_details' ], $person[ 'clusters' ] );
    };
    $block_reason = 'job submission is blocked at this site; waiting until it reopens';
@@ -301,7 +305,8 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          return 'lost';
       }
       $state = DISPATCH_STAGING;
-      dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
+      ## Staging may copy for up to DISPATCH_WORKER_STAGING_LEASE seconds; a shorter claim was taken over mid-copy.
+      dispatch_renew( $link, $db, $id, $generation, $owner, max( $lease, DISPATCH_WORKER_STAGING_LEASE ) );
 
       $staged = $io[ 'stage' ]( $plan );
       if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {

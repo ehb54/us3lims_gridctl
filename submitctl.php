@@ -91,8 +91,8 @@ if ( !function_exists( 'debug_json' ) ) {
 
 ## Child processes (submitone.php, dispatchone.php) run concurrently up to
 ## $max_children; each is tracked until it exits.
-function spawn_child( array $args, $log ) {
-    global $children;
+function spawn_child( array $args, $log, $kind = 'dispatch' ) {
+    global $children, $child_kinds;
     $cmd  = implode( ' ', array_map( 'escapeshellarg', $args ) ) . ' >> ' . escapeshellarg( $log ) . ' 2>&1';
     $proc = proc_open( $cmd, array( 0 => array( 'file', '/dev/null', 'r' ) ), $pipes );
     if ( ! is_resource( $proc ) ) {
@@ -100,20 +100,22 @@ function spawn_child( array $args, $log ) {
         return false;
     }
     $children[] = $proc;
+    $child_kinds[ array_key_last( $children ) ] = $kind;
     write_logls( "running $cmd", 1 );
     return true;
 }
 
-function reap_children() {
-    global $children;
+## Reaps finished children; returns how many of $kind (dispatch attempts by default) still run.
+function reap_children( $kind = 'dispatch' ) {
+    global $children, $child_kinds;
     foreach ( $children as $i => $proc ) {
         $status = proc_get_status( $proc );
         if ( ! $status[ 'running' ] ) {
             proc_close( $proc );
-            unset( $children[ $i ] );
+            unset( $children[ $i ], $child_kinds[ $i ] );
         }
     }
-    return count( $children );
+    return count( array_keys( (array) $child_kinds, $kind, true ) );
 }
 
 function quote_fix( $str ) {
@@ -255,8 +257,10 @@ if ( !count( $limsdbs ) ) {
 exit_if_errors();
 
 $children     = array();
+$child_kinds  = array();   ## child index => dispatch | autoflow
 $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
 $dispatch_dbs = dispatch_worker_instances( $db_handle );
+$dispatch_dbs_read = time();
 $dispatch_owner = gethostname() . ':' . getmypid();
 $org_name     = isset( $org_name ) ? $org_name : 'UltraScan';
 $site_admin_send = dispatch_site_admin_sender(
@@ -286,6 +290,12 @@ while( 1 ) {
     write_logls( "checking mysql", 2 );
 
     $work_done = 0;
+
+    ## An instance created after start, once it has the dispatch tables, is served from the next minute.
+    if ( time() - $dispatch_dbs_read >= 60 ) {
+        $dispatch_dbs = dispatch_worker_instances( $db_handle );
+        $dispatch_dbs_read = time();
+    }
 
     ## Liveness for the independent heartbeat check, then the ledger's housekeeping:
     ## finished jobs close their requests, autoflow stages show their dispatch
@@ -413,10 +423,6 @@ while( 1 ) {
             if ( !$failed &&
                  isset( $statusJson->{ "to_process" } ) &&
                  count( $statusJson->{ "to_process" } ) ) {
-                if ( reap_children() >= $max_children ) {
-                    write_logls( "{$submit_request_table_name} {$id_field} $ID waits: $max_children submissions running", 2 );
-                    continue;
-                }
                 $stage = array_shift( $statusJson->{ "to_process" } );
                 $statusJson->{ $processing_key } = $stage;
 
@@ -434,7 +440,8 @@ while( 1 ) {
                 ## Quoted: $lims_db comes from the instance list and $ID from a
                 ## table row, so neither is typed by a user here, but both reach a
                 ## shell and a database name is operator-supplied upstream.
-                spawn_child( array( 'php', "{$home}/bin/submitone.php", $lims_db, $ID ), "{$home}/etc/submit.log" );
+                ## Every ready stage starts at once, as 4.2.0: only dispatch attempts count against $max_children.
+                spawn_child( array( 'php', "{$home}/bin/submitone.php", $lims_db, $ID ), "{$home}/etc/submit.log", 'autoflow' );
                 $work_done = 1;
                 continue;
             }
