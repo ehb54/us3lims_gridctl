@@ -270,7 +270,7 @@ $site_admin_send = dispatch_site_admin_sender(
 ## Expired requests: one notice to the site admin per pass, and one to each submitter.
 $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_send ) {
     $submitters = dispatch_request_submitters( $db_handle, $db, $ids );
-    $site_admin_send( "UltraScan dispatch: " . count( $ids ) . " request(s) expired in $db",
+    $admin_told = $site_admin_send( "UltraScan dispatch: " . count( $ids ) . " request(s) expired in $db",
         "These dispatch requests in $db were not submitted within the maximum wait and have expired:\n\n"
         . implode( "\n", array_map( function ( $id ) use ( $submitters ) {
               return "request $id" . ( isset( $submitters[ $id ] ) ? " (HPC request {$submitters[$id][1]}, {$submitters[$id][0]})" : '' );
@@ -279,7 +279,7 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
         if ( $who[ 0 ] !== '' ) {
             $site_admin_send( "US3 job submission expired",
                 "Your analysis (HPC request {$who[1]}) in $db could not be submitted within the maximum wait"
-                . " and was not run. The system administrator has been notified.\n", $who[ 0 ] );
+                . " and was not run." . ( $admin_told ? " The system administrator has been notified." : '' ) . "\n", $who[ 0 ] );
         }
     }
 };
