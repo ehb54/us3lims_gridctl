@@ -265,12 +265,13 @@ function cleanup() {
     global $db_handle;
     global $gfacID;
     global $us3_db;
-    global $cluster;
+    global $job_cluster;
 
     ## -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
     ## marker survives for --restart, -1 terminal, 0 retry (not yet
-    ## finalizable), 1 finalized.
-    return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld', $cluster ?? '' );
+    ## finalizable), 1 finalized. Keyed as the monitor's own directory is: by its cluster
+    ## argument, so a monitor started without one keeps every file under the job ID alone.
+    return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld', $job_cluster ?? '' );
 }
 
 function mail_to_admin( $type, $msg ) {
