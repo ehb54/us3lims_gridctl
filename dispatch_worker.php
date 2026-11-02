@@ -185,7 +185,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          $io[ 'failed' ]( $reason );
       }
       if ( $to === DISPATCH_BLOCKED && isset( $io[ 'blocked' ] ) ) {
-         $io[ 'blocked' ]( $reason );
+         $io[ 'blocked' ]( $reason, isset( $fields[ 'reasonCode' ] ) ? $fields[ 'reasonCode' ] : '' );
       }
       return $to;
    };

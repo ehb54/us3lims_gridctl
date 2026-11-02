@@ -163,13 +163,13 @@ $io = array(
         return array( 'ok' => $check[ 'ok' ], 'failed' => $failed );
     },
     ## Blocked work waits for an operator: tell the site admin and the submitter.
-    'blocked' => function ( $reason ) use ( $dispatch_link, $lims_db, $dispatch_id, $req, $listen_admin_email ) {
+    'blocked' => function ( $reason, $code = '' ) use ( $dispatch_link, $lims_db, $dispatch_id, $req, $listen_admin_email ) {
         global $global_site_admin_email, $org_name;
         $send = dispatch_site_admin_sender(
             dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '', $listen_admin_email ),
             isset( $org_name ) ? $org_name : '' );
         $who = dispatch_request_submitters( $dispatch_link, $lims_db, array( $dispatch_id ) );
-        dispatch_notify_blocked( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '' );
+        dispatch_notify_blocked( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '', $code );
     },
     'failed' => function ( $reason ) use ( $load_job ) {
         $loaded = $load_job();
