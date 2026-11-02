@@ -509,7 +509,8 @@ try {
 
 ## Cluster errors are raised after the interactive check, since a WAIT stage needs no cluster.
 $cluster_error = null;
-if ( $cluster == "localhost" ) {
+$from_localhost = $cluster == "localhost";
+if ( $from_localhost ) {
     ## $default_local_cluster in global_config.php names the LIMS host's cluster.
     $cluster = null;
     if ( isset( $default_local_cluster )
@@ -526,7 +527,10 @@ if ( $cluster == "localhost" ) {
         $queue     = $cluster_details[$cluster]['queue'] ?? 'batch';
     }
     echo "localhost cluster resolved to $cluster host_name $host_name queue $queue\n";
-} elseif ( isset( $cluster_details )
+}
+## A pool named directly, or reached as the site default through 'localhost', gets its stage key.
+if ( $cluster !== null
+           && isset( $cluster_details )
            && is_array( $cluster_details )
            && array_key_exists( $cluster, $cluster_details )
            && dispatch_is_pool_entry( $cluster_details[ $cluster ] ) ) {
@@ -549,7 +553,7 @@ if ( $cluster == "localhost" ) {
     }
     $dispatch_intake_key = "autoflow-$ID-" . substr( sha1( json_encode( $stage ) ), 0, 12 ) . "-$stage_occurrence";
     echo "metascheduler $cluster: the stage is queued for dispatch ($dispatch_intake_key)\n";
-} else {
+} elseif ( ! $from_localhost ) {
     if ( isset( $cluster_details )
          && is_array( $cluster_details )
          && array_key_exists( $cluster, $cluster_details )

@@ -284,6 +284,7 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
     }
 };
 $last_purge   = 0;
+$last_housekeeping = 0;
 write_logls( "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
 
@@ -299,20 +300,26 @@ while( 1 ) {
         $dispatch_dbs_read = time();
     }
 
-    ## Liveness for the independent heartbeat check, then the ledger's housekeeping:
-    ## finished jobs close their requests, autoflow stages show their dispatch
-    ## state, long waits are flagged and operator alert items are kept current.
-    dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
-    dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
-    foreach ( $dispatch_dbs as $dispatch_db ) {
-        dispatch_close_finished( $db_handle, $dispatch_db );
-        dispatch_mirror_autoflow( $db_handle, $dispatch_db );
-        dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
-    }
-    dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
-    dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
+    ## Only instances with unfinished requests have dispatch work (one indexed lookup each).
+    $busy_dbs = dispatch_worker_busy_instances( $db_handle, $dispatch_dbs );
 
-    $claimed = dispatch_worker_pass( $db_handle, $dispatch_dbs,
+    ## Once a minute: liveness for the independent heartbeat check (stale after 300 s), then the
+    ## ledger's housekeeping: finished jobs close their requests, autoflow stages show their
+    ## dispatch state, long waits are flagged and operator alert items are kept current.
+    if ( time() - $last_housekeeping >= 60 ) {
+        dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
+        dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
+        foreach ( $busy_dbs as $dispatch_db ) {
+            dispatch_close_finished( $db_handle, $dispatch_db );
+            dispatch_mirror_autoflow( $db_handle, $dispatch_db );
+            dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
+        }
+        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
+        dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
+        $last_housekeeping = time();
+    }
+
+    $claimed = dispatch_worker_pass( $db_handle, $busy_dbs,
         array( 'capacity' => $max_children - reap_children(), 'owner' => $dispatch_owner,
                'spool' => dispatch_spool_dir(), 'expired' => $dispatch_expired ),
         function ( $lims_db, $id, $generation ) use ( $home, $dispatch_owner ) {
@@ -332,6 +339,7 @@ while( 1 ) {
             dispatch_purge_terminal( $db_handle, $dispatch_db, $retention[ 'requests' ] );
         }
         dispatch_purge_decisions( $db_handle, 'gfac', $retention[ 'decisions' ] );
+        dispatch_heartbeat_purge( $db_handle, 'gfac' );
         dispatch_purge_legacy_decisions( $db_handle, 'gfac', $retention[ 'legacy_decisions' ] );
         foreach ( $dispatch_dbs as $dispatch_db ) {
             dispatch_abandon_unsealed( $db_handle, $dispatch_db, 3600 );

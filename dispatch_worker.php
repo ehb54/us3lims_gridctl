@@ -55,6 +55,15 @@ function dispatch_worker_return_turn( $link, $gdb, $lane_key, $owner, $lease, $s
    return false;
 }
 
+## The instances with any request not yet finished; the others need no dispatch work this pass.
+function dispatch_worker_busy_instances( $link, array $dbs )
+{
+   return array_values( array_filter( $dbs, function ( $db ) use ( $link ) {
+      return dispatch_rows( $link, "SELECT 1 FROM `$db`.dispatch_request
+         WHERE state NOT IN ('CLOSED','FAILED','EXPIRED','CANCELLED') LIMIT 1" ) !== array();
+   } ) );
+}
+
 ## Waits that count toward the backoff: a bounce off another decision for the pool is not one.
 function dispatch_worker_waits( $link, $db, $id )
 {
