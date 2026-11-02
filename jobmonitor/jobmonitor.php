@@ -200,11 +200,17 @@ $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
 $loop      = 0;
 
+## A reset controller reuses job numbers: where gfac.analysis records the request, this job's row is
+## the one for this monitor's request (an older row with the same number is another job).
+$job_request_column = mysqli_query( $db_handle, "SHOW COLUMNS FROM gfac.analysis LIKE 'HPCAnalysisRequestID'" );
+$job_request_sql = $job_request_column && mysqli_num_rows( $job_request_column ) > 0
+    ? " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID = " . (int) $hpcrid . ")" : "";
+
 ## Without a cluster argument the job ID alone must identify one row: two
 ## clusters can issue the same Slurm number, and guessing would monitor (and
 ## later finalize) the wrong job.
 if ( $job_cluster === '' ) {
-    $count_stmt = mysqli_prepare( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" );
+    $count_stmt = mysqli_prepare( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" . $job_request_sql );
     $count_res  = $count_stmt && mysqli_stmt_bind_param( $count_stmt, 's', $gfacID ) && mysqli_stmt_execute( $count_stmt )
                 ? mysqli_stmt_get_result( $count_stmt ) : false;
     $count_row  = $count_res ? mysqli_fetch_row( $count_res ) : null;
@@ -229,6 +235,7 @@ if (
                      . " from gfac.analysis"
                      . " where gfacID = \"$gfacID\""
                      . job_cluster_condition( $db_handle, $job_cluster )
+                     . $job_request_sql
                      ,false
                      ,true
       ) ) ) {
@@ -280,7 +287,8 @@ while( 1 ) {
                      . " ,time"
                      . " from gfac.analysis"
                      . " where gfacID = ?"
-                     . job_cluster_condition( $db_handle, $job_cluster ) );
+                     . job_cluster_condition( $db_handle, $job_cluster )
+                     . $job_request_sql );
 
     $poll_result = $poll_statement
                  && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
