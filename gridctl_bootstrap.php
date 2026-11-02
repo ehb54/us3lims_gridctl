@@ -30,12 +30,9 @@ if ( ! function_exists( 'gridctl_service_account' ) ) {
     ## host without one, the owner of their checkout. Checkout ownership alone is not reliable: a
     ## bind mount can report every file as owned by whoever asks. Null when neither is known.
     function gridctl_service_account( $dir ) {
+        ## us3, or none: every entry point builds its paths from ~us3, so no other owner can run them.
         $us3 = function_exists( 'posix_getpwnam' ) ? posix_getpwnam( 'us3' ) : false;
-        if ( $us3 ) {
-            return $us3[ 'uid' ];
-        }
-        $owner = @fileowner( $dir );
-        return $owner !== false && $owner !== 0 ? $owner : null;
+        return $us3 ? $us3[ 'uid' ] : null;
     }
 
     ## Root never runs the daemons; any other account only when it is the service account.
@@ -96,7 +93,7 @@ if ( ! function_exists( 'gridctl_require_not_root' ) ) {
             . " not $current_name -- any other account has no ssh key or known_hosts entry for"
             . " the cluster(s) $service_name does, so every submission fails at staging.\n"
             . "Run this as $service_name instead, for example:\n"
-            . "    runuser -l $service_name -c " . escapeshellarg( $cmd ) . "\n"
+            . "    " . ( posix_geteuid() === 0 ? '' : 'sudo ' ) . "runuser -l $service_name -c " . escapeshellarg( $cmd ) . "\n"
             . "or let us3-listen.service start it, which runs as $service_name.\n" );
         exit( 1 );
     }

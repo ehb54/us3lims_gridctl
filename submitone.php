@@ -122,11 +122,19 @@ function check_cli_errors_in_dump() {
 ## byte-count truncation that can split a multi-byte UTF-8 character in
 ## two, leaving invalid UTF-8 in the mail body.
 function format_mail_reason( $reason, $max_length = 500 ) {
-    ## Lines and ';' both separate items, so a duplicate on another line is dropped too.
-    $text  = preg_replace( '/\[\d+\]\s*=>\s*/', '', strip_tags( (string) $reason ) );
-    $items = array_map( function ( $item ) { return trim( (string) preg_replace( '/\s+/', ' ', $item ) ); },
-                        preg_split( '/[;\r\n]+/', $text ) );
-    $text  = implode( '; ', array_unique( array_filter( $items, 'strlen' ) ) );
+    ## Lines, <br> and ';' all separate items; an item repeated, or contained in a longer one, is given once.
+    $text  = preg_replace( '/\[\d+\]\s*=>\s*/', '', strip_tags( preg_replace( '#<br\s*/?>#i', "\n", (string) $reason ) ) );
+    $items = array_unique( array_filter( array_map( function ( $item ) { return trim( (string) preg_replace( '/\s+/', ' ', $item ) ); },
+                                                    preg_split( '/[;\r\n]+/', $text ) ), 'strlen' ) );
+    $items = array_filter( $items, function ( $item ) use ( $items ) {
+        foreach ( $items as $other ) {
+            if ( $other !== $item && strpos( $other, $item ) !== false ) {
+                return false;
+            }
+        }
+        return true;
+    } );
+    $text  = implode( '; ', $items );
     if ( strlen( $text ) > $max_length ) {
         ## Byte cut backed off past UTF-8 continuation bytes (10xxxxxx) to a character start, so
         ## no character is split; plain PHP, since a host may lack php-mbstring.
@@ -175,7 +183,8 @@ function mail_submission_fail_to_admin( $reason ) {
     $to = $site_admin_email ?? '';
     if ( $to === '' ) {
         $to = 'root@localhost';
-        write_log( "listen-config.php sets no admin_email; sending the submission failure notice for $ID to $to" );
+        ## Into submit.log with this run's other output, not the listener's udp.log.
+        echo "listen-config.php sets no admin_email; sending the submission failure notice for $ID to $to\n";
     }
     $from_name = $site_org_name ?? $org_name ?? 'LIMS';
 
@@ -474,7 +483,8 @@ chdir( $php_base );
 set_include_path( get_include_path() . PATH_SEPARATOR . $php_base );
 
 $person->{'userlevel'} = 2;
-$autoflow_admin_email        = $admin_email;   ## from listen-config.php
+## From listen-config.php; the job records a submitter address, so an unset one falls back as the notices do.
+$autoflow_admin_email        = trim( (string) $admin_email ) !== '' ? $admin_email : 'root@localhost';
 $person->{'email'}           = $autoflow_admin_email;
 $person->{'submitter_email'} = $autoflow_admin_email;
 
