@@ -36,25 +36,6 @@ function dispatch_worker_instances( $link )
    return array_column( $rows, 'TABLE_SCHEMA' );
 }
 
-## Gives a pool member back the turn a decision saved early, under the rotation lane; false when
-## the lane stayed busy (the member then waits one round, as on a turn spent and not refunded).
-function dispatch_worker_return_turn( $link, $gdb, $lane_key, $owner, $lease, $scope, $member, $given )
-{
-   for ( $try = 0; $try < 5; $try++ ) {
-      $held = dispatch_worker_take_lanes( $link, $gdb, array( $lane_key ), $owner, $lease );
-      if ( $held !== null ) {
-         $state = dispatch_rotation_load( $link, $gdb, $scope );
-         $state[ 'current' ][ $member ] = ( isset( $state[ 'current' ][ $member ] ) ? (int) $state[ 'current' ][ $member ] : 0 )
-                                        + (int) $given;
-         $ok = dispatch_rotation_save( $link, $gdb, $scope, $state );
-         dispatch_worker_release_lanes( $link, $gdb, $held, $owner );
-         return $ok;
-      }
-      usleep( 200000 );
-   }
-   return false;
-}
-
 ## The instances with any request not yet finished; the others need no dispatch work this pass.
 function dispatch_worker_busy_instances( $link, array $dbs )
 {
@@ -194,14 +175,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       return 'lost';
    }
 
-   ## Set once a queue-admission decision saved the rotation early; gives the turn back if the
-   ## request leaves before the submission gate, as it did when the gate alone saved the rotation.
-   $give_back = null;
-   $settle = function ( $from, $to, $reason, array $fields = array() ) use ( $link, $db, $id, $generation, $io, &$lanes, $gdb, $lane_owner, &$give_back ) {
-      if ( $give_back !== null ) {
-         $give_back();
-         $give_back = null;
-      }
+   $settle = function ( $from, $to, $reason, array $fields = array() ) use ( $link, $db, $id, $generation, $io, &$lanes, $gdb, $lane_owner ) {
       dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
       $lanes = array();
       if ( ! dispatch_transition( $link, $db, $id, $generation, $from, $to, $reason, $fields ) ) {
@@ -285,7 +259,6 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
                       array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
    }
    $rotation_lane = $keys[ 0 ];
-   $rotation_released = false;
    if ( $pinned === null ) {
       $pinned = dispatch_batch_pin( $link, $db, $req[ 'parentBatchKey' ] );
    }
@@ -332,25 +305,6 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       $plan = $plans[ $chosen ];
       $why = "{$decision['reason']}: $chosen";
 
-      ## A queue-admission decision is complete once chosen: save the rotation and let the
-      ## pool's next request decide while this one stages. (Availability decisions keep
-      ## their scheduler lanes until the outcome, by design.)
-      if ( ! $availability && ! $rotation_released && isset( $decision[ 'rotation' ][ $decision[ 'group' ] ] )
-           && ( $req[ 'parentBatchKey' ] === null || $pinned !== null ) ) {
-         $g = $decision[ 'group' ];
-         $c = $decision[ 'chosen' ];
-         $given = ( isset( $rotation[ $g ][ 'current' ][ $c ] ) ? (int) $rotation[ $g ][ 'current' ][ $c ] : 0 )
-                + ( isset( $policy[ $g ][ 'weights' ][ $c ] ) ? (int) $policy[ $g ][ 'weights' ][ $c ] : 1 )
-                - (int) $decision[ 'rotation' ][ $g ][ 'current' ][ $c ];
-         dispatch_rotation_save( $link, $gdb, $scopes[ $g ], $decision[ 'rotation' ][ $g ] );
-         dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
-         unset( $lanes[ $rotation_lane ] );
-         $rotation_released = true;
-         $give_back = function () use ( $link, $gdb, $rotation_lane, $lane_owner, $lease, $scopes, $g, $c, $given ) {
-            dispatch_worker_return_turn( $link, $gdb, $rotation_lane, $lane_owner, $lease, $scopes[ $g ], $c, $given );
-         };
-      }
-
       ## The first child to pin a batch checks every child's plan at that
       ## member first; a member some child cannot fit is excluded and the
       ## selection runs again.
@@ -365,9 +319,6 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          }
       }
       if ( ! dispatch_stage( $link, $db, $id, $generation, $chosen, $plan[ 'hash' ], $policy[ 'version' ], $why ) ) {
-         if ( $give_back !== null ) {
-            $give_back();
-         }
          dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
          return 'lost';
       }
@@ -377,9 +328,6 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
 
       $staged = $io[ 'stage' ]( $plan );
       if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
-         if ( $give_back !== null ) {
-            $give_back();
-         }
          dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
          return 'lost';
       }
@@ -432,27 +380,19 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       $old = isset( $rotation[ $group ][ 'current' ][ $chosen ] ) ? (int) $rotation[ $group ][ 'current' ][ $chosen ] : 0;
       $w = isset( $policy[ $group ][ 'weights' ][ $chosen ] ) ? (int) $policy[ $group ][ 'weights' ][ $chosen ] : 1;
       $round_total = $old + $w - (int) $decision[ 'rotation' ][ $group ][ 'current' ][ $chosen ];
-      $turn = array( $gdb, $scopes[ $group ], $unit, $chosen,
-                     $rotation_released ? null : $decision[ 'rotation' ][ $group ], $round_total );
+      $turn = array( $gdb, $scopes[ $group ], $unit, $chosen, $decision[ 'rotation' ][ $group ], $round_total );
    }
 
    $artifact = isset( $staged[ 'artifact' ] ) && $staged[ 'artifact' ] !== '' ? $staged[ 'artifact' ] : null;
    $token = dispatch_submission_gate( $link, $db, $id, $generation, $chosen, $plan, $turn,
                                       DISPATCH_SUBMIT_LEASE_SECONDS, $artifact );
    ## The rotation is spent and saved; other requests of the pool may decide now.
-   if ( ! $rotation_released ) {
-      dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
-      unset( $lanes[ $rotation_lane ] );
-   }
+   dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
+   unset( $lanes[ $rotation_lane ] );
    if ( $token === '' ) {
-      if ( $give_back !== null ) {
-         $give_back();
-      }
       dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
       return 'lost';
    }
-   ## Past the gate the turn is spent (and refunded on nonacceptance) by the turn ledger.
-   $give_back = null;
 
    $outcome = $io[ 'submit' ]( $plan, $token );
    $next = ! empty( $outcome[ 'retryable' ] ) ? DISPATCH_WAITING : DISPATCH_FAILED;
