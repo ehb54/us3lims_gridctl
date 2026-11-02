@@ -16,6 +16,7 @@ const DISPATCH_WORKER_FRESHNESS       = 15;
 const DISPATCH_WORKER_UNREACHABLE_SECONDS = 300;
 ## The claim held across staging: the 900 s copy limit plus a margin.
 const DISPATCH_WORKER_STAGING_LEASE = 960;
+const DISPATCH_WORKER_BUSY_REASON = 'another dispatch decision for this pool is in progress';
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
 function dispatch_spool_dir()
@@ -33,6 +34,14 @@ function dispatch_worker_instances( $link )
    $rows = dispatch_rows( $link, "SELECT TABLE_SCHEMA FROM information_schema.TABLES
       WHERE TABLE_NAME = 'dispatch_request' AND TABLE_SCHEMA LIKE 'uslims3\\_%' ORDER BY TABLE_SCHEMA" );
    return array_column( $rows, 'TABLE_SCHEMA' );
+}
+
+## Waits that count toward the backoff: a bounce off another decision for the pool is not one.
+function dispatch_worker_waits( $link, $db, $id )
+{
+   $rows = dispatch_rows( $link, "SELECT COUNT(*) n FROM `$db`.dispatch_event WHERE dispatchRequestID = ? AND toState = 'WAITING'
+      AND COALESCE(reason, '') <> ?", 'is', array( (int) $id, DISPATCH_WORKER_BUSY_REASON ) );
+   return $rows ? (int) $rows[ 0 ][ 'n' ] : 0;
 }
 
 ## Waiting backoff: 30s doubling to 15 minutes, plus up to 5s jitter so retries spread out.
@@ -174,7 +183,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    $wait = function ( $from, $reason, $code ) use ( $settle, $link, $db, $id ) {
       return $settle( $from, DISPATCH_WAITING, $reason,
                       array( 'reasonCode' => $code,
-                             'retry_seconds' => dispatch_worker_backoff( dispatch_state_entries( $link, $db, $id, DISPATCH_WAITING ) ) ) );
+                             'retry_seconds' => dispatch_worker_backoff( dispatch_worker_waits( $link, $db, $id ) ) ) );
    };
 
    $policy = dispatch_pool_policy( $req[ 'pool' ], $io[ 'cluster_details' ] );
@@ -237,10 +246,11 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    $lanes = dispatch_worker_take_lanes( $link, $gdb, $keys, $lane_owner, $lease );
    if ( $lanes === null ) {
       $lanes = array();
-      return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, 'another dispatch decision for this pool is in progress',
+      return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
                       array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
    }
    $rotation_lane = $keys[ 0 ];
+   $rotation_released = false;
    if ( $pinned === null ) {
       $pinned = dispatch_batch_pin( $link, $db, $req[ 'parentBatchKey' ] );
    }
@@ -286,6 +296,17 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       $chosen = $decision[ 'chosen' ];
       $plan = $plans[ $chosen ];
       $why = "{$decision['reason']}: $chosen";
+
+      ## A queue-admission decision is complete once chosen: save the rotation and let the
+      ## pool's next request decide while this one stages. (Availability decisions keep
+      ## their scheduler lanes until the outcome, by design.)
+      if ( ! $availability && ! $rotation_released && isset( $decision[ 'rotation' ][ $decision[ 'group' ] ] )
+           && ( $req[ 'parentBatchKey' ] === null || $pinned !== null ) ) {
+         dispatch_rotation_save( $link, $gdb, $scopes[ $decision[ 'group' ] ], $decision[ 'rotation' ][ $decision[ 'group' ] ] );
+         dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
+         unset( $lanes[ $rotation_lane ] );
+         $rotation_released = true;
+      }
 
       ## The first child to pin a batch checks every child's plan at that
       ## member first; a member some child cannot fit is excluded and the
@@ -362,15 +383,18 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       $old = isset( $rotation[ $group ][ 'current' ][ $chosen ] ) ? (int) $rotation[ $group ][ 'current' ][ $chosen ] : 0;
       $w = isset( $policy[ $group ][ 'weights' ][ $chosen ] ) ? (int) $policy[ $group ][ 'weights' ][ $chosen ] : 1;
       $round_total = $old + $w - (int) $decision[ 'rotation' ][ $group ][ 'current' ][ $chosen ];
-      $turn = array( $gdb, $scopes[ $group ], $unit, $chosen, $decision[ 'rotation' ][ $group ], $round_total );
+      $turn = array( $gdb, $scopes[ $group ], $unit, $chosen,
+                     $rotation_released ? null : $decision[ 'rotation' ][ $group ], $round_total );
    }
 
    $artifact = isset( $staged[ 'artifact' ] ) && $staged[ 'artifact' ] !== '' ? $staged[ 'artifact' ] : null;
    $token = dispatch_submission_gate( $link, $db, $id, $generation, $chosen, $plan, $turn,
                                       DISPATCH_SUBMIT_LEASE_SECONDS, $artifact );
    ## The rotation is spent and saved; other requests of the pool may decide now.
-   dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
-   unset( $lanes[ $rotation_lane ] );
+   if ( ! $rotation_released ) {
+      dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
+      unset( $lanes[ $rotation_lane ] );
+   }
    if ( $token === '' ) {
       dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
       return 'lost';
@@ -379,7 +403,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    $outcome = $io[ 'submit' ]( $plan, $token );
    $next = ! empty( $outcome[ 'retryable' ] ) ? DISPATCH_WAITING : DISPATCH_FAILED;
    $turn_ref = $turn !== null ? array( $turn[ 0 ], $turn[ 1 ], $turn[ 2 ] ) : null;
-   $retry = $next === DISPATCH_WAITING ? dispatch_worker_backoff( dispatch_state_entries( $link, $db, $id, DISPATCH_WAITING ) ) : null;
+   $retry = $next === DISPATCH_WAITING ? dispatch_worker_backoff( dispatch_worker_waits( $link, $db, $id ) ) : null;
    ## The receipt is stored before any tracking is written.
    $recorded = dispatch_record_outcome( $link, $db, $token, $outcome, $next, $turn_ref, $retry );
    dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
