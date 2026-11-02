@@ -12,6 +12,8 @@ const DISPATCH_WORKER_LEASE_SECONDS   = 120;
 const DISPATCH_WORKER_LANE_RETRY      = 10;
 const DISPATCH_WORKER_MAX_RESELECTION = 2;
 const DISPATCH_WORKER_FRESHNESS       = 15;
+## How long a member whose staging failed as unreachable is left out of new decisions.
+const DISPATCH_WORKER_UNREACHABLE_SECONDS = 300;
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
 function dispatch_spool_dir()
@@ -131,7 +133,8 @@ function dispatch_worker_release_lanes( $link, $gdb, array $held, $owner )
  *   stage            fn( array $plan ) => array( ok, transient, reason )
  *   submit           fn( array $plan, $token ) => submission outcome (SUBMIT_* certainty)
  *   failed           fn( $reason ) runs the existing failure reporting (optional)
- *   reachable        member => false for a member known to be down (optional)
+ *   reachable        member => false for a member known to be down (optional); a member whose
+ *                    staging failed as unreachable is left out for DISPATCH_WORKER_UNREACHABLE_SECONDS
  *   operator         member => 'down' | 'draining' from down_clusters.php (optional)
  *   submission_blocked  fn() => whether the site has blocked job submission (optional)
  *   batch_preflight  fn( $member, array $children ) => array( ok, failed ): every child of the
@@ -258,7 +261,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       }
       $decision = dispatch_select( array(
          'policy' => $policy, 'plans' => $plans, 'observations' => $observations, 'authorized' => $auth,
-         'reachable' => isset( $io[ 'reachable' ] ) ? $io[ 'reachable' ] : array(),
+         'reachable' => ( isset( $io[ 'reachable' ] ) ? $io[ 'reachable' ] : array() )
+                        + dispatch_recently_unreachable( $link, $db, isset( $io[ 'unreachable_seconds' ] )
+                                                         ? (int) $io[ 'unreachable_seconds' ] : DISPATCH_WORKER_UNREACHABLE_SECONDS ),
          'operator' => isset( $io[ 'operator' ] ) ? $io[ 'operator' ] : array(),
          'rotation' => $rotation, 'pinned' => $pinned,
       ) );
