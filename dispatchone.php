@@ -118,6 +118,22 @@ $io = array(
     'stage' => function ( array $plan ) use ( $load_job ) {
         return $load_job()->stage_planned( $plan );
     },
+    ## Renews the claim from a separate process while the staging copy runs; returns its stop function.
+    'keepalive' => function ( array $lanes, $lane_owner ) use ( $lims_db, $dispatch_id, $generation, $owner ) {
+        $args = array( 'php', __DIR__ . '/dispatch_keepalive.php', $lims_db, $dispatch_id, $generation, $owner,
+                       (string) getmypid(), $lane_owner );
+        foreach ( $lanes as $key => $lane_generation ) {
+            $args[] = "$key=$lane_generation";
+        }
+        $proc = proc_open( 'exec ' . implode( ' ', array_map( 'escapeshellarg', $args ) ),
+                           array( 0 => array( 'file', '/dev/null', 'r' ) ), $pipes );
+        return function () use ( $proc ) {
+            if ( is_resource( $proc ) ) {
+                proc_terminate( $proc );
+                proc_close( $proc );
+            }
+        };
+    },
     'submit' => function ( array $plan, $token ) use ( $load_job ) {
         return $load_job()->submit_staged( $token );
     },

@@ -16,6 +16,8 @@ const DISPATCH_WORKER_FRESHNESS       = 15;
 const DISPATCH_WORKER_UNREACHABLE_SECONDS = 300;
 ## The claim held across staging: the 900 s copy limit plus a margin.
 const DISPATCH_WORKER_STAGING_LEASE = 960;
+## How often a staging keepalive renews the claim and its lanes.
+const DISPATCH_WORKER_KEEPALIVE_SECONDS = 60;
 const DISPATCH_WORKER_BUSY_REASON = 'another dispatch decision for this pool is in progress';
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
@@ -72,6 +74,31 @@ function dispatch_worker_submit_dirs( $link, array $dbs )
       }
    }
    return array_values( array_unique( $dirs ) );
+}
+
+## Renew a staging claim and the lanes held with it (key => generation); false once the claim was lost.
+function dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, array $lanes, $lane_owner,
+                                    $lease = DISPATCH_WORKER_STAGING_LEASE )
+{
+   if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
+      return false;
+   }
+   foreach ( $lanes as $key => $lane_generation ) {
+      dispatch_controller_renew( $link, $gdb, $key, $lane_owner, $lane_generation, $lease );
+   }
+   return true;
+}
+
+## Renew every $interval seconds while $alive() holds and the claim is still held.
+function dispatch_worker_keepalive_loop( $link, $gdb, $db, $id, $generation, $owner, array $lanes, $lane_owner,
+                                         $interval, callable $alive )
+{
+   while ( true ) {
+      sleep( (int) $interval );
+      if ( ! $alive() || ! dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, $lanes, $lane_owner ) ) {
+         return;
+      }
+   }
 }
 
 ## Waits that count toward the backoff: a bounce off another decision for the pool is not one.
@@ -391,7 +418,12 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          }
       }
 
+      ## A copy longer than the staging lease keeps the claim through $io['keepalive'].
+      $stop_keepalive = isset( $io[ 'keepalive' ] ) ? $io[ 'keepalive' ]( $lanes, $lane_owner ) : null;
       $staged = $io[ 'stage' ]( $plan );
+      if ( is_callable( $stop_keepalive ) ) {
+         $stop_keepalive();
+      }
       if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
          dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
          return 'lost';
