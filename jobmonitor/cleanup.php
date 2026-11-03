@@ -245,7 +245,10 @@ function job_staging_dir_prepare( $work, $gfacID, $log = null )
       exec( 'rm -rf ' . escapeshellarg( $dir ) );
    }
 
-   if ( ! is_dir( $dir ) && ! @mkdir( $dir, 0770, true ) )
+   ## is_dir() answers from the stat cache, which still holds the removed directory.
+   clearstatcache();
+
+   if ( file_exists( $dir ) || ! @mkdir( $dir, 0770, true ) || ! is_dir( $dir ) )
    {
       return null;
    }
@@ -775,13 +778,19 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    $staging = job_staging_dir_prepare( $work, $key !== null ? $key : $gfacID,
                                        function ( $m ) use ( $me ) { write_logld( "$me: $m" ); } );
 
-   if ( $staging === null )
+   if ( $staging === null && job_staging_dir( $work, $key !== null ? $key : $gfacID ) === null )
    {
       write_logld( "$me: refusing to stage results: unusable job id '$gfacID'" );
       return 1;
    }
 
-   chdir( $staging );
+   ## A local fault, not an answer from the cluster: retry rather than finalize
+   ## with results staged somewhere else.
+   if ( $staging === null || ! @chdir( $staging ) )
+   {
+      write_logld( "$me: could not get a fresh staging directory for job id '$gfacID'; will retry" );
+      return -1;
+   }
 
    ## us_mpi_analysis changes into output/ and archives into that directory
    ## (us_mpi_analysis.cpp:340, :2515-2516) -- that is where it is on every

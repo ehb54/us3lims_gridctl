@@ -629,15 +629,16 @@ write_logld( "$me: *messages.txt written" );
    ## composed from it.
    $staging = job_staging_dir( $work, $key );
 
-   if ( $staging === null || ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) ) )
+   clearstatcache();
+
+   if ( $staging === null || ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) )
+        || ! @chdir( $staging ) )
    {
       update_autoflow_status( 'FAILED', "Could not create the work directory for the results" );
       write_logld( "$me: could not stage results for job id '$gfacID'" );
       mail_to_user( "fail", "Results could not be staged" );
       return( -1 );
    }
-
-   chdir( $staging );
 
    $f = fopen( "analysis-results.tar", "w" );
    fwrite( $f, $tarfile );
