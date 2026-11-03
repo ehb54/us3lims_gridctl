@@ -15,6 +15,11 @@ require_once __DIR__ . '/gridctl_bootstrap.php';
 gridctl_require_not_root( __FILE__, 'run', '' );
 include_once $class_dir . "../global_config.php";   ## $global_site_admin_email
 require_once $class_dir . 'dispatch_alerts.php';
+require_once __DIR__ . '/dispatch_worker.php';
+## Without a metascheduler pool the worker does no dispatch work and records no heartbeat.
+if ( ! dispatch_worker_pools_configured( isset( $cluster_details ) ? $cluster_details : array() ) ) {
+    exit( 0 );
+}
 
 $site_admin = dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '',
                                            isset( $admin_email ) ? $admin_email : '' );

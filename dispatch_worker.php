@@ -31,6 +31,18 @@ function dispatch_spool_dir()
 }
 
 ## Instance databases holding the dispatch tables.
+## Whether global_config.php's cluster list has any metascheduler pool. Without one the
+## dispatch worker has nothing to do and the daemon runs as 4.2.0 did.
+function dispatch_worker_pools_configured( $cluster_details )
+{
+   foreach ( (array) $cluster_details as $entry ) {
+      if ( is_array( $entry ) && isset( $entry[ 'clusters' ] ) && is_array( $entry[ 'clusters' ] ) ) {
+         return true;
+      }
+   }
+   return false;
+}
+
 function dispatch_worker_instances( $link )
 {
    $rows = dispatch_rows( $link, "SELECT TABLE_SCHEMA FROM information_schema.TABLES

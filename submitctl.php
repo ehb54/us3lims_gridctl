@@ -119,16 +119,18 @@ function reap_children( $kind = 'dispatch' ) {
 }
 
 ## Seconds to sleep when a pass found nothing to do: 1 while work is expected any moment,
-## until the next pool retry when it is due within the poll, else the full poll.
+## until the next pool retry when it is due within the poll, else the full poll. A running
+## child does not shorten it: idle_nap() ends when one exits.
 function idle_nap_seconds( $poll, $autoflow_waiting, $autoflow_running, $next_due, $after_submission ) {
-    if ( $autoflow_waiting || $autoflow_running > 0 || $after_submission ) {
+    if ( $autoflow_waiting || $after_submission ) {
         return 1;
     }
     return $next_due === null ? $poll : max( 1, min( $poll, (int) $next_due ) );
 }
 
-## Sleep up to $seconds; returns true early when a directory in $watch_dirs changes (a new submission's directory).
-function idle_nap( $seconds, $watch_dirs, callable $tick = null ) {
+## Sleep up to $seconds; returns true early when a directory in $watch_dirs changes (a new
+## submission's directory), and 'child' when $running() drops (a child exited and freed a slot).
+function idle_nap( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
     ## mtime has 1 s resolution; a new subdirectory also changes the link count.
     $mark = function () use ( $watch_dirs ) {
         $out = array();
@@ -140,6 +142,7 @@ function idle_nap( $seconds, $watch_dirs, callable $tick = null ) {
         return $out;
     };
     $seen = $mark();
+    $was = $running !== null ? $running() : 0;
     for ( $i = 0; $i < $seconds; $i++ ) {
         if ( $tick !== null ) {
             $tick();
@@ -147,6 +150,9 @@ function idle_nap( $seconds, $watch_dirs, callable $tick = null ) {
         sleep( 1 );
         if ( $seen && $mark() !== $seen ) {
             return true;
+        }
+        if ( $running !== null && $running() < $was ) {
+            return 'child';
         }
     }
     return false;
@@ -294,7 +300,9 @@ $children     = array();
 $child_kinds  = array();   ## child index => dispatch | autoflow
 $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
 $max_autoflow_children = isset( $global_autoflow_submit_children ) ? max( 1, (int) $global_autoflow_submit_children ) : 32;
-$dispatch_dbs = dispatch_worker_instances( $db_handle );
+## No pool configured: no dispatch work at all (adding the first pool takes a us3-listen restart).
+$pools_configured = dispatch_worker_pools_configured( isset( $cluster_details ) ? $cluster_details : array() );
+$dispatch_dbs = $pools_configured ? dispatch_worker_instances( $db_handle ) : array();
 $dispatch_dbs_read = time();
 ## Each submission creates a directory here; a change ends the idle sleep.
 $submit_watch_dirs = function ( array $dbs ) use ( &$db_handle ) {
@@ -327,7 +335,8 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
 $last_purge   = 0;
 $last_housekeeping = 0;
 $submission_grace_until = 0;
-write_logls( "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
+write_logls( ( $pools_configured ? '' : 'no metascheduler pool configured; ' )
+             . "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
 
 while( 1 ) {
@@ -337,7 +346,7 @@ while( 1 ) {
     $autoflow_waiting = false;
 
     ## An instance created after start, once it has the dispatch tables, is served from the next minute.
-    if ( time() - $dispatch_dbs_read >= 60 ) {
+    if ( $pools_configured && time() - $dispatch_dbs_read >= 60 ) {
         $dispatch_dbs = dispatch_worker_instances( $db_handle );
         $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
         $dispatch_dbs_read = time();
@@ -349,7 +358,7 @@ while( 1 ) {
     ## Once a minute: liveness for the independent heartbeat check (stale after 300 s), then the
     ## ledger's housekeeping: finished jobs close their requests, autoflow stages show their
     ## dispatch state, long waits are flagged and operator alert items are kept current.
-    if ( time() - $last_housekeeping >= 60 ) {
+    if ( $pools_configured && time() - $last_housekeeping >= 60 ) {
         dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
         dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
         foreach ( $busy_dbs as $dispatch_db ) {
@@ -376,7 +385,7 @@ while( 1 ) {
 
     ## Hourly: terminal dispatch history ages out on the configured schedule,
     ## interrupted intakes are failed and their unrecorded uploads removed.
-    if ( time() - $last_purge >= 3600 ) {
+    if ( $pools_configured && time() - $last_purge >= 3600 ) {
         $retention = dispatch_retention_settings();
         foreach ( $dispatch_dbs as $dispatch_db ) {
             dispatch_purge_terminal( $db_handle, $dispatch_db, $retention[ 'requests' ] );
@@ -563,12 +572,14 @@ while( 1 ) {
         ## and a new submission directory starts a short run of 1 s passes for its intake.
         ## Only on a host with dispatch instances, and a due request only counts while a child can take it.
         $pools = (bool) $dispatch_dbs;
-        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, $pools ? reap_children( 'autoflow' ) : 0,
+        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, 0,
                                  $busy_dbs && reap_children() < $max_children ? dispatch_worker_next_due( $db_handle, $busy_dbs ) : null,
                                  $pools && time() < $submission_grace_until );
         write_logls( "no requests to process sleeping {$nap}s", 2 );
-        if ( idle_nap( $nap, $pools ? $watch_dirs : array() ) ) {
-            $submission_grace_until = time() + 15;
+        ## A new submission directory: a few 1 s passes until its intake commits.
+        if ( idle_nap( $nap, $pools ? $watch_dirs : array(), null,
+                       $pools ? function () { return reap_children(); } : null ) === true ) {
+            $submission_grace_until = time() + 3;
         }
     }
 }
@@ -590,7 +601,7 @@ function cancel_stage_job( $gfacID, $cluster_default, $lims_db, $hpcarid ) {
     try {
         $stmt = mysqli_prepare( $db_handle,
             "SELECT cluster, metaschedulerClusterExecuting FROM gfac.analysis WHERE gfacID = ? AND us3_db = ?"
-            . " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID = ?)" );
+            . " AND HPCAnalysisRequestID = ?" );
     } catch ( mysqli_sql_exception $e ) {
         $stmt = false;
     }
