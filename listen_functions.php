@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/db_params.php';
 // Shared listener/monitor runtime helpers. Deployment configs own values,
 // not alternate implementations of the functions the daemons require.
 function write_log( $msg ) {
@@ -81,8 +82,9 @@ function open_db_or_retry() {
 }
 
 // Not db_obj_result(): submitone.php declares its own and includes this file.
-function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false ) {
-    $result = mysqli_query( $db_handle, $query );
+## $args: values bound to the query's ? placeholders.
+function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false, array $args = array() ) {
+    $result = $args ? db_params_query( $db_handle, $query, $args ) : mysqli_query( $db_handle, $query );
     if ( $result === false ) {
         if ( $die_on_error ) error_exit( "Query failed: $query\n" . mysqli_error( $db_handle ) );
         return false;

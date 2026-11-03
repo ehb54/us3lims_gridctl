@@ -220,10 +220,11 @@ if (
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
-                     . " where gfacID = \"$gfacID\""
-                     . $job_row_sql
+                     . " where gfacID = ?"
+                     . $job_row_sql[ 'sql' ]
                      ,false
                      ,true
+                     ,array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] )
       ) ) ) {
     mysqli_close( $db_handle );
     error_exit( "gfacID $gfacID not found in gfac.analysis" );
@@ -256,24 +257,15 @@ while( 1 ) {
         }
     }
 
-    $poll_statement = mysqli_prepare( $db_handle, "select"
+    $poll_result = db_params_query( $db_handle, "select"
                      . " status"
                      . " ,queue_msg"
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
                      . " where gfacID = ?"
-                     . $job_row_sql );
-
-    $poll_result = $poll_statement
-                 && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
-                 && mysqli_stmt_execute( $poll_statement )
-                 ? mysqli_stmt_get_result( $poll_statement )
-                 : false;
-
-    if ( $poll_statement ) {
-        mysqli_stmt_close( $poll_statement );
-    }
+                     . $job_row_sql[ 'sql' ]
+                     , array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] ) );
 
     if ( $poll_result === false ) {
         ## The query itself failed, not "no such row": a connection that went

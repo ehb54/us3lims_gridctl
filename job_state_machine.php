@@ -17,6 +17,7 @@ if ( ! function_exists( 'cluster_probe_job_status' ) )
 }
 
 require_once __DIR__ . '/job_status.php';
+require_once __DIR__ . '/db_params.php';
 
 ## A failed query here must not retry forever regardless of why it failed:
 ## mailing the admin on every poll for a permanent error (a dropped
@@ -65,7 +66,7 @@ class job_state_machine
    ## Per job, set by for_job().
    private $gfacID     = '';
    private $requestID  = 0;
-   private $gfacRow    = '';
+   private $gfacRow    = array( 'sql' => '', 'args' => array() );
    private $cluster    = '';
    private $us3_db     = '';
    private $autoflowID = 0;
@@ -81,14 +82,14 @@ class job_state_machine
 
    ## $requestID is the job's own request; $gfac_row the job_row_condition() fixing its gfac.analysis row
    ## when other rows share its number.
-   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0, $gfac_row = '' )
+   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0, $gfac_row = null )
    {
       $this->gfacID     = $gfacID;
       $this->cluster    = $cluster;
       $this->us3_db     = $us3_db;
       $this->autoflowID = (int) $autoflowID;
       $this->requestID  = (int) $requestID;
-      $this->gfacRow    = (string) $gfac_row;
+      $this->gfacRow    = is_array( $gfac_row ) ? $gfac_row : array( 'sql' => '', 'args' => array() );
 
       return $this;
    }
@@ -148,16 +149,21 @@ class job_state_machine
       return $this->us3_db . '.' . $name;
    }
 
-   ## This job's gfac.analysis row.
+   ## This job's gfac.analysis row; gfac_job_args() holds its values.
    private function gfac_job_where()
    {
-      return " WHERE gfacID='{$this->gfacID}'" . $this->gfacRow;
+      return " WHERE gfacID = ?" . $this->gfacRow[ 'sql' ];
+   }
+
+   private function gfac_job_args()
+   {
+      return array_merge( array( (string) $this->gfacID ), $this->gfacRow[ 'args' ] );
    }
 
    ## Best-effort: log a failed statement rather than abort the daemon.
-   protected function exec( $handle, $query )
+   protected function exec( $handle, $query, array $args = array() )
    {
-      $result = mysqli_query( $handle, $query );
+      $result = db_params_query( $handle, $query, $args );
 
       if ( ! $result )
          $this->logf( "Query failed $query - " . mysqli_error( $handle ) );
@@ -165,12 +171,7 @@ class job_state_machine
       return $result;
    }
 
-   protected function quote( $handle, $value )
-   {
-      return mysqli_real_escape_string( $handle, $value );
-   }
-
-   ## Overridable alongside exec()/quote()/fetch_row()/num_rows(): $handle
+   ## Overridable alongside exec()/fetch_row()/num_rows(): $handle
    ## here is whatever us3_link() returns, which a test double is free to
    ## make something other than a real mysqli link (RecordingJobStateMachine
    ## returns a bare true), so get_us3_data() must not call mysqli_errno()/
@@ -185,7 +186,7 @@ class job_state_machine
       return mysqli_error( $handle );
    }
 
-   ## All database access goes through exec(), quote(), fetch_row() and
+   ## All database access goes through exec(), fetch_row() and
    ## num_rows(), so a test double can replace the database.
    protected function fetch_row( $result )
    {
@@ -318,8 +319,8 @@ class job_state_machine
       ## that stays unreachable re-enters this abandon path on its own
       ## cadence rather than every poll.
       $this->exec( $this->gfac,
-         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . $this->gfac_job_where() );
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status = ?, time=NOW()"
+         . $this->gfac_job_where(), array_merge( array( $enum_status ), $this->gfac_job_args() ) );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -359,8 +360,8 @@ class job_state_machine
       ## window check -- the window never restarts and this fires on every
       ## poll instead of once per window.
       $this->exec( $this->gfac,
-         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . $this->gfac_job_where() );
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status = ?, time=NOW()"
+         . $this->gfac_job_where(), array_merge( array( $enum_status ), $this->gfac_job_args() ) );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -525,8 +526,8 @@ class job_state_machine
       }
 
       $this->exec( $this->gfac,
-         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$status'"
-         . $this->gfac_job_where() );
+         "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status = ?"
+         . $this->gfac_job_where(), array_merge( array( $status ), $this->gfac_job_args() ) );
 
       $message = $this->status_message( $status );
 
@@ -559,14 +560,15 @@ class job_state_machine
 
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT status FROM $analysis" . $this->gfac_job_where() );
+         "SELECT status FROM $analysis" . $this->gfac_job_where(), $this->gfac_job_args() );
       $row      = $result ? $this->fetch_row( $result ) : null;
 
       if ( $row && $row[ 0 ] === $status )
          return $status;
 
       $this->exec( $this->gfac,
-         "UPDATE $analysis SET status='$status'" . $this->gfac_job_where() );
+         "UPDATE $analysis SET status = ?" . $this->gfac_job_where(),
+         array_merge( array( $status ), $this->gfac_job_args() ) );
 
       $message = $this->status_message( $status );
 
@@ -600,7 +602,7 @@ class job_state_machine
    {
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT id FROM $analysis" . $this->gfac_job_where() );
+         "SELECT id FROM $analysis" . $this->gfac_job_where(), $this->gfac_job_args() );
 
       if ( ! $result )
          return;
@@ -613,12 +615,12 @@ class job_state_machine
       list( $analysisID ) = $row;
 
       ## A deferral repeats every poll from every worker; record it once an hour.
-      $table  = $this->gfac_table( 'queue_messages' );
-      $quoted = $this->quote( $this->gfac, $message );
+      $table = $this->gfac_table( 'queue_messages' );
       $this->exec( $this->gfac,
-         "INSERT INTO $table ( message, analysisID ) SELECT '$quoted', '$analysisID' FROM DUAL"
-         . " WHERE NOT EXISTS ( SELECT 1 FROM $table WHERE analysisID = '$analysisID'"
-         . " AND message = '$quoted' AND time > NOW() - INTERVAL 1 HOUR )" );
+         "INSERT INTO $table ( message, analysisID ) SELECT ?, ? FROM DUAL"
+         . " WHERE NOT EXISTS ( SELECT 1 FROM $table WHERE analysisID = ?"
+         . " AND message = ? AND time > NOW() - INTERVAL 1 HOUR )",
+         array( (string) $message, (int) $analysisID, (int) $analysisID, (string) $message ) );
    }
 
    /** Record the user-visible message against the job's HPCAnalysisResult row. */
@@ -632,9 +634,9 @@ class job_state_machine
       $requestID = $this->get_us3_data();
 
       $this->exec( $us3,
-         "UPDATE " . $this->us3_table( 'HPCAnalysisResult' ) . " SET "
-         . "lastMessage='" . $this->quote( $us3, $message ) . "' "
-         . "WHERE gfacID = '{$this->gfacID}' AND HPCAnalysisRequestID = '$requestID'" );
+         "UPDATE " . $this->us3_table( 'HPCAnalysisResult' ) . " SET lastMessage = ?"
+         . " WHERE gfacID = ? AND HPCAnalysisRequestID = ?",
+         array( (string) $message, (string) $this->gfacID, (int) $requestID ) );
    }
 
    ## This job's HPCAnalysisRequestID, 0 when there genuinely is no such row,
@@ -658,8 +660,7 @@ class job_state_machine
 
       $table  = $this->us3_table( 'HPCAnalysisResult' );
       $result = $this->exec( $us3,
-         "SELECT HPCAnalysisRequestID FROM $table"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         "SELECT HPCAnalysisRequestID FROM $table WHERE gfacID = ?", array( (string) $this->gfacID ) );
 
       if ( ! $result )
       {
@@ -672,8 +673,8 @@ class job_state_machine
       ## Duplicate gfacIDs happen; the most recent row is the live one.
       if ( $this->num_rows( $result ) > 1 )
          $result = $this->exec( $us3,
-            "SELECT HPCAnalysisRequestID FROM $table"
-            . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+            "SELECT HPCAnalysisRequestID FROM $table WHERE gfacID = ? ORDER BY HPCAnalysisResultID DESC LIMIT 1",
+            array( (string) $this->gfacID ) );
 
       if ( ! $result )
          return db_error_is_connection_class( $this->errno( $us3 ) ) ? null : false;
@@ -736,20 +737,18 @@ class job_state_machine
       ## also blocked the corrections that matter, a stage wrongly failed by a
       ## premature timeout and then finished, or completed and then found to have
       ## bad results. A later terminal verdict is allowed to replace an earlier one.
-      $guard = stage_status_is_terminal( $stage )
-             ? ''
-             : " AND NOT status RLIKE '" . stage_status_terminal_regex() . "'";
+      $guard = stage_status_is_terminal( $stage ) ? '' : " AND NOT status RLIKE ?";
 
       if ( $guard === '' )
          $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
 
-      $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET "
-         . "status='" . $this->quote( $us3, $stage ) . "', "
-         . "statusMsg='" . $this->quote( $us3, $message ) . "' "
-         . "WHERE requestID = '{$this->autoflowID}' AND currentGfacID = '{$this->gfacID}'"
-         . $guard;
+      $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET status = ?, statusMsg = ?"
+         . " WHERE requestID = ? AND currentGfacID = ?" . $guard;
+      $args  = array( (string) $stage, (string) $message, (int) $this->autoflowID, (string) $this->gfacID );
+      if ( $guard !== '' )
+         $args[] = stage_status_terminal_regex();
 
-      $ok = (bool) $this->exec( $us3, $query );
+      $ok = (bool) $this->exec( $us3, $query, $args );
 
       ## A lock-wait timeout or a killed session usually clears within
       ## seconds while the connection itself is still usable; retrying the
@@ -761,7 +760,7 @@ class job_state_machine
       for ( $attempt = 1; ! $ok && $attempt <= 2 && db_error_is_connection_class( $this->errno( $us3 ) ); $attempt++ )
       {
          $this->pause( 2 );
-         $ok = (bool) $this->exec( $us3, $query );
+         $ok = (bool) $this->exec( $us3, $query, $args );
       }
 
       return $ok && $hpc_ok;
@@ -805,10 +804,10 @@ class job_state_machine
       ## WHERE runs first, so if the newest row is already terminal the limit
       ## would fall through to the stale row, which is the bug again.
       $found = $this->exec( $us3,
-         "SELECT HPCAnalysisResultID FROM $table"
-         . " WHERE gfacID='{$this->gfacID}'"
-         . ( $this->requestID > 0 ? " AND HPCAnalysisRequestID='{$this->requestID}'" : '' )
-         . " ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+         "SELECT HPCAnalysisResultID FROM $table WHERE gfacID = ?"
+         . ( $this->requestID > 0 ? " AND HPCAnalysisRequestID = ?" : '' )
+         . " ORDER BY HPCAnalysisResultID DESC LIMIT 1",
+         $this->requestID > 0 ? array( (string) $this->gfacID, $this->requestID ) : array( (string) $this->gfacID ) );
 
       ## The query itself failing is a real problem (false); finding no
       ## matching row is not (true) -- a non-autoflow job that predates this
@@ -843,10 +842,10 @@ class job_state_machine
       ## Every other terminal-to-terminal move stays blocked: once genuinely
       ## failed or completed-then-failed, nothing moves it again.
       return (bool) $this->exec( $us3,
-         "UPDATE $table SET "
-         . "queueStatus='$queue_status' WHERE HPCAnalysisResultID = $result_id"
+         "UPDATE $table SET queueStatus = ? WHERE HPCAnalysisResultID = ?"
          . " AND ( queueStatus NOT IN ('completed', 'failed', 'aborted')"
-         . "       OR ( queueStatus = 'completed' AND '$queue_status' = 'failed' )"
-         . "       OR ( queueStatus = 'aborted'   AND '$queue_status' = 'completed' ) )" );
+         . "       OR ( queueStatus = 'completed' AND ? = 'failed' )"
+         . "       OR ( queueStatus = 'aborted'   AND ? = 'completed' ) )",
+         array( (string) $queue_status, $result_id, (string) $queue_status, (string) $queue_status ) );
    }
 }
