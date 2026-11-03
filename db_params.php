@@ -1,17 +1,28 @@
 <?php
 ## mysqli_query() with bound values: a result set for a statement that returns rows, true for any
 ## other, false on failure, with mysqli_errno()/mysqli_error() on $link describing the failure.
-## An int argument binds as an integer, a float as a double, anything else as a string. The statement
-## stays open until the next call, since closing it clears the link's error and affected-row count.
+## An int argument binds as an integer, a float as a double, anything else as a string. Each link's
+## last statement stays open until that link's next call, since closing it clears the link's error
+## and affected-row count.
 if ( ! function_exists( 'db_params_query' ) )
 {
    function db_params_query( $link, $sql, array $args = array() )
    {
-      static $last = null;
-      $last = null;
+      static $last = array();
+      if ( ! $link instanceof mysqli )
+      {
+         return false;
+      }
+      $key = spl_object_id( $link );
+      unset( $last[ $key ] );
+      if ( count( $last ) >= 8 )
+      {
+         reset( $last );
+         unset( $last[ key( $last ) ] );
+      }
       try
       {
-         $stmt = $last = mysqli_prepare( $link, $sql );
+         $stmt = $last[ $key ] = mysqli_prepare( $link, $sql );
          if ( ! $stmt )
          {
             return false;
