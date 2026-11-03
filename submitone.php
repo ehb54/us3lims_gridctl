@@ -177,7 +177,7 @@ function mail_submission_fail_to_admin( $reason ) {
     global $submission_fail_mail_sent;
 
     if ( !empty( $submission_fail_mail_sent[ $ID ] ) ) {
-        return;
+        return $submission_fail_mail_sent[ $ID ] === true;
     }
 
     $to = $site_admin_email ?? '';
@@ -200,9 +200,14 @@ function mail_submission_fail_to_admin( $reason ) {
              . "Request ID     :  $ID\n"
              . "Reason         :  " . format_mail_reason( $reason ) . "\n";
 
-    mail( $to, $subject, $message, $headers );
-    ## Set once the mail is handed off, so a fatal while building it does not silence the next path.
-    $submission_fail_mail_sent[ $ID ] = true;
+    $sent = mail( $to, $subject, $message, $headers );
+    if ( !$sent ) {
+        echo "the submission failure notice to $to was not accepted for delivery\n";
+    }
+    ## Set once the mail is handed off, so a fatal while building it does not silence the next path;
+    ## 'failed' keeps it at one attempt while still answering that it did not go out.
+    $submission_fail_mail_sent[ $ID ] = $sent ? true : 'failed';
+    return $sent;
 }
 
 function fail_job() {
