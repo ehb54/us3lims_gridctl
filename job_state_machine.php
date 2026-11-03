@@ -65,6 +65,7 @@ class job_state_machine
    ## Per job, set by for_job().
    private $gfacID     = '';
    private $requestID  = 0;
+   private $gfacRow    = '';
    private $cluster    = '';
    private $us3_db     = '';
    private $autoflowID = 0;
@@ -78,15 +79,16 @@ class job_state_machine
       $this->mailer      = $mailer;
    }
 
-   ## $cluster is the execution cluster (a pool job's metaschedulerClusterExecuting);
-   ## with $requestID it fixes which rows are this job's when two clusters reuse a job number.
-   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0 )
+   ## $requestID is the job's own request; $gfac_row the job_row_condition() fixing its gfac.analysis row
+   ## when other rows share its number.
+   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0, $gfac_row = '' )
    {
       $this->gfacID     = $gfacID;
       $this->cluster    = $cluster;
       $this->us3_db     = $us3_db;
       $this->autoflowID = (int) $autoflowID;
       $this->requestID  = (int) $requestID;
+      $this->gfacRow    = (string) $gfac_row;
 
       return $this;
    }
@@ -147,10 +149,13 @@ class job_state_machine
    }
 
    ## Best-effort: log a failed statement rather than abort the daemon.
-   ## This job's gfac.analysis row: job ID plus execution cluster, when known.
+   ## This job's gfac.analysis row: the monitor's job_row_condition() when given, else job ID plus
+   ## execution cluster, when known.
    private function gfac_job_where()
    {
       $where = " WHERE gfacID='{$this->gfacID}'";
+      if ( $this->gfacRow !== '' )
+         return $where . $this->gfacRow;
       if ( (string) $this->cluster !== '' )
          $where .= " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
                  . $this->quote( $this->gfac, $this->cluster ) . "'";

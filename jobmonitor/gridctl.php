@@ -65,8 +65,7 @@ function check_job() {
         write_logld( "GFAC DB is NULL - $gfacID" );
         mail_to_admin( "fail", "GFAC DB is NULL\n$gfacID" );
 
-        $query2  = "UPDATE gfac.analysis SET status='ERROR' WHERE gfacID='$gfacID'"
-                 . job_cluster_condition( $db_handle, $GLOBALS[ 'cluster' ] ?? '' );
+        $query2  = "UPDATE gfac.analysis SET status='ERROR' WHERE gfacID='$gfacID'" . ( $GLOBALS[ 'job_row_sql' ] ?? '' );
         $result2 = mysqli_query( $db_handle, $query2 );
         $status  = 'ERROR';
 
@@ -168,6 +167,7 @@ function job_machine()
    global $us3_db;
    global $autoflowAnalysisID;
    global $hpcrid;
+   global $job_row_sql;
 
    $machine = new job_state_machine(
       $db_handle,          ## reaches both gfac.* and {$us3_db}.*
@@ -177,7 +177,7 @@ function job_machine()
       'mail_to_admin_once'
    );
 
-   return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID, (int) ( $hpcrid ?? 0 ) );
+   return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID, (int) ( $hpcrid ?? 0 ), $job_row_sql ?? '' );
 }
 
 /** One "job is hung" and one "scancel never landed" mail per job, not one per
@@ -271,7 +271,9 @@ function cleanup() {
     ## marker survives for --restart, -1 terminal, 0 retry (not yet
     ## finalizable), 1 finalized. Keyed as the monitor's own directory is: by its cluster
     ## argument, so a monitor started without one keeps every file under the job ID alone.
-    return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld', $job_cluster ?? '' );
+    global $hpcrid;
+    return resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, 'gfac.analysis', 'write_logld',
+                                    $job_cluster ?? '', (int) ( $hpcrid ?? 0 ) );
 }
 
 function mail_to_admin( $type, $msg ) {

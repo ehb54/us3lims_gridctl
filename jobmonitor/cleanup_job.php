@@ -112,8 +112,8 @@ function finalizing_retry_wait_schedule()
    return $schedule;
 }
 
-## $exec_cluster is the job's execution cluster when known; it fixes which gfac.analysis row is
-## this job's when two clusters reuse a job number, and names the job's directories.
+## $exec_cluster is the job's execution cluster when known; with the request it fixes which
+## gfac.analysis row is this job's when other rows share its number, and it names the job's directories.
 function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 {
    global $dbhost;
@@ -252,7 +252,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'" . job_cluster_condition( $db_handle, $exec_cluster );
+            "WHERE gfacID='$gfacID'" . job_row_condition( $db_handle, $gfacID, $exec_cluster, $requestID );
    $key   = job_key( $gfacID, $exec_cluster );
 
    $result = mysqli_query( $db_handle, $query );
