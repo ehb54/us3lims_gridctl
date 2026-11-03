@@ -286,13 +286,15 @@ function mail_to_admin( $type, $msg ) {
    global $servhost;
    global $requestID;
 
-   $headers  = "From: $org_name Admin<$admin_email>"     . "\n";
-   $headers .= "Cc: $org_name Admin<$admin_email>"       . "\n";
-   $headers .= "Bcc: $org_name Admin<$admin_email>"      . "\n";
+   ## An unset listen-config address still gives the mail a sender, as common's notices do.
+   $sender = ! empty( $admin_email ) ? $admin_email : 'root@localhost';
+   $headers  = "From: $org_name Admin<$sender>"     . "\n";
+   $headers .= "Cc: $org_name Admin<$sender>"       . "\n";
+   $headers .= "Bcc: $org_name Admin<$sender>"      . "\n";
 
    ## Set the reply address
-   $headers .= "Reply-To: $org_name<$admin_email>"      . "\n";
-   $headers .= "Return-Path: $org_name<$admin_email>"   . "\n";
+   $headers .= "Reply-To: $org_name<$sender>"      . "\n";
+   $headers .= "Return-Path: $org_name<$sender>"   . "\n";
 
    ## Try to avoid spam filters
    $now = time();
@@ -313,5 +315,5 @@ function mail_to_admin( $type, $msg ) {
 
    $message .= "Error Message  :  $msg\n";
 
-   mail( $admin_email, $subject, $message, $headers );
+   mail( $sender, $subject, $message, $headers );
 }

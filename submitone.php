@@ -251,9 +251,14 @@ function error( $msg, $fail_job = true ) {
     global $self;
 
     if ( $fail_job ) {
-        $qfmsg  = quote_fix( $msg );
-        $query  = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg='Error submitting job: $qfmsg' WHERE {$id_field} = {$ID}";
-        $result = mysqli_query( $db_handle, $query );
+        ## Bound, so the reason keeps its apostrophes, as fail_job() does.
+        $query     = "UPDATE {$lims_db}.{$submit_request_table_name} SET status='FAILED', statusMsg=? WHERE {$id_field} = " . (int) $ID;
+        $statusMsg = "Error submitting job: $msg";
+        $statement = mysqli_prepare( $db_handle, $query );
+        $result    = $statement && mysqli_stmt_bind_param( $statement, 's', $statusMsg ) && mysqli_stmt_execute( $statement );
+        if ( $statement ) {
+            mysqli_stmt_close( $statement );
+        }
 
         if ( !$result ) {
             write_logl( "$self: error updating table {$submit_request_table_name} {$id_field} {$ID} status FAILED. query $query", 0 );
