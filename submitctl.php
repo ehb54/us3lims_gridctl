@@ -318,6 +318,8 @@ $site_admin_send = dispatch_site_admin_sender(
                                  isset( $admin_email ) ? $admin_email : '' ), $org_name );
 ## Expired requests: one notice to the site admin per pass, and one to each submitter.
 $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_send ) {
+    ## The stage shows the expiry now: housekeeping mirrors only instances with unfinished requests.
+    dispatch_mirror_autoflow( $db_handle, $db );
     $submitters = dispatch_request_submitters( $db_handle, $db, $ids );
     $admin_told = $site_admin_send( "UltraScan dispatch: " . count( $ids ) . " request(s) expired in $db",
         "These dispatch requests in $db were not submitted within the maximum wait and have expired:\n\n"
