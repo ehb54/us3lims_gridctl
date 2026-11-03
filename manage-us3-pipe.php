@@ -222,7 +222,7 @@ function pipe_job_condition( $link, $db, $requestID )
     $has_request_column = $res && mysqli_num_rows( $res ) > 0;
   }
   return " AND us3_db='" . mysqli_real_escape_string( $link, $db ) . "'"
-       . ( $has_request_column ? " AND (HPCAnalysisRequestID IS NULL OR HPCAnalysisRequestID=" . (int) $requestID . ")" : '' );
+       . ( $has_request_column ? " AND HPCAnalysisRequestID=" . (int) $requestID : '' );
 }
 
 function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )

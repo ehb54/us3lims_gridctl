@@ -137,8 +137,8 @@ function job_key( $gfacID, $cluster = '' )
 
 ## The job's own row among gfac.analysis rows sharing its job number (a reset controller reuses
 ## numbers, two clusters can issue the same one): its execution cluster when known and, where the
-## table records the request, its request's row; a row from before that column (NULL) only when
-## there is one and none carries the request. An array of 'sql', appended to "WHERE gfacID = ?",
+## table records the request, its request's row only. A row without a request (written before the
+## column; the upgrade fills in those it can) is never this job's. An array of 'sql', appended to "WHERE gfacID = ?",
 ## and the 'args' it binds. null when the database could not be asked, so a caller retries instead
 ## of acting on another job's row.
 function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 'gfac.analysis' )
@@ -169,19 +169,6 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
    if ( ! $has_column[ $table ] )
    {
       return $cond;
-   }
-   $res = db_params_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = ?), SUM(HPCAnalysisRequestID IS NULL)"
-                           . " FROM $table WHERE gfacID = ?" . $cond[ 'sql' ],
-                           array_merge( array( $requestID, (string) $gfacID ), $cond[ 'args' ] ) );
-   $row = $res ? mysqli_fetch_row( $res ) : null;
-   if ( ! $row )
-   {
-      return null;
-   }
-   ## The own row gone (already finalized) matches nothing rather than another job's NULL row.
-   if ( (int) $row[ 0 ] === 0 && (int) $row[ 1 ] > 0 )
-   {
-      return array( 'sql' => $cond[ 'sql' ] . " AND HPCAnalysisRequestID IS NULL", 'args' => $cond[ 'args' ] );
    }
    return array( 'sql'  => $cond[ 'sql' ] . " AND HPCAnalysisRequestID = ?",
                  'args' => array_merge( $cond[ 'args' ], array( $requestID ) ) );
