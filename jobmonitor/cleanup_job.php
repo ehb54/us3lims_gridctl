@@ -18,6 +18,7 @@ if ( $us3bin === '' ) {
    $us3bin = dirname( __DIR__, 2 );
 }
 require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
+require_once dirname( __DIR__ ) . '/db_params.php';
 
 $me              = 'cleanup_job.php';
 $email_address   = '';
@@ -161,8 +162,8 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## First get basic info for email messages
    $query  = "SELECT email, investigatorGUID, editXMLFilename FROM {$us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID=$requestID";
-   $result = mysqli_query( $us3_link, $query );
+             "WHERE HPCAnalysisRequestID = ?";
+   $result = db_params_query( $us3_link, $query, array( (int) $requestID ) );
 
    if ( ! $result )
    {
@@ -186,17 +187,17 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    list( $email_address, $investigatorGUID, $editXMLFilename ) =  mysqli_fetch_array( $result );
 
    $query  = "SELECT personID FROM {$us3_db}.people " .
-             "WHERE personGUID='$investigatorGUID'";
-   $result = mysqli_query( $us3_link, $query );
+             "WHERE personGUID = ?";
+   $result = db_params_query( $us3_link, $query, array( (string) $investigatorGUID ) );
 
    list( $personID ) = mysqli_fetch_array( $result );
 
    $query  = "SELECT clusterName, submitTime, queueStatus, analType "            .
              "FROM {$us3_db}.HPCAnalysisRequest h, {$us3_db}.HPCAnalysisResult r "                   .
-             "WHERE h.HPCAnalysisRequestID=$requestID "                          .
+             "WHERE h.HPCAnalysisRequestID = ? "                          .
              "AND h.HPCAnalysisRequestID=r.HPCAnalysisRequestID";
 
-   $result = mysqli_query( $us3_link, $query );
+   $result = db_params_query( $us3_link, $query, array( (int) $requestID ) );
 
    if ( ! $result )
    {
@@ -225,9 +226,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## Get the scheduler job ID recorded for this request.
    $query = "SELECT HPCAnalysisResultID, gfacID, endTime FROM {$us3_db}.HPCAnalysisResult " .
-            "WHERE HPCAnalysisRequestID=$requestID";
+            "WHERE HPCAnalysisRequestID = ?";
 
-   $result = mysqli_query( $us3_link, $query );
+   $result = db_params_query( $us3_link, $query, array( (int) $requestID ) );
 
    if ( ! $result )
    {
@@ -258,10 +259,10 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
       return( 0 );
    }
    $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'" . $row_sql;
+            "WHERE gfacID = ?" . $row_sql[ 'sql' ];
    $key   = job_key( $gfacID, $exec_cluster );
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = db_params_query( $db_handle, $query, array_merge( array( (string) $gfacID ), $row_sql[ 'args' ] ) );
    if ( ! $result )
    {
       ## Retryable only for a connection-class reason.
@@ -326,9 +327,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    }
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
-            "WHERE id='" . (int) $id . "'";
+            "WHERE id = ?";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = db_params_query( $db_handle, $query, array( (int) $id ) );
 
    if ( ! $result )
    {
@@ -373,9 +374,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## Save queue messages for post-mortem analysis
    $query = "SELECT message, time FROM gfac.queue_messages " .
-            "WHERE analysisID = $analysisID " .
+            "WHERE analysisID = ? " .
             "ORDER BY time ";
-   $result = mysqli_query( $db_handle, $query );
+   $result = db_params_query( $db_handle, $query, array( (int) $analysisID ) );
 
    if ( ! $result )
    {
@@ -447,9 +448,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    }
 
    $query = "DELETE FROM gfac.queue_messages " .
-            "WHERE analysisID = $analysisID ";
+            "WHERE analysisID = ? ";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = db_params_query( $db_handle, $query, array( (int) $analysisID ) );
 
    if ( ! $result )
    {
@@ -459,8 +460,8 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## Save stdout, stderr, etc. for message log
    $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM gfac.analysis " .
-             "WHERE id='" . (int) $id . "' ";
-   $result = mysqli_query( $db_handle, $query );
+             "WHERE id = ? ";
+   $result = db_params_query( $db_handle, $query, array( (int) $id ) );
    $autoflowAnalysisID = 0;
    try
    {
@@ -496,9 +497,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID, $exec_cluster );
 
    ## Delete the completed central job-tracking records.
-   $query = "DELETE from gfac.analysis WHERE id='" . (int) $id . "'";
+   $query = "DELETE from gfac.analysis WHERE id = ?";
 
-   $result = mysqli_query( $db_handle, $query );
+   $result = db_params_query( $db_handle, $query, array( (int) $id ) );
 
    if ( ! $result )
    {
@@ -513,8 +514,8 @@ write_logld( "$me: GFAC DB entry deleted" );
    
    ## Get the request guid (LIMS submit dir name)
    $query  = "SELECT HPCAnalysisRequestGUID FROM {$us3_db}.HPCAnalysisRequest " .
-             "WHERE HPCAnalysisRequestID = $requestID ";
-   $result = mysqli_query( $us3_link, $query );
+             "WHERE HPCAnalysisRequestID = ? ";
+   $result = db_params_query( $us3_link, $query, array( (int) $requestID ) );
    
    if ( ! $result )
    {
@@ -536,12 +537,10 @@ write_logld( "$me: Output dir determined: $output_dir" );
 write_logld( "$me: *messages.txt written" );
 
    ## Update HPCAnalysisResult with the job's stdout/stderr.
-   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "                              .
-            "stderr='" . mysqli_real_escape_string( $us3_link, $stderr ) . "', " .
-            "stdout='" . mysqli_real_escape_string( $us3_link, $stdout ) . "' "  .
-            "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
+   $query = "UPDATE {$us3_db}.HPCAnalysisResult SET stderr = ?, stdout = ? WHERE HPCAnalysisResultID = ?";
+   $args  = array( (string) $stderr, (string) $stdout, (int) $HPCAnalysisResultID );
 
-   $result = mysqli_query( $us3_link, $query );
+   $result = db_params_query( $us3_link, $query, $args );
 
    ## A lock-wait timeout or a killed session (1205, 1213, 2006) with MariaDB
    ## otherwise up usually clears within seconds. Reconnecting and retrying
@@ -563,7 +562,7 @@ write_logld( "$me: *messages.txt written" );
       {
          mysqli_close( $us3_link );
          $us3_link = $reconnected;
-         $result   = mysqli_query( $us3_link, $query );
+         $result   = db_params_query( $us3_link, $query, $args );
       }
    }
 
@@ -711,16 +710,12 @@ write_logld( "$me: *messages.txt written" );
          $statistics  = parse_xml( $xml, 'statistics' );
          $otherdata   = parse_xml( $xml, 'id' );
 
-         $query = "UPDATE {$us3_db}.HPCAnalysisResult SET "   .
-                  "wallTime = {$statistics['walltime']}, " .
-                  "CPUTime = {$statistics['cputime']}, " .
-                  "CPUCount = {$statistics['cpucount']}, " .
-                  "max_rss = {$statistics['maxmemory']}, " .
-                  "startTime = '{$otherdata['starttime']}', " .
-                  "endTime = '{$otherdata['endtime']}', " .
-                  "mgroupcount = {$otherdata['groupcount']} " .
-                  "WHERE HPCAnalysisResultID=$HPCAnalysisResultID";
-         $result = mysqli_query( $us3_link, $query );
+         $query = "UPDATE {$us3_db}.HPCAnalysisResult SET wallTime = ?, CPUTime = ?, CPUCount = ?, max_rss = ?,"
+                . " startTime = ?, endTime = ?, mgroupcount = ? WHERE HPCAnalysisResultID = ?";
+         $result = db_params_query( $us3_link, $query, array(
+                      (string) $statistics['walltime'], (string) $statistics['cputime'], (string) $statistics['cpucount'],
+                      (string) $statistics['maxmemory'], (string) $otherdata['starttime'], (string) $otherdata['endtime'],
+                      (string) $otherdata['groupcount'], (int) $HPCAnalysisResultID ) );
 
          if ( ! $result )
          {
@@ -745,19 +740,14 @@ write_logld( "$me: *messages.txt written" );
          if ( isset( $model_data[ 'editGUID' ] ) )
             $editGUID   = $model_data[ 'editGUID' ];
 
-         $query = "INSERT INTO {$us3_db}.noise SET "  .
-                  "noiseGUID='$noiseGUID'," .
-                  "modelGUID='$modelGUID'," .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
-                  "modelID=1, "             .
-                  "noiseType='$type',"      .
-                  "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
+         $query = "INSERT INTO {$us3_db}.noise SET noiseGUID = ?, modelGUID = ?,"
+                . " editedDataID = (SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID = ?),"
+                . " modelID=1, noiseType = ?, description = ?, xml = ?";
 
          ## Add later after all files are processed: editDataID, modelID
 
-         $result = mysqli_query( $us3_link, $query );
+         $result = db_params_query( $us3_link, $query, array( (string) $noiseGUID, (string) $modelGUID,
+                      (string) $editGUID, $type, (string) $desc, (string) $xml ) );
 
          if ( ! $result )
          {
@@ -789,17 +779,14 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          $mrecGUID    = $mrecs_data[ 'mrecGUID' ];
          $modelGUID   = $mrecs_data[ 'modelGUID' ];
 
-         $query = "INSERT INTO {$us3_db}.pcsa_modelrecs SET "  .
-                  "editedDataID="                .
-                  "(SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID')," .
-                  "modelID=0, "             .
-                  "mrecsGUID='$mrecGUID'," .
-                  "description='$desc',"    .
-                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
+         $query = "INSERT INTO {$us3_db}.pcsa_modelrecs SET"
+                . " editedDataID = (SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID = ?),"
+                . " modelID=0, mrecsGUID = ?, description = ?, xml = ?";
 
          ## Add later after all files are processed: editDataID, modelID
 
-         $result = mysqli_query( $us3_link, $query );
+         $result = db_params_query( $us3_link, $query, array( (string) $editGUID, (string) $mrecGUID,
+                      (string) $desc, (string) $xml ) );
 
          if ( ! $result )
          {
@@ -832,17 +819,17 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
          ## primary edited file, since model needs an editedDataID.
          if ( $editGUID == '00000000-0000-0000-0000-000000000000' )
          {
-            $request_edit_filename = mysqli_real_escape_string( $us3_link, $editXMLFilename );
-            $edited_data_selector  =
+            $edited_data_selector =
                "(SELECT editedDataID FROM {$us3_db}.editedData " .
-               "WHERE filename='$request_edit_filename' ORDER BY editedDataID LIMIT 1)";
+               "WHERE filename = ? ORDER BY editedDataID LIMIT 1)";
+            $edited_data_arg      = (string) $editXMLFilename;
          }
          else
          {
-            $escaped_edit_guid    = mysqli_real_escape_string( $us3_link, $editGUID );
             $edited_data_selector =
                "(SELECT editedDataID FROM {$us3_db}.editedData " .
-               "WHERE editGUID='$escaped_edit_guid')";
+               "WHERE editGUID = ?)";
+            $edited_data_arg      = (string) $editGUID;
          }
 
          if ( $mc_iteration > 1 )
@@ -855,16 +842,11 @@ write_logld( "$me:   mrecs file editGUID=$editGUID" );
 write_logld( "$me:   MODELUpd: O:description=$description" );
          }
 
-         $query = "INSERT INTO {$us3_db}.model SET "       .
-                  "modelGUID='$modelGUID',"      .
-                  "editedDataID=$edited_data_selector," .
-                  "description='$description',"  .
-                  "MCIteration='$mc_iteration'," .
-                  "meniscus='$meniscus'," .
-                  "variance='$variance'," .
-                  "xml='" . mysqli_real_escape_string( $us3_link, $xml ) . "'";
+         $query = "INSERT INTO {$us3_db}.model SET modelGUID = ?, editedDataID = $edited_data_selector,"
+                . " description = ?, MCIteration = ?, meniscus = ?, variance = ?, xml = ?";
 
-         $result = mysqli_query( $us3_link, $query );
+         $result = db_params_query( $us3_link, $query, array( (string) $modelGUID, $edited_data_arg,
+                      (string) $description, (string) $mc_iteration, (string) $meniscus, (string) $variance, (string) $xml ) );
 
          if ( ! $result )
          {
@@ -880,18 +862,15 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
 
          update_autoflow_models( $us3_link, $us3_db, $autoflowAnalysisID, $autoflow, $modelID, $modelGUID, $editGUID );
 
-         $query = "INSERT INTO {$us3_db}.modelPerson SET " .
-                  "modelID=$modelID, personID=$personID";
-         $result = mysqli_query( $us3_link, $query );
+         $query = "INSERT INTO {$us3_db}.modelPerson SET modelID = ?, personID = ?";
+         $result = db_params_query( $us3_link, $query, array( (int) $modelID, $personID ) );
 ##write_logld( "$me:   model file inserted into DB : id=$id" );
       }
 
       $query = "INSERT INTO {$us3_db}.HPCAnalysisResultData SET "       .
-               "HPCAnalysisResultID='$HPCAnalysisResultID', " .
-               "HPCAnalysisResultType='$file_type', "         .
-               "resultID=$id";
+               "HPCAnalysisResultID = ?, HPCAnalysisResultType = ?, resultID = ?";
 
-      $result = mysqli_query( $us3_link, $query );
+      $result = db_params_query( $us3_link, $query, array( (int) $HPCAnalysisResultID, (string) $file_type, (int) $id ) );
 
       if ( ! $result )
       {
@@ -911,13 +890,11 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    {
       $modelGUID = $modelGUIDs[ $noiseID ];
       $query = "UPDATE {$us3_db}.noise SET "                                                 .
-               "editedDataID="                                                     .
-               "(SELECT editedDataID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')," .
-               "modelID="                                                          .
-               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
-               "WHERE noiseID=$noiseID";
+               "editedDataID = (SELECT editedDataID FROM {$us3_db}.model WHERE modelGUID = ?), " .
+               "modelID = (SELECT modelID FROM {$us3_db}.model WHERE modelGUID = ?) "          .
+               "WHERE noiseID = ?";
 
-      $result = mysqli_query( $us3_link, $query );
+      $result = db_params_query( $us3_link, $query, array( (string) $modelGUID, (string) $modelGUID, (int) $noiseID ) );
 
       if ( ! $result )
       {
@@ -936,11 +913,10 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    {
       $modelGUID = $rmodlGUIDs[ $mrecsID ];
       $query = "UPDATE {$us3_db}.pcsa_modelrecs SET "                                                 .
-               "modelID="                                                          .
-               "(SELECT modelID FROM {$us3_db}.model WHERE modelGUID='$modelGUID')"          .
-               "WHERE mrecsID=$mrecsID";
+               "modelID = (SELECT modelID FROM {$us3_db}.model WHERE modelGUID = ?) "          .
+               "WHERE mrecsID = ?";
 
-      $result = mysqli_query( $us3_link, $query );
+      $result = db_params_query( $us3_link, $query, array( (string) $modelGUID, (int) $mrecsID ) );
 
       if ( ! $result )
       {
@@ -1104,9 +1080,9 @@ function get_autoflow_type_id( $link = null, $us3_db = null, $autoflowAnalysisID
         return null;
     }
 
-    $query = "SELECT statusJson,autoflowID from {$us3_db}.autoflowAnalysis where requestID=$autoflowAnalysisID";
+    $query = "SELECT statusJson,autoflowID from {$us3_db}.autoflowAnalysis where requestID = ?";
 
-    $result = mysqli_query( $link, $query );
+    $result = db_params_query( $link, $query, array( (int) $autoflowAnalysisID ) );
 
     if ( ! $result ) {
         write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
@@ -1146,9 +1122,9 @@ function update_autoflow_models( $link, $us3_db, $autoflowAnalysisID, $autoflow,
 
     ## get editeddataID for editGUID
 
-    $query = "SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID='$editGUID'";
+    $query = "SELECT editedDataID FROM {$us3_db}.editedData WHERE editGUID = ?";
 
-    $result = mysqli_query( $link, $query );
+    $result = db_params_query( $link, $query, array( (string) $editGUID ) );
 
     if ( ! $result ) {
         write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
@@ -1166,9 +1142,9 @@ function update_autoflow_models( $link, $us3_db, $autoflowAnalysisID, $autoflow,
 
     ## get current autoflowModelsLink
 
-    $query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = $autoflowAnalysisID";
+    $query = "SELECT modelsDesc from {$us3_db}.autoflowModelsLink where autoflowAnalysisID = ?";
 
-    $result = mysqli_query( $link, $query );
+    $result = db_params_query( $link, $query, array( (int) $autoflowAnalysisID ) );
 
     if ( ! $result ) {
         write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );
@@ -1194,21 +1170,19 @@ function update_autoflow_models( $link, $us3_db, $autoflowAnalysisID, $autoflow,
         ];
          
     debug_json( "ending descJson", $descJson );
-    $descenc = mysqli_real_escape_string( $link, json_encode( $descJson ) );
+    $desc_json = json_encode( $descJson );
 
     if ( $result->num_rows ) {
         ## update
-        $query = "UPDATE {$us3_db}.autoflowModelsLink set modelsDesc='$descenc' where autoflowAnalysisID = $autoflowAnalysisID";
+        $query = "UPDATE {$us3_db}.autoflowModelsLink set modelsDesc = ? where autoflowAnalysisID = ?";
+        $args  = array( $desc_json, (int) $autoflowAnalysisID );
     } else {
         ## insert
-        $query = "INSERT INTO {$us3_db}.autoflowModelsLink"
-            . " set autoflowAnalysisID=$autoflowAnalysisID"
-            . " ,modelsDesc='$descenc'"
-            . " ,autoflowID=$autoflowID"
-            ;
+        $query = "INSERT INTO {$us3_db}.autoflowModelsLink set autoflowAnalysisID = ?, modelsDesc = ?, autoflowID = ?";
+        $args  = array( (int) $autoflowAnalysisID, $desc_json, (int) $autoflowID );
     }
 
-    $result = mysqli_query( $link, $query );
+    $result = db_params_query( $link, $query, $args );
 
     if ( ! $result ) {
         write_logld( "Bad query:\n$query\n" . mysqli_error( $link ) );

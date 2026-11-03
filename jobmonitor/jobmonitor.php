@@ -210,9 +210,8 @@ $loop      = 0;
 ## clusters can issue the same Slurm number, and guessing would monitor (and
 ## later finalize) the wrong job.
 if ( $job_cluster === '' ) {
-    $count_stmt = mysqli_prepare( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" . $job_row_sql );
-    $count_res  = $count_stmt && mysqli_stmt_bind_param( $count_stmt, 's', $gfacID ) && mysqli_stmt_execute( $count_stmt )
-                ? mysqli_stmt_get_result( $count_stmt ) : false;
+    $count_res  = db_params_query( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" . $job_row_sql[ 'sql' ],
+                                   array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] ) );
     $count_row  = $count_res ? mysqli_fetch_row( $count_res ) : null;
     if ( $count_row && (int) $count_row[ 0 ] > 1 ) {
         mysqli_close( $db_handle );
@@ -233,10 +232,11 @@ if (
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
-                     . " where gfacID = \"$gfacID\""
-                     . $job_row_sql
+                     . " where gfacID = ?"
+                     . $job_row_sql[ 'sql' ]
                      ,false
                      ,true
+                     ,array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] )
       ) ) ) {
     mysqli_close( $db_handle );
     error_exit( "gfacID $gfacID not found in gfac.analysis" );
@@ -279,24 +279,15 @@ while( 1 ) {
         }
     }
 
-    $poll_statement = mysqli_prepare( $db_handle, "select"
+    $poll_result = db_params_query( $db_handle, "select"
                      . " status"
                      . " ,queue_msg"
                      . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " from gfac.analysis"
                      . " where gfacID = ?"
-                     . $job_row_sql );
-
-    $poll_result = $poll_statement
-                 && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )
-                 && mysqli_stmt_execute( $poll_statement )
-                 ? mysqli_stmt_get_result( $poll_statement )
-                 : false;
-
-    if ( $poll_statement ) {
-        mysqli_stmt_close( $poll_statement );
-    }
+                     . $job_row_sql[ 'sql' ]
+                     , array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] ) );
 
     if ( $poll_result === false ) {
         ## The query itself failed, not "no such row": a connection that went

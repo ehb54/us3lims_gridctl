@@ -65,8 +65,9 @@ function check_job() {
         write_logld( "GFAC DB is NULL - $gfacID" );
         mail_to_admin( "fail", "GFAC DB is NULL\n$gfacID" );
 
-        $query2  = "UPDATE gfac.analysis SET status='ERROR' WHERE gfacID='$gfacID'" . ( $GLOBALS[ 'job_row_sql' ] ?? '' );
-        $result2 = mysqli_query( $db_handle, $query2 );
+        $row     = $GLOBALS[ 'job_row_sql' ] ?? array( 'sql' => '', 'args' => array() );
+        $query2  = "UPDATE gfac.analysis SET status='ERROR' WHERE gfacID = ?" . $row[ 'sql' ];
+        $result2 = db_params_query( $db_handle, $query2, array_merge( array( (string) $gfacID ), $row[ 'args' ] ) );
         $status  = 'ERROR';
 
         if ( ! $result2 ) {
@@ -177,7 +178,7 @@ function job_machine()
       'mail_to_admin_once'
    );
 
-   return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID, (int) ( $hpcrid ?? 0 ), $job_row_sql ?? '' );
+   return $machine->for_job( $gfacID, $cluster, $us3_db, $autoflowAnalysisID, (int) ( $hpcrid ?? 0 ), $job_row_sql ?? null );
 }
 
 /** One "job is hung" and one "scancel never landed" mail per job, not one per

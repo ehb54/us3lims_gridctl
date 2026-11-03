@@ -7,6 +7,8 @@
  *
  */
 
+require_once dirname( __DIR__ ) . '/db_params.php';
+
 $email_address   = '';
 $queuestatus     = '';
 $jobtype         = '';
@@ -35,8 +37,8 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       $log_fn( "could not tell which gfac.analysis row is $gfacID's - will retry" );
       return 0;
    }
-   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'" . $row_sql;
-   $result = mysqli_query( $db_handle, $query );
+   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID = ?" . $row_sql[ 'sql' ];
+   $result = db_params_query( $db_handle, $query, array_merge( array( (string) $gfacID ), $row_sql[ 'args' ] ) );
 
    if ( ! $result )
    {
@@ -136,8 +138,9 @@ function job_key( $gfacID, $cluster = '' )
 ## The job's own row among gfac.analysis rows sharing its job number (a reset controller reuses
 ## numbers, two clusters can issue the same one): its execution cluster when known and, where the
 ## table records the request, its request's row; a row from before that column (NULL) only when
-## there is one and none carries the request. Appended to "WHERE gfacID=...". null when the
-## database could not be asked, so a caller retries instead of acting on another job's row.
+## there is one and none carries the request. An array of 'sql', appended to "WHERE gfacID = ?",
+## and the 'args' it binds. null when the database could not be asked, so a caller retries instead
+## of acting on another job's row.
 function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 'gfac.analysis' )
 {
    static $has_column = array();
@@ -145,15 +148,17 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
    {
       return null;
    }
-   $sql = (string) $cluster === '' ? ''
-        : " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
-          . mysqli_real_escape_string( $db_handle, $cluster ) . "'";
-   if ( (int) $requestID <= 0 )
+   $cond = (string) $cluster === '' ? array( 'sql' => '', 'args' => array() )
+         : array( 'sql'  => " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster) = ?",
+                  'args' => array( (string) $cluster ) );
+   $requestID = (int) $requestID;
+   if ( $requestID <= 0 )
    {
-      return $sql;
+      return $cond;
    }
    if ( ! isset( $has_column[ $table ] ) )
    {
+      ## SHOW cannot be prepared; its only input is the table name checked above.
       $res = mysqli_query( $db_handle, "SHOW COLUMNS FROM $table LIKE 'HPCAnalysisRequestID'" ); // NOSONAR $table is checked above
       if ( ! $res )
       {
@@ -163,18 +168,23 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
    }
    if ( ! $has_column[ $table ] )
    {
-      return $sql;
+      return $cond;
    }
-   $own = $sql . " AND HPCAnalysisRequestID = " . (int) $requestID;
-   $res = mysqli_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = " . (int) $requestID . "), SUM(HPCAnalysisRequestID IS NULL)" // NOSONAR $table is checked above
-                        . " FROM $table WHERE gfacID='" . mysqli_real_escape_string( $db_handle, $gfacID ) . "'$sql" );
+   $res = db_params_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = ?), SUM(HPCAnalysisRequestID IS NULL)"
+                           . " FROM $table WHERE gfacID = ?" . $cond[ 'sql' ],
+                           array_merge( array( $requestID, (string) $gfacID ), $cond[ 'args' ] ) );
    $row = $res ? mysqli_fetch_row( $res ) : null;
    if ( ! $row )
    {
       return null;
    }
    ## The own row gone (already finalized) matches nothing rather than another job's NULL row.
-   return (int) $row[ 0 ] === 0 && (int) $row[ 1 ] > 0 ? $sql . " AND HPCAnalysisRequestID IS NULL" : $own;
+   if ( (int) $row[ 0 ] === 0 && (int) $row[ 1 ] > 0 )
+   {
+      return array( 'sql' => $cond[ 'sql' ] . " AND HPCAnalysisRequestID IS NULL", 'args' => $cond[ 'args' ] );
+   }
+   return array( 'sql'  => $cond[ 'sql' ] . " AND HPCAnalysisRequestID = ?",
+                 'args' => array_merge( $cond[ 'args' ], array( $requestID ) ) );
 }
 
 function cleanup_job_dir( $us3_db, $gfacID )
@@ -858,23 +868,8 @@ $leno = strlen( $stdout );
 write_logld( "$me: stdout size: $leno");
 $lent = strlen( $tarfile );
 write_logld( "$me: tarfile size: $lent");
-   $esstde = mysqli_real_escape_string( $db_handle, $stderr );
-   $esstdo = mysqli_real_escape_string( $db_handle, $stdout );
-   $estarf = mysqli_real_escape_string( $db_handle, $tarfile );
-$lene = strlen($esstde);
-write_logld( "$me:  es-stderr size: $lene");
-$leno = strlen($esstdo);
-write_logld( "$me:  es-stdout size: $leno");
-$lenf = strlen($estarf);
-write_logld( "$me:  es-tarfile size: $lenf");
-   $query = "UPDATE gfac.analysis SET " .
-            "stderr='"  . $esstde . "'," .
-            "stdout='"  . $esstdo . "'," .
-            "tarfile='" . $estarf . "'" .
-            "WHERE id='" . (int) $id . "'";
-            ;
-
-   $result = mysqli_query( $db_handle, $query );
+   $query  = "UPDATE gfac.analysis SET stderr = ?, stdout = ?, tarfile = ? WHERE id = ?";
+   $result = db_params_query( $db_handle, $query, array( (string) $stderr, (string) $stdout, (string) $tarfile, (int) $id ) );
 
    if ( ! $result )
    {
