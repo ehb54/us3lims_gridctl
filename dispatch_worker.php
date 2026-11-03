@@ -217,7 +217,9 @@ function dispatch_worker_take_lanes( $link, $gdb, array $keys, $owner, $lease )
    foreach ( array_unique( $keys ) as $key ) {
       $gen = dispatch_controller_claim( $link, $gdb, $key, $owner, $lease );
       if ( ! $gen ) {
+         $error = dispatch_last_error();
          dispatch_worker_release_lanes( $link, $gdb, $held, $owner );
+         dispatch_last_error( $error );   ## the release must not hide why the claim failed
          return $gen === null ? false : null;   ## false: the database could not be asked
       }
       $held[ $key ] = $gen;
@@ -543,6 +545,12 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    }
 
    $artifact = isset( $staged[ 'artifact' ] ) && $staged[ 'artifact' ] !== '' ? $staged[ 'artifact' ] : null;
+   ## A batch that moved while this child staged: follow it instead of submitting here.
+   if ( $req[ 'parentBatchKey' ] !== null && dispatch_batch_pin( $link, $db, $req[ 'parentBatchKey' ] ) !== $chosen ) {
+      dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
+      return $settle( DISPATCH_STAGING, DISPATCH_WAITING, "the batch moved away from $chosen",
+                      array( 'retry_seconds' => 0, 'reasonCode' => 'batch_moved' ) );
+   }
    $token = dispatch_submission_gate( $link, $db, $id, $generation, $chosen, $plan, DISPATCH_SUBMIT_LEASE_SECONDS, $artifact );
    if ( $token === '' ) {
       dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );

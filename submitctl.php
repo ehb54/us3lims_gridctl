@@ -626,6 +626,10 @@ function cancel_stage_job( $gfacID, $cluster_default, $lims_db, $hpcarid ) {
         if ( $row ) {
             $cluster = empty( $row[ 'metaschedulerClusterExecuting' ] )
                      ? $row[ 'cluster' ] : $row[ 'metaschedulerClusterExecuting' ];
+        } elseif ( $hpcarid !== null ) {
+            ## No row carries this request: the number may belong to another job now.
+            write_logls( "cannot cancel {$gfacID}: no gfac.analysis row carries request {$hpcarid}", 0 );
+            return;
         }
     }
 

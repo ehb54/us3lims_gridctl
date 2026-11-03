@@ -222,11 +222,11 @@ function job_staging_dir_prepare( $work, $gfacID, $log = null )
       return null;
    }
 
-   if ( is_dir( $dir ) )
+   if ( file_exists( $dir ) || is_link( $dir ) )
    {
       if ( is_callable( $log ) )
       {
-         $log( "clearing a leftover staging directory $dir" );
+         $log( "clearing a leftover staging path $dir" );
       }
 
       exec( 'rm -rf ' . escapeshellarg( $dir ) );
