@@ -39,6 +39,10 @@ if ( ! $link ) {
 mysqli_report( MYSQLI_REPORT_OFF );
 dispatch_worker_keepalive_loop( $link, 'gfac', $lims_db, (int) $dispatch_id, (int) $generation, $owner, $lanes, $lane_owner,
                                 DISPATCH_WORKER_KEEPALIVE_SECONDS, function () use ( $parent ) {
+                                    ## Reparented once dispatchone exits, even while it is an unreaped zombie.
+                                    if ( function_exists( 'posix_getppid' ) ) {
+                                        return posix_getppid() === (int) $parent;
+                                    }
                                     clearstatcache( true, "/proc/$parent" );
                                     return is_dir( "/proc/$parent" );
                                 } );

@@ -561,11 +561,13 @@ while( 1 ) {
     if ( !$work_done ) {
         ## A pool stage is taken about as fast as a direct one: the nap ends when a request is due,
         ## and a new submission directory starts a short run of 1 s passes for its intake.
-        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, reap_children( 'autoflow' ),
-                                 $busy_dbs ? dispatch_worker_next_due( $db_handle, $busy_dbs ) : null,
-                                 time() < $submission_grace_until );
+        ## Only on a host with dispatch instances, and a due request only counts while a child can take it.
+        $pools = (bool) $dispatch_dbs;
+        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, $pools ? reap_children( 'autoflow' ) : 0,
+                                 $busy_dbs && reap_children() < $max_children ? dispatch_worker_next_due( $db_handle, $busy_dbs ) : null,
+                                 $pools && time() < $submission_grace_until );
         write_logls( "no requests to process sleeping {$nap}s", 2 );
-        if ( idle_nap( $nap, $watch_dirs ) ) {
+        if ( idle_nap( $nap, $pools ? $watch_dirs : array() ) ) {
             $submission_grace_until = time() + 15;
         }
     }

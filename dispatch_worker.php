@@ -566,7 +566,8 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
       if ( ! dispatch_record_outcome( $link, $db, $attempt[ 'attemptToken' ], $outcome ) ) {
          ## Counted as a check, so the request reaches the urgent alert instead of retrying silently.
          dispatch_reconcile_unresolved( $link, $db, $id, $generation,
-                                        "job {$jobs[0]} at $cluster could not be recorded in the ledger" );
+                                        "job {$jobs[0]} at $cluster could not be recorded in the ledger"
+                                        . ( dispatch_last_error() !== '' ? ': ' . dispatch_last_error() : '' ) );
          return DISPATCH_SUBMISSION_UNKNOWN;
       }
       $job = $jobs[ 0 ];
