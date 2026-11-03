@@ -324,10 +324,13 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
              + dispatch_recently_unreachable( $link, $db, isset( $io[ 'unreachable_seconds' ] )
                                               ? (int) $io[ 'unreachable_seconds' ] : DISPATCH_WORKER_UNREACHABLE_SECONDS );
    };
-   ## A batch pinned to an unreachable member moves while nothing of it was staged or submitted there.
+   ## A batch whose member is unreachable, by the exclusion or by this child's own last
+   ## attempt, moves: its unsubmitted children follow it to a reachable member.
    $reach = $reachable();
-   if ( $pinned !== null && isset( $reach[ $pinned ] ) && $reach[ $pinned ] === false
-        && dispatch_batch_unpin( $link, $db, $req[ 'parentBatchKey' ], $pinned ) ) {
+   if ( $pinned !== null
+        && ( ( isset( $reach[ $pinned ] ) && $reach[ $pinned ] === false )
+             || dispatch_request_unreachable_at( $link, $db, $id ) === $pinned ) ) {
+      dispatch_batch_unpin( $link, $db, $req[ 'parentBatchKey' ], $pinned );
       $pinned = null;
    }
 
@@ -429,14 +432,21 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          return 'lost';
       }
       if ( ! $staged[ 'ok' ] ) {
-         return $staged[ 'transient' ] ? $wait( DISPATCH_STAGING, $staged[ 'reason' ],
-                                                isset( $staged[ 'code' ] ) ? $staged[ 'code' ] : 'unreachable' )
+         $code = isset( $staged[ 'code' ] ) ? $staged[ 'code' ] : 'unreachable';
+         ## An unreachable batch member re-pins the batch now, so its children move without waiting out a backoff.
+         if ( $staged[ 'transient' ] && $code === 'unreachable' && $req[ 'parentBatchKey' ] !== null ) {
+            $result = $settle( DISPATCH_STAGING, DISPATCH_WAITING, $staged[ 'reason' ],
+                               array( 'reasonCode' => $code, 'retry_seconds' => 0 ) );
+            dispatch_batch_unpin( $link, $db, $req[ 'parentBatchKey' ], $chosen );
+            return $result;
+         }
+         return $staged[ 'transient' ] ? $wait( DISPATCH_STAGING, $staged[ 'reason' ], $code )
                                        : $settle( DISPATCH_STAGING, DISPATCH_FAILED, $staged[ 'reason' ],
                                                   array( 'reasonCode' => 'staging_rejected' ) );
       }
 
       ## An availability choice made on an observation that aged during staging is
-      ## checked again. A batch child is pinned once staged and never reselects.
+      ## checked again. A batch child is pinned once staged and moves only with its batch.
       $obs = isset( $observations[ $chosen ] ) ? $observations[ $chosen ] : null;
       if ( $availability && $pinned === null && $req[ 'parentBatchKey' ] === null && $obs !== null
            && ! slurm_observation_is_fresh( $obs, $now(), DISPATCH_WORKER_FRESHNESS ) ) {
