@@ -89,7 +89,7 @@ class job_state_machine
       $this->us3_db     = $us3_db;
       $this->autoflowID = (int) $autoflowID;
       $this->requestID  = (int) $requestID;
-      $this->gfacRow    = is_array( $gfac_row ) ? $gfac_row : null;
+      $this->gfacRow    = is_array( $gfac_row ) && $gfac_row[ 'sql' ] !== '' ? $gfac_row : null;
 
       return $this;
    }
