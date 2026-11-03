@@ -629,7 +629,7 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
          $why = empty( $found[ 'ok' ] ) ? "$cluster could not be queried: {$found['reason']}"
               : ( $jobs ? "more than one job at $cluster carries this attempt: " . implode( ', ', $jobs )
                         : "no job at $cluster carries this attempt; acceptance is not ruled out" );
-         dispatch_reconcile_unresolved( $link, $db, $id, $generation, $why );
+         dispatch_reconcile_unresolved( $link, $db, $id, $generation, $why, $jobs ? 'job_found' : null );
          return DISPATCH_SUBMISSION_UNKNOWN;
       }
       $outcome = array( 'certainty' => SUBMIT_ACCEPTED, 'retryable' => false, 'job_id' => $jobs[ 0 ],
@@ -638,7 +638,7 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
          ## Counted as a check, so the request reaches the urgent alert instead of retrying silently.
          dispatch_reconcile_unresolved( $link, $db, $id, $generation,
                                         "job {$jobs[0]} at $cluster could not be recorded in the ledger"
-                                        . ( dispatch_last_error() !== '' ? ': ' . dispatch_last_error() : '' ) );
+                                        . ( dispatch_last_error() !== '' ? ': ' . dispatch_last_error() : '' ), 'job_found' );
          return DISPATCH_SUBMISSION_UNKNOWN;
       }
       $job = $jobs[ 0 ];
