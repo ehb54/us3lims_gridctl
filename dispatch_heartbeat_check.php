@@ -43,6 +43,19 @@ $status = dispatch_heartbeat_status( $link, 'gfac' );
 if ( $status[ 'ok' ] ) {
     exit( 0 );
 }
+## An unreadable heartbeat table (gfac's dispatch tables missing or unusable) is not "never beat":
+## the alert table is unusable too, so mail directly, once an hour.
+if ( isset( $status[ 'error' ] ) ) {
+    $detail = "the dispatch tables in gfac cannot be read ({$status['error']}); pool submissions cannot be"
+            . " dispatched until uslims_upgrade.php --apply creates or repairs them";
+    $note( $detail );
+    $stamp = dirname( $us3bin ) . '/etc/dispatch-health.mailed';
+    if ( ! is_file( $stamp ) || filemtime( $stamp ) < time() - 3600 ) {
+        $send( 'UltraScan dispatch: dispatch tables unusable', "On " . gethostname() . ": $detail. See $log.\n" );
+        touch( $stamp );
+    }
+    exit( 2 );
+}
 $detail = $status[ 'age' ] === null
         ? 'no dispatch worker has ever recorded a heartbeat; check that submitctl.php runs under us3-listen'
         : "the dispatch worker {$status['worker']} last recorded a heartbeat {$status['age']} seconds ago;"

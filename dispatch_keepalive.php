@@ -45,5 +45,8 @@ dispatch_worker_keepalive_loop( $link, 'gfac', $lims_db, (int) $dispatch_id, (in
                                     }
                                     clearstatcache( true, "/proc/$parent" );
                                     return is_dir( "/proc/$parent" );
+                                }, function () use ( $dbhost, $user, $passwd ) {
+                                    $fresh = @mysqli_connect( $dbhost, $user, $passwd, 'gfac' );
+                                    return $fresh ?: null;
                                 } );
 exit( 0 );

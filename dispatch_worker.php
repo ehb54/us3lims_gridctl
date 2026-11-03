@@ -80,8 +80,9 @@ function dispatch_worker_submit_dirs( $link, array $dbs )
 function dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, array $lanes, $lane_owner,
                                     $lease = DISPATCH_WORKER_STAGING_LEASE )
 {
-   if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
-      return false;
+   $held = dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
+   if ( $held !== true ) {
+      return $held;   ## false lost, null the database could not be asked
    }
    foreach ( $lanes as $key => $lane_generation ) {
       dispatch_controller_renew( $link, $gdb, $key, $lane_owner, $lane_generation, $lease );
@@ -89,15 +90,33 @@ function dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, 
    return true;
 }
 
-## Renew every $interval seconds while $alive() holds and the claim is still held.
+## Renew every $interval seconds while $alive() holds and the claim is still held. A failed
+## renewal is retried every few seconds, through $reconnect() when given, rather than ending the renewals.
 function dispatch_worker_keepalive_loop( $link, $gdb, $db, $id, $generation, $owner, array $lanes, $lane_owner,
-                                         $interval, callable $alive )
+                                         $interval, callable $alive, $reconnect = null )
 {
+   $wait = (int) $interval;
    while ( true ) {
-      sleep( (int) $interval );
-      if ( ! $alive() || ! dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, $lanes, $lane_owner ) ) {
+      sleep( $wait );
+      if ( ! $alive() ) {
          return;
       }
+      $held = dispatch_worker_keepalive( $link, $gdb, $db, $id, $generation, $owner, $lanes, $lane_owner );
+      if ( $held === false ) {
+         return;
+      }
+      if ( $held === null ) {
+         error_log( "dispatch keepalive for $db request $id: renewal failed (" . dispatch_last_error() . "); retrying" );
+         if ( is_callable( $reconnect ) ) {
+            $fresh = $reconnect();
+            if ( $fresh ) {
+               $link = $fresh;
+            }
+         }
+         $wait = min( 5, (int) $interval );
+         continue;
+      }
+      $wait = (int) $interval;
    }
 }
 
@@ -178,15 +197,16 @@ function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
 }
 
 /** Take every lane in $keys or none: array of key => generation, or null when one is held elsewhere. */
+## Every lane in $keys, or null while another owner holds one, or false when the database could not be asked.
 function dispatch_worker_take_lanes( $link, $gdb, array $keys, $owner, $lease )
 {
    $held = array();
    sort( $keys );
    foreach ( array_unique( $keys ) as $key ) {
       $gen = dispatch_controller_claim( $link, $gdb, $key, $owner, $lease );
-      if ( $gen === 0 ) {
+      if ( ! $gen ) {
          dispatch_worker_release_lanes( $link, $gdb, $held, $owner );
-         return null;
+         return $gen === null ? false : null;   ## false: the database could not be asked
       }
       $held[ $key ] = $gen;
    }
@@ -309,7 +329,25 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          }
       }
    }
+   ## gfac's coordination tables unusable (missing, no privilege, a failed statement) is not a busy
+   ## pool: the submitter is told so and the operator gets an urgent item.
+   $unavailable = function () use ( $settle, $link, $gdb, $db, $id ) {
+      $error = dispatch_last_error();
+      if ( function_exists( 'dispatch_alert_raise' ) ) {
+         dispatch_alert_raise( $link, $gdb, 'dispatch_database', 'dispatch_database', 'urgent', null, null,
+                               "the dispatch worker could not use gfac's dispatch tables: $error",
+                               array( $db => array( $id ) ) );
+      }
+      error_log( "dispatch $db request $id: gfac dispatch tables unusable: $error" );
+      return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING,
+                      'Waiting: the dispatch service cannot use its database. The problem is listed for the administrator.',
+                      array( 'retry_seconds' => 300, 'reasonCode' => 'dispatch_unavailable' ) );
+   };
    $lanes = dispatch_worker_take_lanes( $link, $gdb, $keys, $lane_owner, $lease );
+   if ( $lanes === false ) {
+      $lanes = array();
+      return $unavailable();
+   }
    if ( $lanes === null ) {
       $lanes = array();
       return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
@@ -345,6 +383,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       ## A reselection after staging takes the rotation lane again.
       if ( ! isset( $lanes[ $rotation_lane ] ) ) {
          $again = dispatch_worker_take_lanes( $link, $gdb, array( $rotation_lane ), $lane_owner, $lease );
+         if ( $again === false ) {
+            return $unavailable();
+         }
          if ( $again === null ) {
             return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
                             array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
@@ -416,7 +457,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       dispatch_renew( $link, $db, $id, $generation, $owner, max( $lease, DISPATCH_WORKER_STAGING_LEASE ) );
       foreach ( array_keys( $lanes ) as $key ) {
          $lanes[ $key ] = dispatch_controller_claim( $link, $gdb, $key, $lane_owner, max( $lease, DISPATCH_WORKER_STAGING_LEASE ) );
-         if ( $lanes[ $key ] === 0 ) {
+         if ( ! $lanes[ $key ] ) {
             unset( $lanes[ $key ] );
          }
       }
@@ -427,7 +468,15 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       if ( is_callable( $stop_keepalive ) ) {
          $stop_keepalive();
       }
-      if ( ! dispatch_renew( $link, $db, $id, $generation, $owner, $lease ) ) {
+      ## A failed renewal is asked again before the claim is given up as lost.
+      $held = null;
+      for ( $try = 0; $held === null && $try < 5; $try++ ) {
+         $held = dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
+         if ( $held === null ) {
+            sleep( 2 );
+         }
+      }
+      if ( $held !== true ) {
          dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
          return 'lost';
       }
