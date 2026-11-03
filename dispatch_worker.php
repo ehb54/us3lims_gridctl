@@ -263,6 +263,17 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    if ( $pinned === null ) {
       $pinned = dispatch_batch_pin( $link, $db, $req[ 'parentBatchKey' ] );
    }
+   $reachable = function () use ( $link, $db, $io ) {
+      return ( isset( $io[ 'reachable' ] ) ? $io[ 'reachable' ] : array() )
+             + dispatch_recently_unreachable( $link, $db, isset( $io[ 'unreachable_seconds' ] )
+                                              ? (int) $io[ 'unreachable_seconds' ] : DISPATCH_WORKER_UNREACHABLE_SECONDS );
+   };
+   ## A batch pinned to an unreachable member moves while nothing of it was staged or submitted there.
+   $reach = $reachable();
+   if ( $pinned !== null && isset( $reach[ $pinned ] ) && $reach[ $pinned ] === false
+        && dispatch_batch_unpin( $link, $db, $req[ 'parentBatchKey' ], $pinned ) ) {
+      $pinned = null;
+   }
 
    $usable = array_values( array_filter( $members, function ( $m ) use ( $auth, $policy, $pinned ) {
       return ! empty( $auth[ $m ][ 'authorized' ] ) && ! isset( $policy[ 'ineligible' ][ $m ] )
@@ -293,9 +304,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       }
       $decision = dispatch_select( array(
          'policy' => $policy, 'plans' => $plans, 'observations' => $observations, 'authorized' => $auth,
-         'reachable' => ( isset( $io[ 'reachable' ] ) ? $io[ 'reachable' ] : array() )
-                        + dispatch_recently_unreachable( $link, $db, isset( $io[ 'unreachable_seconds' ] )
-                                                         ? (int) $io[ 'unreachable_seconds' ] : DISPATCH_WORKER_UNREACHABLE_SECONDS ),
+         'reachable' => $round === 0 ? $reach : $reachable(),
          'operator' => isset( $io[ 'operator' ] ) ? $io[ 'operator' ] : array(),
          'rotation' => $rotation, 'pinned' => $pinned,
       ) );
