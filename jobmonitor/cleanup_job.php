@@ -251,8 +251,14 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    list( $HPCAnalysisResultID, $gfacID, $endtime ) = mysqli_fetch_array( $result );
 
    ## The caller's connection already reaches the central job-tracking database.
+   $row_sql = job_row_condition( $db_handle, $gfacID, $exec_cluster, $requestID );
+   if ( $row_sql === null )
+   {
+      write_logld( "$me: could not tell which gfac.analysis row is $gfacID's - will retry" );
+      return( 0 );
+   }
    $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'" . job_row_condition( $db_handle, $gfacID, $exec_cluster, $requestID );
+            "WHERE gfacID='$gfacID'" . $row_sql;
    $key   = job_key( $gfacID, $exec_cluster );
 
    $result = mysqli_query( $db_handle, $query );
