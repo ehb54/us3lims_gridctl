@@ -195,7 +195,12 @@ open_db_or_retry();
 write_logld( "db opened" );
 
 ## This job's own gfac.analysis row: its cluster when given, and its request where the table records it.
-$job_row_sql = job_row_condition( $db_handle, $gfacID, $job_cluster, $hpcrid );
+## Asked again after a blip: without it the monitor would poll and write another job's row.
+while ( ( $job_row_sql = job_row_condition( $db_handle, $gfacID, $job_cluster, $hpcrid ) ) === null ) {
+    write_logld( "could not tell which gfac.analysis row is this job's; retrying in 30s" );
+    sleep( 30 );
+    open_db_or_retry();
+}
 
 # Load the current central job-tracking row.
 

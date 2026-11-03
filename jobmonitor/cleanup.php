@@ -28,8 +28,13 @@ const CLEANUP_FINALIZING_INTERRUPTED = -2;
 ## 1 finalized / nothing to do.
 function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn, $cluster = '', $requestID = 0 )
 {
-   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'"
-           . job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $analysis_table );
+   $row_sql = job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $analysis_table );
+   if ( $row_sql === null )
+   {
+      $log_fn( "could not tell which gfac.analysis row is $gfacID's - will retry" );
+      return 0;
+   }
+   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'" . $row_sql;
    $result = mysqli_query( $db_handle, $query );
 
    if ( ! $result )
@@ -122,7 +127,8 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 ## The job's own row among gfac.analysis rows sharing its job number (a reset controller reuses
 ## numbers, two clusters can issue the same one): its execution cluster when known and, where the
 ## table records the request, its request's row; a row from before that column (NULL) only when
-## none carries the request. Appended to "WHERE gfacID=...".
+## there is one and none carries the request. Appended to "WHERE gfacID=...". null when the
+## database could not be asked, so a caller retries instead of acting on another job's row.
 function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 'gfac.analysis' )
 {
    static $has_column = array();
@@ -138,7 +144,7 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
       $res = mysqli_query( $db_handle, "SHOW COLUMNS FROM $table LIKE 'HPCAnalysisRequestID'" );
       if ( ! $res )
       {
-         return $sql;
+         return null;
       }
       $has_column[ $table ] = mysqli_num_rows( $res ) > 0;
    }
@@ -146,11 +152,16 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
    {
       return $sql;
    }
-   $own = mysqli_query( $db_handle, "SELECT 1 FROM $table WHERE gfacID='"
-                        . mysqli_real_escape_string( $db_handle, $gfacID ) . "'$sql AND HPCAnalysisRequestID = "
-                        . (int) $requestID . " LIMIT 1" );
-   return $sql . ( $own && mysqli_num_rows( $own ) > 0 ? " AND HPCAnalysisRequestID = " . (int) $requestID
-                                                       : " AND HPCAnalysisRequestID IS NULL" );
+   $own = $sql . " AND HPCAnalysisRequestID = " . (int) $requestID;
+   $res = mysqli_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = " . (int) $requestID . "), SUM(HPCAnalysisRequestID IS NULL)"
+                        . " FROM $table WHERE gfacID='" . mysqli_real_escape_string( $db_handle, $gfacID ) . "'$sql" );
+   $row = $res ? mysqli_fetch_row( $res ) : null;
+   if ( ! $row )
+   {
+      return null;
+   }
+   ## The own row gone (already finalized) matches nothing rather than another job's NULL row.
+   return (int) $row[ 0 ] === 0 && (int) $row[ 1 ] > 0 ? $sql . " AND HPCAnalysisRequestID IS NULL" : $own;
 }
 
 function cleanup_job_dir( $us3_db, $gfacID )
