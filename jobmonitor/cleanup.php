@@ -132,6 +132,10 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 'gfac.analysis' )
 {
    static $has_column = array();
+   if ( ! preg_match( '/^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)?$/', $table ) )
+   {
+      return null;
+   }
    $sql = (string) $cluster === '' ? ''
         : " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
           . mysqli_real_escape_string( $db_handle, $cluster ) . "'";
@@ -141,7 +145,7 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
    }
    if ( ! isset( $has_column[ $table ] ) )
    {
-      $res = mysqli_query( $db_handle, "SHOW COLUMNS FROM $table LIKE 'HPCAnalysisRequestID'" );
+      $res = mysqli_query( $db_handle, "SHOW COLUMNS FROM $table LIKE 'HPCAnalysisRequestID'" ); // NOSONAR $table is checked above
       if ( ! $res )
       {
          return null;
@@ -153,7 +157,7 @@ function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 
       return $sql;
    }
    $own = $sql . " AND HPCAnalysisRequestID = " . (int) $requestID;
-   $res = mysqli_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = " . (int) $requestID . "), SUM(HPCAnalysisRequestID IS NULL)"
+   $res = mysqli_query( $db_handle, "SELECT SUM(HPCAnalysisRequestID = " . (int) $requestID . "), SUM(HPCAnalysisRequestID IS NULL)" // NOSONAR $table is checked above
                         . " FROM $table WHERE gfacID='" . mysqli_real_escape_string( $db_handle, $gfacID ) . "'$sql" );
    $row = $res ? mysqli_fetch_row( $res ) : null;
    if ( ! $row )
