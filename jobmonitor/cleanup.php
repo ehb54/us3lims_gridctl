@@ -26,9 +26,10 @@ const CLEANUP_FINALIZING_INTERRUPTED = -2;
 ## Returns -2 (CLEANUP_FINALIZING_INTERRUPTED) the worker died mid-span and the
 ## marker survives for --restart, -1 terminal, 0 retry (not yet finalizable),
 ## 1 finalized / nothing to do.
-function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn )
+function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table, $log_fn, $cluster = '', $requestID = 0 )
 {
-   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'";
+   $query  = "SELECT count(*) FROM $analysis_table WHERE gfacID='$gfacID'"
+           . job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $analysis_table );
    $result = mysqli_query( $db_handle, $query );
 
    if ( ! $result )
@@ -88,7 +89,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       }
 
       $log_fn( "calling job_cleanup() reqID=$requestID" );
-      $outcome = job_cleanup( $us3_db, $requestID, $db_handle );
+      $outcome = job_cleanup( $us3_db, $requestID, $db_handle, $cluster );
 
       ## Terminal either way means the stage has been written, so the finalizing
       ## span is over. One place rather than every exit path in job_cleanup: what
@@ -118,6 +119,40 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
 ## Per-job directory under the job log tree; jobmonitor.php's $lock_dir.
 ## uslims_jobs.php, which scans these directories, does not set $ll_base_dir.
+## The job's own row among gfac.analysis rows sharing its job number (a reset controller reuses
+## numbers, two clusters can issue the same one): its execution cluster when known and, where the
+## table records the request, its request's row; a row from before that column (NULL) only when
+## none carries the request. Appended to "WHERE gfacID=...".
+function job_row_condition( $db_handle, $gfacID, $cluster, $requestID, $table = 'gfac.analysis' )
+{
+   static $has_column = array();
+   $sql = (string) $cluster === '' ? ''
+        : " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
+          . mysqli_real_escape_string( $db_handle, $cluster ) . "'";
+   if ( (int) $requestID <= 0 )
+   {
+      return $sql;
+   }
+   if ( ! isset( $has_column[ $table ] ) )
+   {
+      $res = mysqli_query( $db_handle, "SHOW COLUMNS FROM $table LIKE 'HPCAnalysisRequestID'" );
+      if ( ! $res )
+      {
+         return $sql;
+      }
+      $has_column[ $table ] = mysqli_num_rows( $res ) > 0;
+   }
+   if ( ! $has_column[ $table ] )
+   {
+      return $sql;
+   }
+   $own = mysqli_query( $db_handle, "SELECT 1 FROM $table WHERE gfacID='"
+                        . mysqli_real_escape_string( $db_handle, $gfacID ) . "'$sql AND HPCAnalysisRequestID = "
+                        . (int) $requestID . " LIMIT 1" );
+   return $sql . ( $own && mysqli_num_rows( $own ) > 0 ? " AND HPCAnalysisRequestID = " . (int) $requestID
+                                                       : " AND HPCAnalysisRequestID IS NULL" );
+}
+
 function cleanup_job_dir( $us3_db, $gfacID )
 {
    global $ll_base_dir;
@@ -806,7 +841,7 @@ write_logld( "$me:  es-tarfile size: $lenf");
             "stderr='"  . $esstde . "'," .
             "stdout='"  . $esstdo . "'," .
             "tarfile='" . $estarf . "'" .
-            "WHERE gfacID='$gfacID'";
+            "WHERE id='" . (int) $id . "'";
             ;
 
    $result = mysqli_query( $db_handle, $query );

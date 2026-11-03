@@ -64,6 +64,8 @@ class job_state_machine
 
    ## Per job, set by for_job().
    private $gfacID     = '';
+   private $requestID  = 0;
+   private $gfacRow    = '';
    private $cluster    = '';
    private $us3_db     = '';
    private $autoflowID = 0;
@@ -77,12 +79,16 @@ class job_state_machine
       $this->mailer      = $mailer;
    }
 
-   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID )
+   ## $requestID is the job's own request; $gfac_row the job_row_condition() fixing its gfac.analysis row
+   ## when other rows share its number.
+   public function for_job( $gfacID, $cluster, $us3_db, $autoflowID, $requestID = 0, $gfac_row = '' )
    {
       $this->gfacID     = $gfacID;
       $this->cluster    = $cluster;
       $this->us3_db     = $us3_db;
       $this->autoflowID = (int) $autoflowID;
+      $this->requestID  = (int) $requestID;
+      $this->gfacRow    = (string) $gfac_row;
 
       return $this;
    }
@@ -140,6 +146,12 @@ class job_state_machine
    private function us3_table( $name )
    {
       return $this->us3_db . '.' . $name;
+   }
+
+   ## This job's gfac.analysis row.
+   private function gfac_job_where()
+   {
+      return " WHERE gfacID='{$this->gfacID}'" . $this->gfacRow;
    }
 
    ## Best-effort: log a failed statement rather than abort the daemon.
@@ -307,7 +319,7 @@ class job_state_machine
       ## cadence rather than every poll.
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -348,7 +360,7 @@ class job_state_machine
       ## poll instead of once per window.
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$enum_status', time=NOW()"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $this->update_queue_messages( $message );
       $this->update_db( $message );
@@ -514,7 +526,7 @@ class job_state_machine
 
       $this->exec( $this->gfac,
          "UPDATE " . $this->gfac_table( 'analysis' ) . " SET status='$status'"
-         . " WHERE gfacID='{$this->gfacID}'" );
+         . $this->gfac_job_where() );
 
       $message = $this->status_message( $status );
 
@@ -547,14 +559,14 @@ class job_state_machine
 
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT status FROM $analysis WHERE gfacID='{$this->gfacID}'" );
+         "SELECT status FROM $analysis" . $this->gfac_job_where() );
       $row      = $result ? $this->fetch_row( $result ) : null;
 
       if ( $row && $row[ 0 ] === $status )
          return $status;
 
       $this->exec( $this->gfac,
-         "UPDATE $analysis SET status='$status' WHERE gfacID='{$this->gfacID}'" );
+         "UPDATE $analysis SET status='$status'" . $this->gfac_job_where() );
 
       $message = $this->status_message( $status );
 
@@ -588,7 +600,7 @@ class job_state_machine
    {
       $analysis = $this->gfac_table( 'analysis' );
       $result   = $this->exec( $this->gfac,
-         "SELECT id FROM $analysis WHERE gfacID = '{$this->gfacID}'" );
+         "SELECT id FROM $analysis" . $this->gfac_job_where() );
 
       if ( ! $result )
          return;
@@ -636,6 +648,9 @@ class job_state_machine
    ## resolve_and_cleanup_job()) already distinguishes all three.
    public function get_us3_data()
    {
+      if ( $this->requestID > 0 )
+         return $this->requestID;
+
       $us3 = $this->us3_link();
 
       if ( ! $us3 )
@@ -791,7 +806,9 @@ class job_state_machine
       ## would fall through to the stale row, which is the bug again.
       $found = $this->exec( $us3,
          "SELECT HPCAnalysisResultID FROM $table"
-         . " WHERE gfacID='{$this->gfacID}' ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
+         . " WHERE gfacID='{$this->gfacID}'"
+         . ( $this->requestID > 0 ? " AND HPCAnalysisRequestID='{$this->requestID}'" : '' )
+         . " ORDER BY HPCAnalysisResultID DESC LIMIT 1" );
 
       ## The query itself failing is a real problem (false); finding no
       ## matching row is not (true) -- a non-autoflow job that predates this

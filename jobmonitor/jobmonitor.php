@@ -194,12 +194,10 @@ open_db_or_retry();
 
 write_logld( "db opened" );
 
-# Load the current central job-tracking row.
+## This job's own gfac.analysis row: its cluster when given, and its request where the table records it.
+$job_row_sql = job_row_condition( $db_handle, $gfacID, $job_cluster, $hpcrid );
 
-$job_cluster_sql = $job_cluster === ''
-    ? ''
-    : " AND COALESCE(NULLIF(metaschedulerClusterExecuting, ''), cluster)='"
-      . mysqli_real_escape_string( $db_handle, $job_cluster ) . "'";
+# Load the current central job-tracking row.
 
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
@@ -218,7 +216,7 @@ if (
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
                      . " where gfacID = \"$gfacID\""
-                     . $job_cluster_sql
+                     . $job_row_sql
                      ,false
                      ,true
       ) ) ) {
@@ -260,7 +258,7 @@ while( 1 ) {
                      . " ,time"
                      . " from gfac.analysis"
                      . " where gfacID = ?"
-                     . $job_cluster_sql );
+                     . $job_row_sql );
 
     $poll_result = $poll_statement
                  && mysqli_stmt_bind_param( $poll_statement, 's', $gfacID )

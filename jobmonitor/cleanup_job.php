@@ -112,7 +112,9 @@ function finalizing_retry_wait_schedule()
    return $schedule;
 }
 
-function job_cleanup( $us3_db, $reqID, $db_handle )
+## $exec_cluster is the job's execution cluster when known; with the request it fixes which
+## gfac.analysis row is this job's when other rows share its number.
+function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 {
    global $dbhost;
    global $user;
@@ -250,7 +252,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## The caller's connection already reaches the central job-tracking database.
    $query = "SELECT status, cluster, id FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
+            "WHERE gfacID='$gfacID'" . job_row_condition( $db_handle, $gfacID, $exec_cluster, $requestID );
 
    $result = mysqli_query( $db_handle, $query );
    if ( ! $result )
@@ -308,7 +310,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    }
 
    $query = "SELECT id, stderr, stdout, tarfile FROM gfac.analysis " .
-            "WHERE gfacID='$gfacID'";
+            "WHERE id='" . (int) $id . "'";
 
    $result = mysqli_query( $db_handle, $query );
 
@@ -441,7 +443,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
 
    ## Save stdout, stderr, etc. for message log
    $query  = "SELECT stdout, stderr, status, queue_msg, autoflowAnalysisID FROM gfac.analysis " .
-             "WHERE gfacID='$gfacID' ";
+             "WHERE id='" . (int) $id . "' ";
    $result = mysqli_query( $db_handle, $query );
    $autoflowAnalysisID = 0;
    try
@@ -478,7 +480,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle )
    cleanup_finalizing_begin( $us3_db, $gfacID, $autoflowAnalysisID, $requestID );
 
    ## Delete the completed central job-tracking records.
-   $query = "DELETE from gfac.analysis WHERE gfacID='$gfacID'";
+   $query = "DELETE from gfac.analysis WHERE id='" . (int) $id . "'";
 
    $result = mysqli_query( $db_handle, $query );
 
