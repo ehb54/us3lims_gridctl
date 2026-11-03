@@ -429,7 +429,8 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          return 'lost';
       }
       if ( ! $staged[ 'ok' ] ) {
-         return $staged[ 'transient' ] ? $wait( DISPATCH_STAGING, $staged[ 'reason' ], 'unreachable' )
+         return $staged[ 'transient' ] ? $wait( DISPATCH_STAGING, $staged[ 'reason' ],
+                                                isset( $staged[ 'code' ] ) ? $staged[ 'code' ] : 'unreachable' )
                                        : $settle( DISPATCH_STAGING, DISPATCH_FAILED, $staged[ 'reason' ],
                                                   array( 'reasonCode' => 'staging_rejected' ) );
       }
