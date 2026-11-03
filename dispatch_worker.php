@@ -45,6 +45,35 @@ function dispatch_worker_busy_instances( $link, array $dbs )
    } ) );
 }
 
+## Seconds until the earliest unclaimed request of $dbs may be claimed (0: now), or null when none waits.
+function dispatch_worker_next_due( $link, array $dbs )
+{
+   $next = null;
+   foreach ( $dbs as $db ) {
+      $rows = dispatch_rows( $link, "SELECT GREATEST(0, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(),
+            MIN(COALESCE(retryAt, UTC_TIMESTAMP())))) s
+         FROM `$db`.dispatch_request WHERE state IN ('PENDING','WAITING') AND batchSealed = 1 AND deadlineAt > UTC_TIMESTAMP()" );
+      if ( $rows && $rows[ 0 ][ 's' ] !== null ) {
+         $next = $next === null ? (int) $rows[ 0 ][ 's' ] : min( $next, (int) $rows[ 0 ][ 's' ] );
+      }
+   }
+   return $next;
+}
+
+## The submission directories pool intakes write to, from each instance's newest request.
+function dispatch_worker_submit_dirs( $link, array $dbs )
+{
+   $dirs = array();
+   foreach ( $dbs as $db ) {
+      $rows = dispatch_rows( $link, "SELECT inputRef FROM `$db`.dispatch_request WHERE inputRef <> ''
+         ORDER BY dispatchRequestID DESC LIMIT 1" );
+      if ( $rows ) {
+         $dirs[] = dirname( dirname( $rows[ 0 ][ 'inputRef' ] ) );
+      }
+   }
+   return array_values( array_unique( $dirs ) );
+}
+
 ## Waits that count toward the backoff: a bounce off another decision for the pool is not one.
 function dispatch_worker_waits( $link, $db, $id )
 {

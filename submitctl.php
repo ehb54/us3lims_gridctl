@@ -118,6 +118,40 @@ function reap_children( $kind = 'dispatch' ) {
     return count( array_keys( (array) $child_kinds, $kind, true ) );
 }
 
+## Seconds to sleep when a pass found nothing to do: 1 while work is expected any moment,
+## until the next pool retry when it is due within the poll, else the full poll.
+function idle_nap_seconds( $poll, $autoflow_waiting, $autoflow_running, $next_due, $after_submission ) {
+    if ( $autoflow_waiting || $autoflow_running > 0 || $after_submission ) {
+        return 1;
+    }
+    return $next_due === null ? $poll : max( 1, min( $poll, (int) $next_due ) );
+}
+
+## Sleep up to $seconds; returns true early when a directory in $watch_dirs changes (a new submission's directory).
+function idle_nap( $seconds, $watch_dirs, callable $tick = null ) {
+    ## mtime has 1 s resolution; a new subdirectory also changes the link count.
+    $mark = function () use ( $watch_dirs ) {
+        $out = array();
+        foreach ( array_filter( (array) $watch_dirs, 'strlen' ) as $dir ) {
+            clearstatcache( true, $dir );
+            $st = @stat( $dir );
+            $out[ $dir ] = $st ? array( $st[ 'mtime' ], $st[ 'nlink' ], $st[ 'size' ] ) : false;
+        }
+        return $out;
+    };
+    $seen = $mark();
+    for ( $i = 0; $i < $seconds; $i++ ) {
+        if ( $tick !== null ) {
+            $tick();
+        }
+        sleep( 1 );
+        if ( $seen && $mark() !== $seen ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function quote_fix( $str ) {
     return str_replace( "'", "*", $str );
 }
@@ -262,6 +296,13 @@ $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $globa
 $max_autoflow_children = isset( $global_autoflow_submit_children ) ? max( 1, (int) $global_autoflow_submit_children ) : 32;
 $dispatch_dbs = dispatch_worker_instances( $db_handle );
 $dispatch_dbs_read = time();
+## Each submission creates a directory here; a change ends the idle sleep.
+$submit_watch_dirs = function ( array $dbs ) use ( &$db_handle ) {
+    global $submit_dir;
+    return array_values( array_unique( array_merge( isset( $submit_dir ) ? array( rtrim( (string) $submit_dir, '/' ) ) : array(),
+                                                    dispatch_worker_submit_dirs( $db_handle, $dbs ) ) ) );
+};
+$watch_dirs = $submit_watch_dirs( $dispatch_dbs );
 $dispatch_owner = gethostname() . ':' . getmypid();
 $org_name     = isset( $org_name ) ? $org_name : 'UltraScan';
 $site_admin_send = dispatch_site_admin_sender(
@@ -285,6 +326,7 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
 };
 $last_purge   = 0;
 $last_housekeeping = 0;
+$submission_grace_until = 0;
 write_logls( "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
 
@@ -297,6 +339,7 @@ while( 1 ) {
     ## An instance created after start, once it has the dispatch tables, is served from the next minute.
     if ( time() - $dispatch_dbs_read >= 60 ) {
         $dispatch_dbs = dispatch_worker_instances( $db_handle );
+        $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
         $dispatch_dbs_read = time();
     }
 
@@ -516,10 +559,15 @@ while( 1 ) {
         }
     }
     if ( !$work_done ) {
-        ## A stage waiting for a free autoflow slot is checked again in a second, not a full poll.
-        $nap = $autoflow_waiting ? 1 : $poll_sleep_seconds;
+        ## A pool stage is taken about as fast as a direct one: the nap ends when a request is due,
+        ## and a new submission directory starts a short run of 1 s passes for its intake.
+        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, reap_children( 'autoflow' ),
+                                 $busy_dbs ? dispatch_worker_next_due( $db_handle, $busy_dbs ) : null,
+                                 time() < $submission_grace_until );
         write_logls( "no requests to process sleeping {$nap}s", 2 );
-        sleep( $nap );
+        if ( idle_nap( $nap, $watch_dirs ) ) {
+            $submission_grace_until = time() + 15;
+        }
     }
 }
 
