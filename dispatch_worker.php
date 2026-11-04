@@ -687,6 +687,10 @@ function dispatch_worker_track( $link, $db, $id, $generation, array $plan, $job_
 {
    $ok = isset( $io[ 'track' ] ) && $io[ 'track' ]( $plan, $job_id );
    if ( $ok && dispatch_mark_monitored( $link, $db, $id, "tracking recorded and monitor attached$note" ) ) {
+      ## After the move, which succeeds once: one record per request, and a failure here costs only the record.
+      if ( isset( $io[ 'advise' ] ) ) {
+         $io[ 'advise' ]( $job_id );
+      }
       $req = dispatch_get( $link, $db, $id );
       return (int) $req[ 'cancelRequested' ] === 1
            ? dispatch_worker_deliver_cancel( $link, $db, $id, (int) $req[ 'claimGeneration' ], $plan[ 'cluster' ], $job_id, $io )

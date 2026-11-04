@@ -150,6 +150,12 @@ $io = array(
         $loaded = $load_job();
         return ! is_string( $loaded ) && $loaded->track_accepted( $job_id, $plan );
     },
+    'advise' => function ( $job_id ) use ( $load_job ) {
+        $loaded = $load_job();
+        if ( ! is_string( $loaded ) ) {
+            $loaded->observe_accepted( $job_id );
+        }
+    },
     ## Jobs at $cluster carrying the attempt token in their comment. --states=all keeps a job that
     ## already finished (within MinJobAge); an empty answer still never proves nonacceptance.
     'find' => function ( $cluster, $token ) use ( $global_cluster_details ) {
