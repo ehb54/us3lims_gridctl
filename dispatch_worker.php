@@ -7,6 +7,7 @@
  * slurm_assessment.php loaded. PHP 7.2 compatible. */
 
 require_once __DIR__ . '/dispatch_select.php';
+require_once __DIR__ . '/dispatch_policy.php';
 
 const DISPATCH_WORKER_LEASE_SECONDS   = 120;
 const DISPATCH_WORKER_LANE_RETRY      = 10;
@@ -18,6 +19,8 @@ const DISPATCH_WORKER_UNREACHABLE_SECONDS = 300;
 const DISPATCH_WORKER_STAGING_LEASE = 960;
 ## How often a staging keepalive renews the claim and its lanes.
 const DISPATCH_WORKER_KEEPALIVE_SECONDS = 60;
+## How long a renewal after a finished copy is retried before the copy is given up on.
+const DISPATCH_WORKER_RENEW_RETRY_SECONDS = 300;
 const DISPATCH_WORKER_BUSY_REASON = 'another dispatch decision for this pool is in progress';
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
@@ -30,31 +33,100 @@ function dispatch_spool_dir()
    return ( $info ? $info[ 'dir' ] : '/home/us3' ) . '/lims/etc/dispatch-spool';
 }
 
-## Instance databases holding the dispatch tables.
-## Whether global_config.php's cluster list has any metascheduler pool. Without one the
-## dispatch worker has nothing to do and the daemon runs as 4.2.0 did.
-function dispatch_worker_pools_configured( $cluster_details )
+## Whether $config has an active metascheduler pool, read in its own process; null when it can't be read.
+function dispatch_worker_read_active_pools( $config )
 {
-   foreach ( (array) $cluster_details as $entry ) {
-      if ( is_array( $entry ) && isset( $entry[ 'clusters' ] ) && is_array( $entry[ 'clusters' ] ) ) {
-         return true;
-      }
-   }
-   return false;
+   exec( escapeshellarg( PHP_BINARY ) . ' ' . escapeshellarg( __DIR__ . '/dispatch_active_pools.php' ) . ' '
+         . escapeshellarg( $config ) . ' 2>/dev/null', $out, $code );
+   return $code === 0 && isset( $out[ 0 ] ) && ( $out[ 0 ] === '0' || $out[ 0 ] === '1' ) ? $out[ 0 ] === '1' : null;
 }
 
+/**
+ * Whether the dispatch worker runs, and for which instances. It runs while global_config.php has an
+ * active pool or a request accepted earlier is unfinished, so every accepted request is settled
+ * whatever the pool list says now; otherwise the daemon runs as 4.2.0 did. The file is read again
+ * when its mtime changes, which costs no statement while nothing changes, and hourly while stopped,
+ * for a request whose intake committed just after the worker stopped. A failed instance list says
+ * nothing about the requests: the state stays and is asked again on the next pass. Returns the new
+ * state: mtime (null: not settled), checked, active, on, dbs. $read and $instances are for tests.
+ */
+function dispatch_worker_pool_state( $link, $config, array $state = null, callable $read = null, callable $instances = null )
+{
+   clearstatcache( true, $config );
+   $mtime = @filemtime( $config );
+   if ( $state !== null && $state[ 'mtime' ] === $mtime && ( $state[ 'on' ] || time() - $state[ 'checked' ] < 3600 ) ) {
+      return $state;
+   }
+   $active = ( $read !== null ? $read : 'dispatch_worker_read_active_pools' )( $config );
+   if ( $active === null ) {
+      error_log( "dispatch: could not read the pool list from $config; keeping the previous one" );
+      $active = $state !== null ? $state[ 'active' ] : true;
+   }
+   $dbs = $instances !== null ? $instances() : dispatch_worker_instances( $link );
+   if ( $dbs === null ) {
+      return array( 'mtime' => null, 'checked' => time(), 'active' => $active,
+                    'on' => $state !== null ? $state[ 'on' ] : true, 'dbs' => $state !== null ? $state[ 'dbs' ] : array() );
+   }
+   $on = $active || dispatch_worker_busy_instances( $link, $dbs );
+   return array( 'mtime' => $mtime, 'checked' => time(), 'active' => $active, 'on' => $on, 'dbs' => $on ? $dbs : array() );
+}
+
+## The worker stops once no active pool is left and the last accepted request has finished.
+function dispatch_worker_pool_state_settled( array $state, array $busy_dbs )
+{
+   if ( $state[ 'on' ] && ! $state[ 'active' ] && ! $busy_dbs && $state[ 'mtime' ] !== null ) {
+      $state[ 'on' ] = false;
+      $state[ 'dbs' ] = array();
+   }
+   return $state;
+}
+
+## A file the running worker keeps while it records heartbeats, so the heartbeat check needs no database to know.
+function dispatch_worker_on_marker( $home )
+{
+   return rtrim( $home, '/' ) . '/etc/dispatch-worker.on';
+}
+
+function dispatch_worker_on_marker_set( $marker, $on )
+{
+   if ( $on ) {
+      @touch( $marker );
+   } else {
+      @unlink( $marker );
+   }
+}
+
+## Whether the heartbeat check has anything to check: the worker is expected or was left running. A pool
+## list edited moments ago waits for the next run, since the daemon notices it on its next pass.
+function dispatch_heartbeat_expected( array $cluster_details, $config, $marker, $now = null )
+{
+   $now = $now === null ? time() : (int) $now;
+   $active = false;
+   foreach ( $cluster_details as $entry ) {
+      $active = $active || ( dispatch_is_pool_entry( $entry ) && ( ! array_key_exists( 'active', $entry ) || $entry[ 'active' ] ) );
+   }
+   clearstatcache( true, $config );
+   clearstatcache( true, $marker );
+   if ( is_file( $marker ) ) {
+      return true;
+   }
+   return $active && (int) @filemtime( $config ) < $now - 120;
+}
+
+## Instance databases holding the dispatch tables.
 function dispatch_worker_instances( $link )
 {
-   $rows = dispatch_rows( $link, "SELECT TABLE_SCHEMA FROM information_schema.TABLES
+   $rows = dispatch_rows_checked( $link, "SELECT TABLE_SCHEMA FROM information_schema.TABLES
       WHERE TABLE_NAME = 'dispatch_request' AND TABLE_SCHEMA LIKE 'uslims3\\_%' ORDER BY TABLE_SCHEMA" );
-   return array_column( $rows, 'TABLE_SCHEMA' );
+   return $rows === null ? null : array_column( $rows, 'TABLE_SCHEMA' );
 }
 
 ## The instances with any request not yet finished; the others need no dispatch work this pass.
 function dispatch_worker_busy_instances( $link, array $dbs )
 {
+   ## A failed lookup counts as busy: it says nothing about the requests.
    return array_values( array_filter( $dbs, function ( $db ) use ( $link ) {
-      return dispatch_rows( $link, "SELECT 1 FROM `$db`.dispatch_request
+      return dispatch_rows_checked( $link, "SELECT 1 FROM `$db`.dispatch_request
          WHERE state NOT IN ('CLOSED','FAILED','EXPIRED','CANCELLED') LIMIT 1" ) !== array();
    } ) );
 }
@@ -343,10 +415,16 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          }
       }
    }
-   ## gfac's coordination tables unusable (missing, no privilege, a failed statement) is not a busy
-   ## pool: the submitter is told so and the operator gets an urgent item.
-   $unavailable = function () use ( $settle, $link, $gdb, $db, $id ) {
+   ## A failed statement on gfac's coordination tables is not a busy pool. Once may be a lock wait or a
+   ## dropped connection, so it retries shortly. Again means the tables are unusable (missing, no
+   ## privilege): the submitter is told so and the operator gets an urgent item.
+   $unavailable = function () use ( $settle, $link, $gdb, $db, $id, $req ) {
       $error = dispatch_last_error();
+      if ( ! in_array( $req[ 'reasonCode' ], array( 'dispatch_retrying', 'dispatch_unavailable' ), true ) ) {
+         error_log( "dispatch $db request $id: a dispatch statement failed, retrying: $error" );
+         return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, 'Waiting: the dispatch service is retrying a database operation.',
+                         array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'dispatch_retrying' ) );
+      }
       if ( function_exists( 'dispatch_alert_raise' ) ) {
          dispatch_alert_raise( $link, $gdb, 'dispatch_database', 'dispatch_database', 'urgent', null, null,
                                "the dispatch worker could not use gfac's dispatch tables: $error",
@@ -415,6 +493,9 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       foreach ( array( 'primary', 'overflow' ) as $g ) {
          $scopes[ $g ] = dispatch_rotation_scope( $db, $req[ 'pool' ], $g, $policy[ 'version' ] );
          $rotation[ $g ] = dispatch_rotation_load( $link, $gdb, $scopes[ $g ] );
+         if ( $rotation[ $g ] === null ) {
+            return $unavailable();
+         }
       }
       $decision = dispatch_select( array(
          'policy' => $policy, 'plans' => $plans, 'observations' => $observations, 'authorized' => $auth,
@@ -458,9 +539,14 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
             ? array( $gdb, $scopes[ $group ], $decision[ 'rotation' ][ $group ],
                      $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] ) : null;
       $staged_ok = dispatch_stage( $link, $db, $id, $generation, $chosen, $plan[ 'hash' ], $policy[ 'version' ], $why, $turn );
+      $stage_error = $staged_ok ? '' : dispatch_last_error();
       dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
       unset( $lanes[ $rotation_lane ] );
       if ( ! $staged_ok ) {
+         if ( $stage_error !== '' ) {
+            dispatch_last_error( $stage_error );
+            return $unavailable();
+         }
          ## The rotation lane lapsed, or a sibling pinned the batch elsewhere: decide again shortly.
          return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, DISPATCH_WORKER_BUSY_REASON,
                          array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'busy_deciding' ) );
@@ -482,13 +568,18 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       if ( is_callable( $stop_keepalive ) ) {
          $stop_keepalive();
       }
-      ## A failed renewal is asked again before the claim is given up as lost.
-      $held = null;
-      for ( $try = 0; $held === null && $try < 5; $try++ ) {
-         $held = dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
-         if ( $held === null ) {
-            sleep( 2 );
+      ## A failed renewal is asked again, through a reopened connection when $io can give one, so a
+      ## database restart does not throw away a finished copy. Only a lost claim gives it up at once.
+      $held = dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
+      $renew_until = time() + ( isset( $io[ 'renew_retry_seconds' ] ) ? (int) $io[ 'renew_retry_seconds' ] : DISPATCH_WORKER_RENEW_RETRY_SECONDS );
+      $retry_wait = 0;
+      while ( $held === null && time() < $renew_until ) {
+         sleep( $retry_wait );
+         $retry_wait = 5;
+         if ( isset( $io[ 'reconnect' ] ) && ! $io[ 'reconnect' ]() ) {
+            continue;
          }
+         $held = dispatch_renew( $link, $db, $id, $generation, $owner, $lease );
       }
       if ( $held !== true ) {
          dispatch_worker_release_lanes( $link, $gdb, $lanes, $lane_owner );
@@ -637,7 +728,8 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
          $why = empty( $found[ 'ok' ] ) ? "$cluster could not be queried: {$found['reason']}"
               : ( $jobs ? "more than one job at $cluster carries this attempt: " . implode( ', ', $jobs )
                         : "no job at $cluster carries this attempt; acceptance is not ruled out" );
-         dispatch_reconcile_unresolved( $link, $db, $id, $generation, $why, $jobs ? 'job_found' : null );
+         dispatch_reconcile_unresolved( $link, $db, $id, $generation, $why,
+                                        empty( $found[ 'ok' ] ) ? 'check_failed' : ( $jobs ? 'job_found' : 'job_absent' ) );
          return DISPATCH_SUBMISSION_UNKNOWN;
       }
       $outcome = array( 'certainty' => SUBMIT_ACCEPTED, 'retryable' => false, 'job_id' => $jobs[ 0 ],
@@ -723,11 +815,12 @@ function dispatch_orphan_upload_dirs( $link, array $dbs, $grace_seconds, $now = 
             continue;
          }
          $db = $m[ 1 ];
-         $known = dispatch_rows( $link, "SELECT 1 FROM `$db`.HPCAnalysisRequest WHERE HPCAnalysisRequestGUID = ? LIMIT 1",
-                                 's', array( basename( $dir ) ) );
-         $used = dispatch_rows( $link, "SELECT 1 FROM `$db`.dispatch_request WHERE LEFT(inputRef, ?) = ? LIMIT 1",
-                                'is', array( strlen( "$dir/" ), "$dir/" ) );
-         if ( ! $known && ! $used ) {
+         ## A failed lookup (null) says nothing about the upload, so it is kept.
+         $known = dispatch_rows_checked( $link, "SELECT 1 FROM `$db`.HPCAnalysisRequest WHERE HPCAnalysisRequestGUID = ? LIMIT 1",
+                                         's', array( basename( $dir ) ) );
+         $used = dispatch_rows_checked( $link, "SELECT 1 FROM `$db`.dispatch_request WHERE LEFT(inputRef, ?) = ? LIMIT 1",
+                                        'is', array( strlen( "$dir/" ), "$dir/" ) );
+         if ( $known === array() && $used === array() ) {
             $orphans[] = $dir;
          }
       }

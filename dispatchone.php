@@ -26,8 +26,17 @@ gridctl_require_not_root( __FILE__, 'run', implode( ' ', array_map( 'escapeshell
 
 ## Named apart from the instance code included below, which opens and closes its own $gfac_link.
 $dispatch_gdb  = 'gfac';
-$dispatch_link = mysqli_connect( $dbhost, $user, $passwd, $dispatch_gdb );
-if ( ! $dispatch_link ) {
+$dispatch_link = mysqli_init();
+## Reopens the same object, so what already holds it keeps working after a database restart.
+$dispatch_connect = function () use ( $dispatch_link, $dbhost, $user, $passwd, $dispatch_gdb ) {
+    try {
+        return @mysqli_real_connect( $dispatch_link, $dbhost, $user, $passwd, $dispatch_gdb );
+    }
+    catch ( mysqli_sql_exception $e ) {
+        return false;
+    }
+};
+if ( ! $dispatch_connect() ) {
     fwrite( STDERR, "$self: could not connect to $dbhost as $user; the claim expires and is retried\n" );
     exit( 1 );
 }
@@ -156,6 +165,7 @@ $io = array(
     'cancel' => function ( $cluster, $job_id ) {
         return cluster_probe_cancel_job( $cluster, $job_id, 'elog2', array( 'retries' => 0, 'timeout' => 15 ) );
     },
+    'reconnect' => $dispatch_connect,
     'spool' => dispatch_spool_dir(),
     'submission_blocked' => function () { return motd_isblocked(); },
     'batch_preflight' => function ( $member, array $children ) use ( $open_input ) {

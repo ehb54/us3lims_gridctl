@@ -16,8 +16,9 @@ gridctl_require_not_root( __FILE__, 'run', '' );
 include_once $class_dir . "../global_config.php";   ## $global_site_admin_email
 require_once $class_dir . 'dispatch_alerts.php';
 require_once __DIR__ . '/dispatch_worker.php';
-## Without a metascheduler pool the worker does no dispatch work and records no heartbeat.
-if ( ! dispatch_worker_pools_configured( isset( $cluster_details ) ? $cluster_details : array() ) ) {
+## With no active pool and no unfinished request the worker does no dispatch work and records no heartbeat.
+if ( ! dispatch_heartbeat_expected( isset( $cluster_details ) ? (array) $cluster_details : array(),
+                                    $class_dir . '../global_config.php', dispatch_worker_on_marker( dirname( $us3bin ) ) ) ) {
     exit( 0 );
 }
 

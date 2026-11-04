@@ -300,10 +300,13 @@ $children     = array();
 $child_kinds  = array();   ## child index => dispatch | autoflow
 $max_children = isset( $global_dispatch_worker_children ) ? max( 1, (int) $global_dispatch_worker_children ) : 4;
 $max_autoflow_children = isset( $global_autoflow_submit_children ) ? max( 1, (int) $global_autoflow_submit_children ) : 32;
-## No pool configured: no dispatch work at all (adding the first pool takes a us3-listen restart).
-$pools_configured = dispatch_worker_pools_configured( isset( $cluster_details ) ? $cluster_details : array() );
-$dispatch_dbs = $pools_configured ? dispatch_worker_instances( $db_handle ) : array();
+## No active pool and no unfinished request: no dispatch work at all. Editing the pool list needs no restart.
+$global_config_file = $class_dir . '../global_config.php';
+$dispatch_on_marker = dispatch_worker_on_marker( $home );
+$pool_state = dispatch_worker_pool_state( $db_handle, $global_config_file );
+$dispatch_dbs = $pool_state[ 'dbs' ];
 $dispatch_dbs_read = time();
+dispatch_worker_on_marker_set( $dispatch_on_marker, $pool_state[ 'on' ] );
 ## Each submission creates a directory here; a change ends the idle sleep.
 $submit_watch_dirs = function ( array $dbs ) use ( &$db_handle ) {
     global $submit_dir;
@@ -337,7 +340,7 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
 $last_purge   = 0;
 $last_housekeeping = 0;
 $submission_grace_until = 0;
-write_logls( ( $pools_configured ? '' : 'no metascheduler pool configured; ' )
+write_logls( ( $pool_state[ 'on' ] ? '' : 'no active metascheduler pool or unfinished request; ' )
              . "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
 
@@ -347,20 +350,45 @@ while( 1 ) {
     $work_done = 0;
     $autoflow_waiting = false;
 
-    ## An instance created after start, once it has the dispatch tables, is served from the next minute.
-    if ( $pools_configured && time() - $dispatch_dbs_read >= 60 ) {
-        $dispatch_dbs = dispatch_worker_instances( $db_handle );
+    ## An edited pool list takes effect here. An instance created after start, once it has the
+    ## dispatch tables, is served from the next minute.
+    $was_state = $pool_state;
+    $pool_state = dispatch_worker_pool_state( $db_handle, $global_config_file, $pool_state );
+    if ( $pool_state !== $was_state ) {
+        $dispatch_dbs = $pool_state[ 'dbs' ];
         $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
+        $dispatch_dbs_read = time();
+        dispatch_worker_on_marker_set( $dispatch_on_marker, $pool_state[ 'on' ] );
+        if ( $pool_state[ 'on' ] !== $was_state[ 'on' ] ) {
+            write_logls( "dispatch worker " . ( $pool_state[ 'on' ] ? 'started' : 'stopped' ), 1 );
+        }
+    } elseif ( $pool_state[ 'on' ] && time() - $dispatch_dbs_read >= 60 ) {
+        ## A failed list keeps the instances it has.
+        $listed = dispatch_worker_instances( $db_handle );
+        if ( $listed !== null ) {
+            $dispatch_dbs = $listed;
+            $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
+        }
         $dispatch_dbs_read = time();
     }
 
     ## Only instances with unfinished requests have dispatch work (one indexed lookup each).
     $busy_dbs = dispatch_worker_busy_instances( $db_handle, $dispatch_dbs );
+    $settled = dispatch_worker_pool_state_settled( $pool_state, $busy_dbs );
+    if ( $settled[ 'on' ] !== $pool_state[ 'on' ] ) {
+        write_logls( "dispatch worker stopped: no active pool and no unfinished request", 1 );
+        ## Its last chance to close items no request is held for any more.
+        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
+        dispatch_worker_on_marker_set( $dispatch_on_marker, false );
+        $dispatch_dbs = $settled[ 'dbs' ];
+        $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
+    }
+    $pool_state = $settled;
 
     ## Once a minute: liveness for the independent heartbeat check (stale after 300 s), then the
     ## ledger's housekeeping: finished jobs close their requests, autoflow stages show their
     ## dispatch state, long waits are flagged and operator alert items are kept current.
-    if ( $pools_configured && time() - $last_housekeeping >= 60 ) {
+    if ( $pool_state[ 'on' ] && time() - $last_housekeeping >= 60 ) {
         dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
         dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
         foreach ( $busy_dbs as $dispatch_db ) {
@@ -387,7 +415,7 @@ while( 1 ) {
 
     ## Hourly: terminal dispatch history ages out on the configured schedule,
     ## interrupted intakes are failed and their unrecorded uploads removed.
-    if ( $pools_configured && time() - $last_purge >= 3600 ) {
+    if ( $pool_state[ 'on' ] && time() - $last_purge >= 3600 ) {
         $retention = dispatch_retention_settings();
         foreach ( $dispatch_dbs as $dispatch_db ) {
             dispatch_purge_terminal( $db_handle, $dispatch_db, $retention[ 'requests' ] );
