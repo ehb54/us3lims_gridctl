@@ -98,6 +98,8 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
       $log_fn( "calling job_cleanup() reqID=$requestID" );
       $outcome = job_cleanup( $us3_db, $requestID, $db_handle, $cluster );
+      global $work;
+      job_staging_dir_remove( job_staging_dir( job_staging_root( $work, $us3_db ), $key ), $work );
 
       ## Terminal either way means the stage has been written, so the finalizing
       ## span is over. One place rather than every exit path in job_cleanup: what
@@ -193,6 +195,32 @@ function cleanup_job_dir( $us3_db, $gfacID )
 ## The values are the names on disk and must not change. A running cleanup holds
 ## its claim by filename, so renaming one during an upgrade would let a second
 ## worker take the claim and import the same results twice.
+## The root of one instance's staging directories. Job locks and cleanup claims are per
+## instance, so two instances' jobs with one number and cluster must not share a directory.
+function job_staging_root( $work, $us3_db )
+{
+   return "$work/$us3_db";
+}
+
+## Whether $free bytes hold $tar_bytes of results: the archive, what it expands to, the copy kept in
+## the submit directory and a margin. Unknown free space does not hold a job back.
+function job_staging_has_room( $tar_bytes, $free )
+{
+   return $free === false || $free >= 4 * $tar_bytes;
+}
+
+## Remove a staging directory once its job's cleanup attempt is over; the row and the
+## submit directory hold what is kept. Leaves the process in $work.
+function job_staging_dir_remove( $staging, $work )
+{
+   @chdir( $work );
+
+   if ( $staging !== null && is_dir( $staging ) )
+   {
+      exec( 'rm -rf ' . escapeshellarg( $staging ) );
+   }
+}
+
 ## The local staging directory for one job's fetched results. Named after the
 ## scheduler job ID, which the scheduler reuses, so the path is composed from an
 ## id that must be checked first: empty or containing a slash it would name the
@@ -762,10 +790,11 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
 
    ## Local staging directory, emptied first so a reused job ID cannot leave one
    ## job's files to be imported as another's.
-   $staging = job_staging_dir_prepare( $work, $key !== null ? $key : $gfacID,
+   $root    = job_staging_root( $work, $db );
+   $staging = job_staging_dir_prepare( $root, $key !== null ? $key : $gfacID,
                                        function ( $m ) use ( $me ) { write_logld( "$me: $m" ); } );
 
-   if ( $staging === null && job_staging_dir( $work, $key !== null ? $key : $gfacID ) === null )
+   if ( $staging === null && job_staging_dir( $root, $key !== null ? $key : $gfacID ) === null )
    {
       write_logld( "$me: refusing to stage results: unusable job id '$gfacID'" );
       return 1;
@@ -803,6 +832,12 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
       $tar = fetch_first_remote( $rx, $tar_candidates, 'analysis-results.tar', 'tarfile' );
    }
 
+   if ( $tar[ 'class' ] === 'LOCAL' )
+   {
+      write_logld( "$me: a local fault kept the results of $gfacID from being stored in $staging; will retry" );
+      return -1;
+   }
+
    if ( $tar[ 'class' ] === 'UNREACHABLE' )
    {
       write_logld( "$me: cluster $cluster unreachable fetching results for $gfacID; will retry" );
@@ -814,9 +849,9 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    {
       $one = fetch_first_remote( $rx, array( "$remoteDir/$fn" ), $fn, $fn );
 
-      if ( $one[ 'class' ] === 'UNREACHABLE' )
+      if ( $one[ 'class' ] === 'UNREACHABLE' || $one[ 'class' ] === 'LOCAL' )
       {
-         write_logld( "$me: cluster $cluster unreachable fetching $fn for $gfacID; will retry" );
+         write_logld( "$me: {$one['class']}: could not fetch $fn for $gfacID from $cluster; will retry" );
          return -1;
       }
    }
@@ -880,8 +915,9 @@ write_logld( "$me: tarfile size: $lent");
 ## Fetch the first of $candidates that exists on the cluster, landing it at
 ## $local_name in the current directory.
 ##
-## Returns [ 'class' => 'OK' | 'MISSING' | 'UNREACHABLE' ]: MISSING means the
-## cluster answered that it is not there, UNREACHABLE that we do not know.
+## Returns [ 'class' => 'OK' | 'MISSING' | 'UNREACHABLE' | 'LOCAL' ]: MISSING means
+## the cluster answered that it is not there, UNREACHABLE that we do not know, and
+## LOCAL that this host could not store it (a full disk, or a partial copy).
 ##
 ## Downloads to ".part" and renames only when scp succeeds, so an interrupted
 ## transfer never leaves a truncated file under the real name.
@@ -915,12 +951,20 @@ function fetch_first_remote( $rx, $candidates, $local_name, $label )
          return array( 'class' => 'OK' );
       }
 
+      $partial = file_exists( $part ) && filesize( $part ) > 0;
       @unlink( $part );
 
       if ( remote_exec_infra_fault( $res ) )
       {
          write_logld( "$me: $label fetch from $path: {$res['class']} after {$res['attempts']} attempt(s)" );
          return array( 'class' => 'UNREACHABLE' );
+      }
+
+      $stderr = isset( $res[ 'stderr' ] ) ? (string) $res[ 'stderr' ] : '';
+      if ( $partial || preg_match( '/No space left on device|Disk quota exceeded|Read-only file system/i', $stderr ) )
+      {
+         write_logld( "$me: $label could not be stored locally from $path: $stderr" );
+         return array( 'class' => 'LOCAL' );
       }
 
       ## A reachable cluster saying "No such file" is a real answer.

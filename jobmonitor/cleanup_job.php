@@ -359,6 +359,14 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    ## row deleted) and then failed at the tar step, so no worker retries it.
    $has_results = ( $fetch_failure == '' && strlen( $tarfile ) > 0 );
 
+   ## The row goes before the results are expanded, so a full disk is caught while the job can still wait.
+   if ( $has_results && ! job_staging_has_room( strlen( $tarfile ), @disk_free_space( job_staging_root( $work, $db ) ) )
+        && cleanup_retry_unreachable( $seen_file ) )
+   {
+      write_logld( "$me: not enough local disk space for the results of $gfacID in $work; will retry" );
+      return( 0 );
+   }
+
    if ( $has_results )
    {  ## Log success at fetch attempt
       write_logld( "$me: Successful data fetch: $requestID $gfacID" );
@@ -627,7 +635,7 @@ write_logld( "$me: *messages.txt written" );
    ## it must not be emptied here: a reused job ID is dealt with before the fetch,
    ## in job_staging_dir_prepare(). The id is still checked, since the path is
    ## composed from it.
-   $staging = job_staging_dir( $work, $key );
+   $staging = job_staging_dir( job_staging_root( $work, $db ), $key );
 
    clearstatcache();
 
@@ -650,8 +658,7 @@ write_logld( "$me: *messages.txt written" );
 
    if ( $err != 0 )
    {
-      chdir( $work );
-      exec( "rm -r " . escapeshellarg( basename( $staging ) ) );
+      job_staging_dir_remove( $staging, $work );
       $output = implode( "\n", $tar_out );
 
       update_autoflow_status( 'FAILED', "Bad output tarfile: $output" );
@@ -939,9 +946,7 @@ write_logld( "$me:   MODELUpd: O:description=$description" );
    fwrite( $f, $tarfile );
    fclose( $f );
 
-   ## Clean up
    chdir ( $work );
-   ## exec( "rm -rf $gfacID" );
 
 ##   mysqli_close( $db_handle );
 
