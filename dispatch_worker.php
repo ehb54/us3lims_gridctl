@@ -704,10 +704,10 @@ function dispatch_recover_close( $link, $db, $id, $generation, $reason, array $i
                                array( 'reasonCode' => 'operator_close' ) ) ) {
       return 'lost';
    }
-   foreach ( array( 'failed', 'closed' ) as $hook ) {
-      if ( isset( $io[ $hook ] ) ) {
-         $io[ $hook ]( $reason );
-      }
+   ## A stage's status comes from here, not housekeeping: this may be the instance's last unsettled request.
+   dispatch_mirror_autoflow( $link, $db );
+   if ( isset( $io[ 'closed' ] ) ) {
+      $io[ 'closed' ]( $reason );
    }
    return DISPATCH_FAILED;
 }
