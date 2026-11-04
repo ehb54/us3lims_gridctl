@@ -236,7 +236,7 @@ function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
    $gdb = isset( $opts[ 'gdb' ] ) ? $opts[ 'gdb' ] : 'gfac';
 
    if ( ! empty( $opts[ 'spool' ] ) ) {
-      dispatch_spool_replay( $link, $opts[ 'spool' ] );
+      dispatch_spool_replay( $link, $opts[ 'spool' ], $gdb );
    }
 
    $queues = array();
@@ -697,6 +697,21 @@ function dispatch_worker_track( $link, $db, $id, $generation, array $plan, $job_
    return DISPATCH_ACCEPTED;
 }
 
+/** Settle a close an operator requested, once the last look found no job. */
+function dispatch_recover_close( $link, $db, $id, $generation, $reason, array $io )
+{
+   if ( ! dispatch_transition( $link, $db, $id, $generation, DISPATCH_SUBMISSION_UNKNOWN, DISPATCH_FAILED, $reason,
+                               array( 'reasonCode' => 'operator_close' ) ) ) {
+      return 'lost';
+   }
+   foreach ( array( 'failed', 'closed' ) as $hook ) {
+      if ( isset( $io[ $hook ] ) ) {
+         $io[ $hook ]( $reason );
+      }
+   }
+   return DISPATCH_FAILED;
+}
+
 /**
  * One recovery check for a claimed SUBMISSION_UNKNOWN, ACCEPTED or MONITORED
  * request. A held submission is looked up at its cluster by the attempt token;
@@ -725,6 +740,9 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
       $found = $io[ 'find' ]( $cluster, $attempt[ 'attemptToken' ] );
       $jobs = ! empty( $found[ 'ok' ] ) ? array_values( array_unique( $found[ 'jobs' ] ) ) : array();
       if ( empty( $found[ 'ok' ] ) || count( $jobs ) !== 1 ) {
+         if ( $req[ 'reasonCode' ] === 'operator_close' && ! $jobs ) {
+            return dispatch_recover_close( $link, $db, $id, $generation, $req[ 'reason' ], $io );
+         }
          $why = empty( $found[ 'ok' ] ) ? "$cluster could not be queried: {$found['reason']}"
               : ( $jobs ? "more than one job at $cluster carries this attempt: " . implode( ', ', $jobs )
                         : "no job at $cluster carries this attempt; acceptance is not ruled out" );

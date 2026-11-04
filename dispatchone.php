@@ -197,6 +197,14 @@ $io = array(
         $who = dispatch_request_submitters( $dispatch_link, $lims_db, array( $dispatch_id ) );
         dispatch_notify_blocked( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '', $code );
     },
+    'closed' => function ( $reason ) use ( $dispatch_link, $lims_db, $dispatch_id, $req, $listen_admin_email ) {
+        global $global_site_admin_email, $org_name;
+        $send = dispatch_site_admin_sender(
+            dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '', $listen_admin_email ),
+            isset( $org_name ) ? $org_name : '' );
+        $who = dispatch_request_submitters( $dispatch_link, $lims_db, array( $dispatch_id ) );
+        dispatch_notify_closed( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '' );
+    },
     'failed' => function ( $reason ) use ( $load_job ) {
         $loaded = $load_job();
         if ( ! is_string( $loaded ) ) {
