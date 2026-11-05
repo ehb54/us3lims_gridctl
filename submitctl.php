@@ -379,7 +379,7 @@ while( 1 ) {
     if ( $settled[ 'on' ] !== $pool_state[ 'on' ] ) {
         write_logls( "dispatch worker stopped: no active pool and no unfinished request", 1 );
         ## Its last chance to close items no request is held for any more.
-        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
+        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs );
         dispatch_worker_on_marker_set( $dispatch_on_marker, false );
         $dispatch_dbs = $settled[ 'dbs' ];
         $watch_dirs = $submit_watch_dirs( $dispatch_dbs );
@@ -397,7 +397,7 @@ while( 1 ) {
             dispatch_mirror_autoflow( $db_handle, $dispatch_db );
             dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
         }
-        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs );
+        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs );
         dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
         $last_housekeeping = time();
     }
