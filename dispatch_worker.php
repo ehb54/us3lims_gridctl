@@ -45,36 +45,55 @@ function dispatch_worker_read_active_pools( $config )
  * Whether the dispatch worker runs, and for which instances. It runs while global_config.php has an
  * active pool or a request accepted earlier is unfinished, so every accepted request is settled
  * whatever the pool list says now; otherwise the daemon runs as 4.2.0 did. The file is read again
- * when its mtime changes, which costs no statement while nothing changes, and hourly while stopped,
- * for a request whose intake committed just after the worker stopped. A failed instance list says
- * nothing about the requests: the state stays and is asked again on the next pass. Returns the new
- * state: mtime (null: not settled), checked, active, on, dbs. $read and $instances are for tests.
+ * when its content changes, which costs no statement while nothing changes, and hourly while stopped,
+ * for a request whose intake committed just after the worker stopped. A failed read or instance list
+ * says nothing about the pools or requests: the state stays and is asked again on the next pass.
+ * Returns the new state: signature (null: not settled), checked, active, on, dbs, unread. $read and
+ * $instances are for tests.
  */
 function dispatch_worker_pool_state( $link, $config, array $state = null, callable $read = null, callable $instances = null )
 {
-   clearstatcache( true, $config );
-   $mtime = @filemtime( $config );
-   if ( $state !== null && $state[ 'mtime' ] === $mtime && ( $state[ 'on' ] || time() - $state[ 'checked' ] < 3600 ) ) {
+   ## The content, since a copy can keep the old mtime and two writes can share a second.
+   $signature = @md5_file( $config );
+   if ( $state !== null && $state[ 'signature' ] === $signature && ( $state[ 'on' ] || time() - $state[ 'checked' ] < 3600 ) ) {
       return $state;
    }
    $active = ( $read !== null ? $read : 'dispatch_worker_read_active_pools' )( $config );
-   if ( $active === null ) {
-      error_log( "dispatch: could not read the pool list from $config; keeping the previous one" );
+   $unread = $active === null;
+   if ( $unread ) {
+      if ( $state === null || empty( $state[ 'unread' ] ) ) {
+         error_log( "dispatch: could not read the pool list from $config; keeping the previous one" );
+      }
       $active = $state !== null ? $state[ 'active' ] : true;
+      $signature = null;
    }
    $dbs = $instances !== null ? $instances() : dispatch_worker_instances( $link );
    if ( $dbs === null ) {
-      return array( 'mtime' => null, 'checked' => time(), 'active' => $active,
-                    'on' => $state !== null ? $state[ 'on' ] : true, 'dbs' => $state !== null ? $state[ 'dbs' ] : array() );
+      return array( 'signature' => null, 'checked' => time(), 'active' => $active,
+                    'on' => $state !== null ? $state[ 'on' ] : true, 'dbs' => $state !== null ? $state[ 'dbs' ] : array(),
+                    'unread' => $unread );
    }
    $on = $active || dispatch_worker_busy_instances( $link, $dbs );
-   return array( 'mtime' => $mtime, 'checked' => time(), 'active' => $active, 'on' => $on, 'dbs' => $on ? $dbs : array() );
+   return array( 'signature' => $signature, 'checked' => time(), 'active' => $active, 'on' => $on,
+                 'dbs' => $on ? $dbs : array(), 'unread' => $unread );
+}
+
+## An item on the dashboard while the pool list cannot be read; a good read closes it, also after a restart.
+function dispatch_worker_pool_report( $link, $gdb, $config, array $was = null, array $now = array() )
+{
+   $was_unread = $was !== null && ! empty( $was[ 'unread' ] );
+   if ( ! empty( $now[ 'unread' ] ) && ! $was_unread ) {
+      dispatch_alert_raise( $link, $gdb, 'pool_list', 'pool_list', 'urgent', null, null,
+                            "the pool list in $config cannot be read, so the dispatch worker is keeping its previous state" );
+   } elseif ( empty( $now[ 'unread' ] ) && ( $was === null || $was_unread ) ) {
+      dispatch_alert_resolve( $link, $gdb, 'pool_list', 'the pool list can be read' );
+   }
 }
 
 ## The worker stops once no active pool is left and the last accepted request has finished.
 function dispatch_worker_pool_state_settled( array $state, array $busy_dbs )
 {
-   if ( $state[ 'on' ] && ! $state[ 'active' ] && ! $busy_dbs && $state[ 'mtime' ] !== null ) {
+   if ( $state[ 'on' ] && ! $state[ 'active' ] && ! $busy_dbs && $state[ 'signature' ] !== null ) {
       $state[ 'on' ] = false;
       $state[ 'dbs' ] = array();
    }
@@ -290,8 +309,10 @@ function dispatch_worker_take_lanes( $link, $gdb, array $keys, $owner, $lease )
       $gen = dispatch_controller_claim( $link, $gdb, $key, $owner, $lease );
       if ( ! $gen ) {
          $error = dispatch_last_error();
+         $errno = dispatch_last_errno();
          dispatch_worker_release_lanes( $link, $gdb, $held, $owner );
          dispatch_last_error( $error );   ## the release must not hide why the claim failed
+         dispatch_last_errno( $errno );
          return $gen === null ? false : null;   ## false: the database could not be asked
       }
       $held[ $key ] = $gen;
@@ -315,6 +336,7 @@ function dispatch_worker_release_lanes( $link, $gdb, array $held, $owner )
  *   stage            fn( array $plan ) => array( ok, transient, reason )
  *   submit           fn( array $plan, $token ) => submission outcome (SUBMIT_* certainty)
  *   failed           fn( $reason ) runs the existing failure reporting (optional)
+ *   pool_disabled    fn( array $ids, $reason ) reports the other requests a disabled pool failed (optional)
  *   reachable        member => false for a member known to be down (optional); a member whose
  *                    staging failed as unreachable is left out for DISPATCH_WORKER_UNREACHABLE_SECONDS
  *   operator         member => 'down' | 'draining' from down_clusters.php (optional)
@@ -360,9 +382,15 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    $policy = dispatch_pool_policy( $req[ 'pool' ], $io[ 'cluster_details' ] );
    if ( empty( $policy[ 'active' ] ) && dispatch_select( array( 'policy' => $policy ) )[ 'outcome' ] === SELECT_FAILED ) {
       ## The disabled reason, applied to every never-submitted request of the pool.
-      dispatch_fail_disabled_pool( $link, $db, $req[ 'pool' ] );
+      $failed = dispatch_fail_disabled_pool( $link, $db, $req[ 'pool' ] );
+      $reason = "metascheduler '{$req['pool']}' is disabled (active=false)";
       if ( isset( $io[ 'failed' ] ) ) {
-         $io[ 'failed' ]( "metascheduler '{$req['pool']}' is disabled (active=false)" );
+         $io[ 'failed' ]( $reason );
+      }
+      ## The others failed with it, and no attempt will ever report them.
+      $others = array_diff( $failed, array( (int) $id ) );
+      if ( $others && isset( $io[ 'pool_disabled' ] ) ) {
+         $io[ 'pool_disabled' ]( array_values( $others ), $reason );
       }
       return DISPATCH_FAILED;
    }
@@ -415,13 +443,16 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
          }
       }
    }
-   ## A failed statement on gfac's coordination tables is not a busy pool. Once may be a lock wait or a
-   ## dropped connection, so it retries shortly. Again means the tables are unusable (missing, no
-   ## privilege): the submitter is told so and the operator gets an urgent item.
+   ## A failed statement on gfac's coordination tables is not a busy pool. A lock wait, a deadlock or a
+   ## dropped connection retries shortly, however often. An error that stays (a missing table, no
+   ## privilege) retries once; then the submitter is told so and the operator gets an urgent item.
    $unavailable = function () use ( $settle, $link, $gdb, $db, $id, $req ) {
       $error = dispatch_last_error();
-      if ( ! in_array( $req[ 'reasonCode' ], array( 'dispatch_retrying', 'dispatch_unavailable' ), true ) ) {
-         error_log( "dispatch $db request $id: a dispatch statement failed, retrying: $error" );
+      $again = in_array( $req[ 'reasonCode' ], array( 'dispatch_retrying', 'dispatch_unavailable' ), true );
+      if ( ! $again || ! dispatch_error_is_lasting( dispatch_last_errno() ) ) {
+         if ( ! $again ) {
+            error_log( "dispatch $db request $id: a dispatch statement failed, retrying: $error" );
+         }
          return $settle( DISPATCH_ASSESSING, DISPATCH_WAITING, 'Waiting: the dispatch service is retrying a database operation.',
                          array( 'retry_seconds' => DISPATCH_WORKER_LANE_RETRY, 'reasonCode' => 'dispatch_retrying' ) );
       }
@@ -540,11 +571,13 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
                      $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] ) : null;
       $staged_ok = dispatch_stage( $link, $db, $id, $generation, $chosen, $plan[ 'hash' ], $policy[ 'version' ], $why, $turn );
       $stage_error = $staged_ok ? '' : dispatch_last_error();
+      $stage_errno = $staged_ok ? 0 : dispatch_last_errno();
       dispatch_controller_release( $link, $gdb, $rotation_lane, $lane_owner, $lanes[ $rotation_lane ] );
       unset( $lanes[ $rotation_lane ] );
       if ( ! $staged_ok ) {
          if ( $stage_error !== '' ) {
             dispatch_last_error( $stage_error );
+            dispatch_last_errno( $stage_errno );
             return $unavailable();
          }
          ## The rotation lane lapsed, or a sibling pinned the batch elsewhere: decide again shortly.

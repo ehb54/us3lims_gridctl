@@ -2,6 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 $home   = dirname( $us3bin );
+submitctl_log_errors_to( "$home/etc/submit.log" );
 require_once __DIR__ . '/gridctl_bootstrap.php';
 ## This is a while(1) daemon exactly like listen.php/manage-us3-pipe.php
 ## below, whose own suggested remedy already backgrounds correctly -- this
@@ -129,6 +130,16 @@ function idle_nap_seconds( $poll, $autoflow_waiting, $autoflow_running, $next_du
     return $next_due === null ? $poll : max( 1, min( $poll, (int) $next_due ) );
 }
 
+## With nothing to watch the nap is one sleep, as 4.2.0's is; otherwise it looks each second.
+function idle_nap_step( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
+    return $tick === null && $running === null && ! array_filter( (array) $watch_dirs, 'strlen' ) ? max( 1, (int) $seconds ) : 1;
+}
+
+## services.php discards the daemon's stderr, where error_log() writes by default.
+function submitctl_log_errors_to( $file ) {
+    ini_set( 'error_log', $file );
+}
+
 ## Sleep up to $seconds; returns true early when a directory in $watch_dirs changes (a new
 ## submission's directory), and 'child' when $running() drops (a child exited and freed a slot).
 function idle_nap( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
@@ -144,11 +155,12 @@ function idle_nap( $seconds, $watch_dirs, callable $tick = null, callable $runni
     };
     $seen = $mark();
     $was = $running !== null ? $running() : 0;
-    for ( $i = 0; $i < $seconds; $i++ ) {
+    $step = idle_nap_step( $seconds, $watch_dirs, $tick, $running );
+    for ( $i = 0; $i < $seconds; $i += $step ) {
         if ( $tick !== null ) {
             $tick();
         }
-        sleep( 1 );
+        sleep( $step );
         if ( $seen && $mark() !== $seen ) {
             return true;
         }
@@ -305,6 +317,7 @@ $max_autoflow_children = isset( $global_autoflow_submit_children ) ? max( 1, (in
 $global_config_file = $class_dir . '../global_config.php';
 $dispatch_on_marker = dispatch_worker_on_marker( $home );
 $pool_state = dispatch_worker_pool_state( $db_handle, $global_config_file );
+dispatch_worker_pool_report( $db_handle, 'gfac', $global_config_file, null, $pool_state );
 $dispatch_dbs = $pool_state[ 'dbs' ];
 $dispatch_dbs_read = time();
 dispatch_worker_on_marker_set( $dispatch_on_marker, $pool_state[ 'on' ] );
@@ -355,6 +368,7 @@ while( 1 ) {
     ## dispatch tables, is served from the next minute.
     $was_state = $pool_state;
     $pool_state = dispatch_worker_pool_state( $db_handle, $global_config_file, $pool_state );
+    dispatch_worker_pool_report( $db_handle, 'gfac', $global_config_file, $was_state, $pool_state );
     if ( $pool_state !== $was_state ) {
         $dispatch_dbs = $pool_state[ 'dbs' ];
         $watch_dirs = $submit_watch_dirs( $dispatch_dbs );

@@ -211,6 +211,15 @@ $io = array(
         $who = dispatch_request_submitters( $dispatch_link, $lims_db, array( $dispatch_id ) );
         dispatch_notify_closed( $send, $lims_db, $req, $reason, isset( $who[ (int) $dispatch_id ] ) ? $who[ (int) $dispatch_id ][ 0 ] : '' );
     },
+    'pool_disabled' => function ( array $ids, $reason ) use ( $dispatch_link, $lims_db, $listen_admin_email ) {
+        global $global_site_admin_email, $org_name;
+        $send = dispatch_site_admin_sender(
+            dispatch_site_admin_address( isset( $global_site_admin_email ) ? $global_site_admin_email : '', $listen_admin_email ),
+            isset( $org_name ) ? $org_name : '' );
+        ## Housekeeping mirrors only instances with unfinished requests, and these may have been the last.
+        dispatch_mirror_autoflow( $dispatch_link, $lims_db );
+        dispatch_notify_pool_disabled( $send, $lims_db, $reason, dispatch_request_submitters( $dispatch_link, $lims_db, $ids ) );
+    },
     'failed' => function ( $reason ) use ( $load_job ) {
         $loaded = $load_job();
         if ( ! is_string( $loaded ) ) {
