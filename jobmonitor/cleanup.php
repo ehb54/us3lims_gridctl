@@ -202,6 +202,53 @@ function job_staging_root( $work, $us3_db )
    return "$work/$us3_db";
 }
 
+## get_local_files(): this server could not store the results; the cluster is not at fault.
+const JOB_FETCH_LOCAL_FAULT = -3;
+
+## Free bytes under $root, or false when unknown.
+if ( ! function_exists( 'job_staging_free_bytes' ) ) {
+   function job_staging_free_bytes( $root )
+   {
+      return @disk_free_space( $root );
+   }
+}
+
+## Expand $tarfile in the current directory. class: OK; LOCAL when this server could not store it;
+## BAD when the archive itself is at fault.
+function job_results_extract( $tarfile )
+{
+   if ( @file_put_contents( 'analysis-results.tar', $tarfile ) !== strlen( $tarfile ) ) {
+      return array( 'class' => 'LOCAL', 'detail' => 'could not write analysis-results.tar' );
+   }
+   $out = array();
+   exec( 'LC_ALL=C tar -xf analysis-results.tar 2>&1', $out, $err );
+   $detail = implode( "\n", $out );
+   if ( $err === 0 ) {
+      return array( 'class' => 'OK', 'detail' => '' );
+   }
+   $local = preg_match( '/No space left|Disk quota|Permission denied|Read-only file system|Cannot (open|mkdir|write)/i', $detail );
+   return array( 'class' => $local ? 'LOCAL' : 'BAD', 'detail' => $detail );
+}
+
+## A completed job waits on a fault of this server, with its row and results at the cluster intact, for as
+## long as it takes: never failed for it, and the cluster not blamed. The site admin is told at once and daily.
+function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $why )
+{
+   global $me;
+
+   write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
+   $told = job_state_path( $us3_db, $key, 'local_fault_told' );
+   clearstatcache( true, $told );
+   $when = @filemtime( $told );
+   if ( $when === false || time() - $when >= 86400 ) {
+      @mkdir( dirname( $told ), 0770, true );
+      @touch( $told );
+      mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster is waiting on a fault of this server,"
+                     . " not the cluster: $why. It finishes by itself once that is fixed." );
+   }
+   return 0;
+}
+
 ## Whether $free bytes hold $tar_bytes of results: the archive, what it expands to, the copy kept in
 ## the submit directory and a margin. Unknown free space does not hold a job back.
 function job_staging_has_room( $tar_bytes, $free )
@@ -278,6 +325,7 @@ function job_state_files()
       'finalizing'     => 'finalizing',       ## the row is gone, the stage is not written yet
       'status_pending' => 'status-pending',   ## results are in; only the final status write failed
       'complete_seen'  => 'complete_seen',    ## when cleanup first found the job unfinalizable
+      'local_fault_told' => 'local_fault_told',   ## when the site admin was last told the job waits on this server
    );
 }
 
@@ -805,7 +853,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    if ( $staging === null || ! @chdir( $staging ) )
    {
       write_logld( "$me: could not get a fresh staging directory for job id '$gfacID'; will retry" );
-      return -1;
+      return JOB_FETCH_LOCAL_FAULT;
    }
 
    ## us_mpi_analysis changes into output/ and archives into that directory
@@ -835,7 +883,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    if ( $tar[ 'class' ] === 'LOCAL' )
    {
       write_logld( "$me: a local fault kept the results of $gfacID from being stored in $staging; will retry" );
-      return -1;
+      return JOB_FETCH_LOCAL_FAULT;
    }
 
    if ( $tar[ 'class' ] === 'UNREACHABLE' )
@@ -852,7 +900,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
       if ( $one[ 'class' ] === 'UNREACHABLE' || $one[ 'class' ] === 'LOCAL' )
       {
          write_logld( "$me: {$one['class']}: could not fetch $fn for $gfacID from $cluster; will retry" );
-         return -1;
+         return $one[ 'class' ] === 'LOCAL' ? JOB_FETCH_LOCAL_FAULT : -1;
       }
    }
 

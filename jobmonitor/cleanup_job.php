@@ -308,6 +308,12 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key );
 
+   if ( $fetched === JOB_FETCH_LOCAL_FAULT )
+   {
+      job_staging_dir_remove( job_staging_dir( job_staging_root( $work, $db ), $key ), $work );
+      return job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be stored under $work" );
+   }
+
    if ( $fetched === -1 )
    {
       if ( cleanup_retry_unreachable( $seen_file ) )
@@ -359,12 +365,27 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    ## row deleted) and then failed at the tar step, so no worker retries it.
    $has_results = ( $fetch_failure == '' && strlen( $tarfile ) > 0 );
 
-   ## The row goes before the results are expanded, so a full disk is caught while the job can still wait.
-   if ( $has_results && ! job_staging_has_room( strlen( $tarfile ), @disk_free_space( job_staging_root( $work, $db ) ) )
-        && cleanup_retry_unreachable( $seen_file ) )
+   ## The row goes after the results are expanded, so a full disk is caught while the job can still wait.
+   $staging = job_staging_dir( job_staging_root( $work, $db ), $key );
+   $extract = array( 'class' => 'OK', 'detail' => '' );
+   if ( $has_results && $staging !== null )
    {
-      write_logld( "$me: not enough local disk space for the results of $gfacID in $work; will retry" );
-      return( 0 );
+      if ( ! job_staging_has_room( strlen( $tarfile ), job_staging_free_bytes( job_staging_root( $work, $db ) ) ) )
+      {
+         job_staging_dir_remove( $staging, $work );
+         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "not enough disk space under $work" );
+      }
+      clearstatcache();
+      if ( ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) ) || ! @chdir( $staging ) )
+      {
+         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not enter $staging" );
+      }
+      $extract = job_results_extract( $tarfile );
+      if ( $extract[ 'class' ] === 'LOCAL' )
+      {
+         job_staging_dir_remove( $staging, $work );
+         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not expand its results: {$extract['detail']}" );
+      }
    }
 
    if ( $has_results )
@@ -648,18 +669,11 @@ write_logld( "$me: *messages.txt written" );
       return( -1 );
    }
 
-   $f = fopen( "analysis-results.tar", "w" );
-   fwrite( $f, $tarfile );
-   fclose( $f );
-##write_logld( "$me: analysis-results.tar file written to work dir" );
-
-   $tar_out = array();
-   exec( "tar -xf analysis-results.tar 2>&1", $tar_out, $err );
-
-   if ( $err != 0 )
+   ## Expanded before the row was deleted.
+   if ( $extract[ 'class' ] !== 'OK' )
    {
       job_staging_dir_remove( $staging, $work );
-      $output = implode( "\n", $tar_out );
+      $output = $extract[ 'detail' ];
 
       update_autoflow_status( 'FAILED', "Bad output tarfile: $output" );
       write_logld( "$me: Bad output tarfile: $output" );
