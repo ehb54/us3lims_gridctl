@@ -329,6 +329,11 @@ function monitor_restart_background( $restart_cmd, $restart_log, $next_attempt )
     }
 }
 
+function service_start_command( $run ) {
+    ## A daemon that installs a SIGHUP handler undoes nohup, so it needs its own session to outlive a logout.
+    return "setsid nohup $run > /dev/null 2>&1 &";
+}
+
 function start() {
     global $cmd, $us3bin, $us3util, $us3etc;
     echo "starting services...\n";
@@ -339,8 +344,7 @@ function start() {
             continue;
         }
         $run = "/usr/bin/php $v";
-        # echo __FILE__ . " running exec( 'nohup $run > /dev/null 2>&1&' )\n";
-        exec( "nohup $run > /dev/null 2>&1&" );
+        exec( service_start_command( $run ) );
     }
     sleep( SLEEPTIME );
 
