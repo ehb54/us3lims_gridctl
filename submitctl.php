@@ -100,7 +100,8 @@ function spawn_child( array $args, $log, $kind = 'dispatch' ) {
         return false;
     }
     $children[] = $proc;
-    $child_kinds[ array_key_last( $children ) ] = $kind;
+    end( $children );
+    $child_kinds[ key( $children ) ] = $kind;
     write_logls( "running $cmd", 1 );
     return true;
 }
