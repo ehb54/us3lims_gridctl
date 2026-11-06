@@ -310,8 +310,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    if ( $fetched === JOB_FETCH_LOCAL_FAULT )
    {
-      job_staging_dir_remove( job_staging_dir( job_staging_root( $work, $db ), $key ), $work );
-      return job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be stored under $work" );
+      return job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be stored here" );
    }
 
    if ( $fetched === -1 )
@@ -372,7 +371,6 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    {
       if ( ! job_staging_has_room( strlen( $tarfile ), job_staging_free_bytes( job_staging_root( $work, $db ) ) ) )
       {
-         job_staging_dir_remove( $staging, $work );
          return job_local_fault_wait( $db, $key, $gfacID, $cluster, "not enough disk space under $work" );
       }
       clearstatcache();
@@ -383,7 +381,6 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
       $extract = job_results_extract( $tarfile );
       if ( $extract[ 'class' ] === 'LOCAL' )
       {
-         job_staging_dir_remove( $staging, $work );
          return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not expand its results: {$extract['detail']}" );
       }
    }

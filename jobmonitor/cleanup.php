@@ -72,6 +72,12 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
    ## stopped here would leave the job unfinished until the claim goes stale.
    if ( ! cleanup_claim_acquire( $claim, $log_fn ) )
    {
+      ## No claim there at all: it could not be created, such as on a full disk.
+      clearstatcache( true, $claim );
+      if ( ! is_dir( $claim ) )
+      {
+         return job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, "could not create its cleanup claim $claim" );
+      }
       $log_fn( "cleanup already claimed for $gfacID by another worker; will retry" );
       return 0;
    }
@@ -213,34 +219,46 @@ if ( ! function_exists( 'job_staging_free_bytes' ) ) {
    }
 }
 
-## Expand $tarfile in the current directory. class: OK; LOCAL when this server could not store it;
-## BAD when the archive itself is at fault.
-function job_results_extract( $tarfile )
+## What tar's output says about a failure: BAD only when it names the archive and no fault of this
+## server, since a job with a BAD archive fails and any other waits with the site admin told.
+function job_results_extract_class( $detail )
 {
-   if ( @file_put_contents( 'analysis-results.tar', $tarfile ) !== strlen( $tarfile ) ) {
-      return array( 'class' => 'LOCAL', 'detail' => 'could not write analysis-results.tar' );
-   }
-   $out = array();
-   exec( 'LC_ALL=C tar -xf analysis-results.tar 2>&1', $out, $err );
-   $detail = implode( "\n", $out );
-   if ( $err === 0 ) {
-      return array( 'class' => 'OK', 'detail' => '' );
-   }
+   $archive = preg_match( '/does not look like a tar archive|Unexpected EOF in archive|Skipping to next header|Damaged tar archive/i', $detail );
    $local = preg_match( '/No space left|Disk quota|Permission denied|Read-only file system|Cannot (open|mkdir|write)/i', $detail );
-   return array( 'class' => $local ? 'LOCAL' : 'BAD', 'detail' => $detail );
+   return $archive && ! $local ? 'BAD' : 'LOCAL';
+}
+
+## Expand $tarfile in the current directory. class: OK, or as job_results_extract_class().
+if ( ! function_exists( 'job_results_extract' ) ) {
+   function job_results_extract( $tarfile )
+   {
+      if ( @file_put_contents( 'analysis-results.tar', $tarfile ) !== strlen( $tarfile ) ) {
+         return array( 'class' => 'LOCAL', 'detail' => 'could not write analysis-results.tar' );
+      }
+      $out = array();
+      exec( 'LC_ALL=C tar -xf analysis-results.tar 2>&1', $out, $err );
+      $detail = implode( "\n", $out );
+      return $err === 0 ? array( 'class' => 'OK', 'detail' => '' )
+                        : array( 'class' => job_results_extract_class( $detail ), 'detail' => $detail );
+   }
 }
 
 ## A completed job waits on a fault of this server, with its row and results at the cluster intact, for as
 ## long as it takes: never failed for it, and the cluster not blamed. The site admin is told at once and daily.
+## The wait restarts the outage hold, so a later blip of the cluster has the whole hold again.
 function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $why )
 {
    global $me;
+   ## A full disk can refuse the marker too, and must not mean a mail at every poll.
+   static $told_here = array();
 
    write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
+   @unlink( job_state_path( $us3_db, $key, 'complete_seen' ) );
    $told = job_state_path( $us3_db, $key, 'local_fault_told' );
    clearstatcache( true, $told );
-   $when = @filemtime( $told );
-   if ( $when === false || time() - $when >= 86400 ) {
+   $when = max( (int) @filemtime( $told ), isset( $told_here[ $key ] ) ? $told_here[ $key ] : 0 );
+   if ( time() - $when >= 86400 ) {
+      $told_here[ $key ] = time();
       @mkdir( dirname( $told ), 0770, true );
       @touch( $told );
       mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster is waiting on a fault of this server,"
@@ -873,7 +891,7 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    $num_try = 0;
    while ( $tar[ 'class' ] === 'MISSING' && $num_try < 3 )
    {
-      sleep( $secwait );
+      cleanup_job_sleep( $secwait );
       $num_try++;
       $secwait *= 2;
       write_logld( "$me:  tarfile not present yet: retry $num_try" );
@@ -947,14 +965,18 @@ $leno = strlen( $stdout );
 write_logld( "$me: stdout size: $leno");
 $lent = strlen( $tarfile );
 write_logld( "$me: tarfile size: $lent");
-   $query  = "UPDATE gfac.analysis SET stderr = ?, stdout = ?, tarfile = ? WHERE id = ?";
-   $result = db_params_query( $db_handle, $query, array( (string) $stderr, (string) $stdout, (string) $tarfile, (int) $id ) );
+   ## No tar now keeps one stored earlier: a job waiting on this server may outlive the cluster's copy.
+   $tar_sql = strlen( $tarfile ) > 0 ? ', tarfile = ?' : '';
+   $query  = "UPDATE gfac.analysis SET stderr = ?, stdout = ?$tar_sql WHERE id = ?";
+   $args   = strlen( $tarfile ) > 0 ? array( (string) $stderr, (string) $stdout, (string) $tarfile, (int) $id )
+                                    : array( (string) $stderr, (string) $stdout, (int) $id );
+   $result = db_params_query( $db_handle, $query, $args );
 
    if ( ! $result )
    {
       write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
       echo "Bad query\n";
-      return( -2 );
+      return JOB_FETCH_LOCAL_FAULT;
    }
 
    return 1;

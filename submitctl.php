@@ -411,8 +411,9 @@ while( 1 ) {
             dispatch_mirror_autoflow( $db_handle, $dispatch_db );
             dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
         }
-        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs );
+        ## Mail first, so an item raised since the last scan is told before the scan can close it.
         dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
+        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs );
         $last_housekeeping = time();
     }
 

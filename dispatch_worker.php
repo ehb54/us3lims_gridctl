@@ -82,10 +82,11 @@ function dispatch_worker_pool_state( $link, $config, array $state = null, callab
 function dispatch_worker_pool_report( $link, $gdb, $config, array $was = null, array $now = array() )
 {
    $was_unread = $was !== null && ! empty( $was[ 'unread' ] );
-   if ( ! empty( $now[ 'unread' ] ) && ! $was_unread ) {
+   ## Raised on each pass while unreadable: one that failed is tried again, and an open item stays one item.
+   if ( ! empty( $now[ 'unread' ] ) ) {
       dispatch_alert_raise( $link, $gdb, 'pool_list', 'pool_list', 'urgent', null, null,
                             "the pool list in $config cannot be read, so the dispatch worker is keeping its previous state" );
-   } elseif ( empty( $now[ 'unread' ] ) && ( $was === null || $was_unread ) ) {
+   } elseif ( $was === null || $was_unread ) {
       dispatch_alert_resolve( $link, $gdb, 'pool_list', 'the pool list can be read' );
    }
 }
@@ -444,12 +445,12 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       }
    }
    ## A failed statement on gfac's coordination tables is not a busy pool. A lock wait, a deadlock or a
-   ## dropped connection retries shortly, however often. An error that stays (a missing table, no
+   ## dropped connection retries shortly, however often. Any other error (a missing table, no
    ## privilege) retries once; then the submitter is told so and the operator gets an urgent item.
    $unavailable = function () use ( $settle, $link, $gdb, $db, $id, $req ) {
       $error = dispatch_last_error();
       $again = in_array( $req[ 'reasonCode' ], array( 'dispatch_retrying', 'dispatch_unavailable' ), true );
-      if ( ! $again || ! dispatch_error_is_lasting( dispatch_last_errno() ) ) {
+      if ( ! $again || dispatch_error_can_pass( dispatch_last_errno() ) ) {
          if ( ! $again ) {
             error_log( "dispatch $db request $id: a dispatch statement failed, retrying: $error" );
          }

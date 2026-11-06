@@ -286,9 +286,11 @@ function mail_to_admin( $type, $msg ) {
    global $dbhost;
    global $servhost;
    global $requestID;
+   global $global_site_admin_email;
 
-   ## An unset listen-config address still gives the mail a sender, as common's notices do.
-   $sender = ! empty( $admin_email ) ? $admin_email : 'root@localhost';
+   ## The site admin when set, else listen-config's address; an unset one still gives the mail a sender.
+   $sender = ! empty( $global_site_admin_email ) ? $global_site_admin_email
+           : ( ! empty( $admin_email ) ? $admin_email : 'root@localhost' );
    $headers  = "From: $org_name Admin<$sender>"     . "\n";
    $headers .= "Cc: $org_name Admin<$sender>"       . "\n";
    $headers .= "Bcc: $org_name Admin<$sender>"      . "\n";
