@@ -308,9 +308,15 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key );
 
+   if ( $fetched === JOB_FETCH_RETRY )
+   {
+      return( 0 );
+   }
+
    if ( $fetched === JOB_FETCH_LOCAL_FAULT )
    {
-      return job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be stored here" );
+      return job_local_fault_wait( $db, $key, $gfacID, $cluster,
+         ! empty( $GLOBALS[ 'job_fetch_fault' ] ) ? $GLOBALS[ 'job_fetch_fault' ] : "its results could not be stored here" );
    }
 
    if ( $fetched === -1 )
@@ -362,7 +368,8 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    ## A job with no results is still finalized (stdout/stderr saved, tracking
    ## row deleted) and then failed at the tar step, so no worker retries it.
-   $has_results = ( $fetch_failure == '' && strlen( $tarfile ) > 0 );
+   ## Results stored on an earlier pass are good whatever the cluster answers now.
+   $has_results = strlen( (string) $tarfile ) > 0;
 
    ## The row goes after the results are expanded, so a full disk is caught while the job can still wait.
    $staging = job_staging_dir( job_staging_root( $work, $db ), $key );

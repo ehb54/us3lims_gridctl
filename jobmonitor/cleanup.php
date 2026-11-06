@@ -70,14 +70,20 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
 
    ## 0, not 1: the claim may be left from a killed worker, and a caller that
    ## stopped here would leave the job unfinished until the claim goes stale.
-   if ( ! cleanup_claim_acquire( $claim, $log_fn ) )
+   $claimed = cleanup_claim_acquire( $claim, $log_fn );
+   clearstatcache( true, $claim );
+   if ( ! $claimed && ! is_dir( $claim ) )
    {
-      ## No claim there at all: it could not be created, such as on a full disk.
+      ## No claim there at all: its holder just released it, or it cannot be created, such as on a full disk.
+      $claimed = cleanup_claim_acquire( $claim, $log_fn );
       clearstatcache( true, $claim );
-      if ( ! is_dir( $claim ) )
+      if ( ! $claimed && ! is_dir( $claim ) )
       {
          return job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, "could not create its cleanup claim $claim" );
       }
+   }
+   if ( ! $claimed )
+   {
       $log_fn( "cleanup already claimed for $gfacID by another worker; will retry" );
       return 0;
    }
@@ -210,6 +216,8 @@ function job_staging_root( $work, $us3_db )
 
 ## get_local_files(): this server could not store the results; the cluster is not at fault.
 const JOB_FETCH_LOCAL_FAULT = -3;
+## get_local_files(): the database connection failed; nothing to report unless it lasts.
+const JOB_FETCH_RETRY = -4;
 
 ## Free bytes under $root, or false when unknown.
 if ( ! function_exists( 'job_staging_free_bytes' ) ) {
@@ -965,17 +973,35 @@ $leno = strlen( $stdout );
 write_logld( "$me: stdout size: $leno");
 $lent = strlen( $tarfile );
 write_logld( "$me: tarfile size: $lent");
-   ## No tar now keeps one stored earlier: a job waiting on this server may outlive the cluster's copy.
-   $tar_sql = strlen( $tarfile ) > 0 ? ', tarfile = ?' : '';
-   $query  = "UPDATE gfac.analysis SET stderr = ?, stdout = ?$tar_sql WHERE id = ?";
-   $args   = strlen( $tarfile ) > 0 ? array( (string) $stderr, (string) $stdout, (string) $tarfile, (int) $id )
-                                    : array( (string) $stderr, (string) $stdout, (int) $id );
+   ## What was not fetched keeps what is stored: a job waiting on this server may outlive the cluster's copy.
+   $set  = array();
+   $args = array();
+   foreach ( array( 'stderr' => $stderr, 'stdout' => $stdout, 'tarfile' => $tarfile ) as $column => $value )
+   {
+      if ( strlen( (string) $value ) > 0 )
+      {
+         $set[]  = "$column = ?";
+         $args[] = (string) $value;
+      }
+   }
+   if ( ! $set )
+   {
+      return 1;
+   }
+   $args[] = (int) $id;
+   $query  = "UPDATE gfac.analysis SET " . implode( ', ', $set ) . " WHERE id = ?";
    $result = db_params_query( $db_handle, $query, $args );
 
    if ( ! $result )
    {
-      write_logld( "$me: Bad query:\n$query\n" . mysqli_error( $db_handle ) );
+      $error = mysqli_error( $db_handle );
+      write_logld( "$me: Bad query:\n$query\n$error" );
       echo "Bad query\n";
+      if ( db_error_is_connection_class( mysqli_errno( $db_handle ) ) )
+      {
+         return JOB_FETCH_RETRY;
+      }
+      $GLOBALS[ 'job_fetch_fault' ] = "its results could not be written to its gfac.analysis row: $error";
       return JOB_FETCH_LOCAL_FAULT;
    }
 
@@ -1010,11 +1036,11 @@ function fetch_first_remote( $rx, $candidates, $local_name, $label )
       {
          @unlink( $local_name );
 
-         if ( ! rename( $part, $local_name ) )
+         if ( ! @rename( $part, $local_name ) )
          {
             write_logld( "$me: could not move $part into place as $local_name" );
             @unlink( $part );
-            return array( 'class' => 'UNREACHABLE' );
+            return array( 'class' => 'LOCAL' );
          }
 
          write_logld( "$me: fetched $label from $path" );
@@ -1031,7 +1057,7 @@ function fetch_first_remote( $rx, $candidates, $local_name, $label )
       }
 
       $stderr = isset( $res[ 'stderr' ] ) ? (string) $res[ 'stderr' ] : '';
-      if ( $partial || preg_match( '/No space left on device|Disk quota exceeded|Read-only file system/i', $stderr ) )
+      if ( $partial || ! is_writable( '.' ) || preg_match( '/No space left on device|Disk quota exceeded|Read-only file system/i', $stderr ) )
       {
          write_logld( "$me: $label could not be stored locally from $path: $stderr" );
          return array( 'class' => 'LOCAL' );
