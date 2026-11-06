@@ -318,5 +318,5 @@ function mail_to_admin( $type, $msg ) {
 
    $message .= "Error Message  :  $msg\n";
 
-   mail( $sender, $subject, $message, $headers );
+   return mail( $sender, $subject, $message, $headers );
 }

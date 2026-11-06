@@ -236,6 +236,42 @@ function job_results_extract_class( $detail )
    return $archive && ! $local ? 'BAD' : 'LOCAL';
 }
 
+## The first result in an analysis_files.txt listing whose variance or meniscus is not a number
+## (the analysis wrote nan or inf), or null. A line without them, such as job_statistics.xml, is fine.
+function job_results_invalid_fit( array $files )
+{
+   foreach ( $files as $file )
+   {
+      $fn = explode( ';', $file )[ 0 ];
+      if ( preg_match( '/mdl\.tmp$/', $fn ) )
+      {
+         continue;
+      }
+      foreach ( array( 'variance', 'meniscus_value' ) as $field )
+      {
+         if ( preg_match( "/;$field=([^;]*)/", $file, $m ) && ! is_numeric( $m[ 1 ] ) )
+         {
+            return $fn;
+         }
+      }
+   }
+   return null;
+}
+
+## A failure text holding a query or a database error: for the site admin, not the submitter.
+function job_fail_is_internal( $msg )
+{
+   return (bool) preg_match( '/^(Internal error|Bad query|Could not select)/i', (string) $msg );
+}
+
+## What a submitter reads when a job's results were not saved, and what to do about it.
+function job_fail_user_text( $msg, $admin_told )
+{
+   $what = job_fail_is_internal( $msg ) ? 'An internal error stopped its results from being saved.' : (string) $msg;
+   return "$what\n   No results were saved. Resubmit the job if you still need it."
+        . ( $admin_told ? "\n   The site administrator has been notified." : '' ) . "\n";
+}
+
 ## Expand $tarfile in the current directory. class: OK, or as job_results_extract_class().
 if ( ! function_exists( 'job_results_extract' ) ) {
    function job_results_extract( $tarfile )
@@ -589,7 +625,7 @@ function cleanup_claim_acquire( $claim, $log_fn )
    return false;
 }
 
-function mail_to_user( $type, $msg )
+function mail_to_user( $type, $msg, $admin_detail = null )
 {
    ## Note to me. Just changed subject line to include a modified $status instead 
    ## of the $type variable passed. More informative than just "fail" or "success." 
@@ -646,6 +682,13 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
 
    }
 
+   ## The analysis can finish on its cluster and the job still fail here.
+   $failed_here = $type == 'fail' && ! in_array( $subj_status, array( 'canceled', 'unknown error' ), true );
+   if ( $failed_here )
+   {
+      $subj_status = 'failed';
+   }
+
    $queuestatus = $subj_status;
    $limshost    = $dbhost;
    if ( $limshost == 'localhost' )
@@ -683,8 +726,12 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    $headers .= "Content-Transfer-Encoding: 8bit"        . "\n";
 
    $subject       = "UltraScan Job Notification - $subj_status - " . substr( $gfacID, 0, 16 );
+   $intro         = $failed_here ? 'Your UltraScan job failed' : 'Your UltraScan job is complete';
+   $job_lines     = $failed_here ? '' : "Job Status      : $status
+   Job Message     : $gfac_message
+   ";
    $message       = "
-   Your UltraScan job is complete:
+   $intro:
 
    Submission Time : $submittime
    Job End Time    : $endtime
@@ -699,12 +746,24 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    Status          : $queuestatus
    Cluster         : $cluster
    Job Type        : $jobtype
-   Job Status      : $status
-   Job Message     : $gfac_message
-   Stdout          : $stdout
+   {$job_lines}Stdout          : $stdout
    ";
 
-   if ( $type != "success" ) $message .= "Grid Ctrl Error :  $msg\n";
+   if ( $failed_here )
+   {
+      ## The site admin first, so the submitter is told so only when that mail went out.
+      if ( $admin_detail === null && job_fail_is_internal( $msg ) )
+      {
+         $admin_detail = $msg;
+      }
+      $admin_told = $admin_detail !== null
+                    && mail_to_admin( 'fail', "Job $gfacID, request $requestID in $db: $admin_detail" );
+      $message .= job_fail_user_text( $msg, $admin_told );
+   }
+   else if ( $type != "success" )
+   {
+      $message .= "Grid Ctrl Error :  $msg\n";
+   }
 
    ## Handle the error case where an error occurs before fetching the
    ## user's email address

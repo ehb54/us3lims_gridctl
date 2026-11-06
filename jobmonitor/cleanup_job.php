@@ -698,6 +698,17 @@ write_logld( "$me: *messages.txt written" );
 
    ## Insert the model files and noise files
    $files      = file( "analysis_files.txt", FILE_IGNORE_NEW_LINES );
+
+   ## Before the first insert, so one bad iteration leaves nothing half imported.
+   $invalid_fit = job_results_invalid_fit( (array) $files );
+   if ( $invalid_fit !== null )
+   {
+      $no_fit = "The analysis produced no valid fit";
+      write_logld( "$me: $no_fit: $invalid_fit" );
+      update_autoflow_status( 'FAILED', $no_fit );
+      mail_to_user( "fail", "$no_fit.", "$no_fit: " . implode( "\n", (array) $files ) );
+      return( -1 );
+   }
    $noiseIDs   = array();
    $modelGUIDs = array();
    $mrecsIDs   = array();
