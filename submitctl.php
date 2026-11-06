@@ -352,6 +352,7 @@ $dispatch_expired = function ( $db, array $ids ) use ( &$db_handle, $site_admin_
     }
 };
 $last_purge   = 0;
+$uploads_kept = array();
 $last_housekeeping = 0;
 $submission_grace_until = 0;
 write_logls( ( $pool_state[ 'on' ] ? '' : 'no active metascheduler pool or unfinished request; ' )
@@ -443,8 +444,7 @@ while( 1 ) {
             dispatch_abandon_unsealed( $db_handle, $dispatch_db, 3600 );
         }
         foreach ( dispatch_orphan_upload_dirs( $db_handle, $dispatch_dbs, 86400 ) as $orphan ) {
-            write_logls( "removing upload $orphan: its intake was never recorded", 1 );
-            dispatch_remove_upload_dir( $orphan );
+            dispatch_worker_remove_orphan( $orphan, function ( $line ) { write_logls( $line, 1 ); }, $uploads_kept );
         }
         $last_purge = time();
     }

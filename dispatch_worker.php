@@ -885,6 +885,20 @@ function dispatch_orphan_upload_dirs( $link, array $dbs, $grace_seconds, $now = 
 }
 
 ## Remove one orphan upload directory: its files, then the directory. Never recurses.
+## Remove an orphan upload, logging what happened: one that cannot be removed once, not at every sweep.
+function dispatch_worker_remove_orphan( $dir, callable $log, array &$kept )
+{
+   if ( ! file_exists( $dir ) ) {
+      return;
+   }
+   if ( dispatch_remove_upload_dir( $dir ) ) {
+      $log( "removed upload $dir: its intake was never recorded" );
+   } elseif ( ! isset( $kept[ $dir ] ) ) {
+      $kept[ $dir ] = true;
+      $log( "could not remove upload $dir: its intake was never recorded" );
+   }
+}
+
 function dispatch_remove_upload_dir( $dir )
 {
    foreach ( scandir( $dir ) ?: array() as $f ) {

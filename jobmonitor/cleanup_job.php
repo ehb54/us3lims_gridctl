@@ -315,8 +315,9 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 
    if ( $fetched === JOB_FETCH_LOCAL_FAULT )
    {
-      return job_local_fault_wait( $db, $key, $gfacID, $cluster,
-         ! empty( $GLOBALS[ 'job_fetch_fault' ] ) ? $GLOBALS[ 'job_fetch_fault' ] : "its results could not be stored here" );
+      return ! empty( $GLOBALS[ 'job_fetch_fault' ] )
+         ? job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be written to gfac.analysis", $GLOBALS[ 'job_fetch_fault' ] )
+         : job_local_fault_wait( $db, $key, $gfacID, $cluster, "its results could not be stored under $work" );
    }
 
    if ( $fetched === -1 )
@@ -383,12 +384,12 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
       clearstatcache();
       if ( ( ! is_dir( $staging ) && ! @mkdir( $staging, 0770, true ) ) || ! @chdir( $staging ) )
       {
-         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not enter $staging" );
+         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not enter a staging directory under $work" );
       }
       $extract = job_results_extract( $tarfile );
       if ( $extract[ 'class' ] === 'LOCAL' )
       {
-         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not expand its results: {$extract['detail']}" );
+         return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not expand its results under $work", $extract[ 'detail' ] );
       }
    }
 

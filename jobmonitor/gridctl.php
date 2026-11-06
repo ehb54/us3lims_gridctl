@@ -292,8 +292,6 @@ function mail_to_admin( $type, $msg ) {
    $sender = ! empty( $global_site_admin_email ) ? $global_site_admin_email
            : ( ! empty( $admin_email ) ? $admin_email : 'root@localhost' );
    $headers  = "From: $org_name Admin<$sender>"     . "\n";
-   $headers .= "Cc: $org_name Admin<$sender>"       . "\n";
-   $headers .= "Bcc: $org_name Admin<$sender>"      . "\n";
 
    ## Set the reply address
    $headers .= "Reply-To: $org_name<$sender>"      . "\n";

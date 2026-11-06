@@ -79,7 +79,7 @@ function resolve_and_cleanup_job( $db_handle, $gfacID, $us3_db, $analysis_table,
       clearstatcache( true, $claim );
       if ( ! $claimed && ! is_dir( $claim ) )
       {
-         return job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, "could not create its cleanup claim $claim" );
+         return job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, "could not create a cleanup claim in the job log directory" );
       }
    }
    if ( ! $claimed )
@@ -199,7 +199,6 @@ function cleanup_job_dir( $us3_db, $gfacID )
    return "$base/$us3_db/$gfacID";
 }
 
-## Directory used as the cross-worker cleanup claim for one job.
 ## The files a job keeps in its own directory. Declared in one place so the set is
 ## discoverable and a call site cannot invent a fourth by typo: three of these grew
 ## separately, each with its own hand-built path.
@@ -288,25 +287,35 @@ if ( ! function_exists( 'job_results_extract' ) ) {
 }
 
 ## A completed job waits on a fault of this server, with its row and results at the cluster intact, for as
-## long as it takes: never failed for it, and the cluster not blamed. The site admin is told at once and daily.
-## The wait restarts the outage hold, so a later blip of the cluster has the whole hold again.
-function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $why )
+## long as it takes: never failed for it, and the cluster not blamed. The wait restarts the outage hold, so a
+## later blip of the cluster has the whole hold again. Logged once a process; the site admin is told once a day
+## per fault, not per job, since one full disk can hold many. $cause names the fault and $detail adds to the mail.
+function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $cause, $detail = '' )
 {
    global $me;
+   static $logged = array();
    ## A full disk can refuse the marker too, and must not mean a mail at every poll.
    static $told_here = array();
 
-   write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
+   $why = $detail === '' ? $cause : "$cause: $detail";
+   if ( ! isset( $logged[ $key ] ) )
+   {
+      $logged[ $key ] = true;
+      write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
+   }
    @unlink( job_state_path( $us3_db, $key, 'complete_seen' ) );
-   $told = job_state_path( $us3_db, $key, 'local_fault_told' );
+   $fault = md5( $cause );
+   $told  = dirname( dirname( cleanup_job_dir( $us3_db, $key ) ) ) . "/.local_fault_told/$fault";
    clearstatcache( true, $told );
-   $when = max( (int) @filemtime( $told ), isset( $told_here[ $key ] ) ? $told_here[ $key ] : 0 );
-   if ( time() - $when >= 86400 ) {
-      $told_here[ $key ] = time();
+   $when = max( (int) @filemtime( $told ), isset( $told_here[ $fault ] ) ? $told_here[ $fault ] : 0 );
+   if ( time() - $when >= 86400 )
+   {
+      $told_here[ $fault ] = time();
       @mkdir( dirname( $told ), 0770, true );
       @touch( $told );
-      mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster is waiting on a fault of this server,"
-                     . " not the cluster: $why. It finishes by itself once that is fixed." );
+      mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster, and any other job with the same fault,"
+                     . " is waiting on a fault of this server, not the cluster: $why."
+                     . " Each finishes by itself once that is fixed. This repeats daily while it lasts." );
    }
    return 0;
 }
@@ -387,7 +396,6 @@ function job_state_files()
       'finalizing'     => 'finalizing',       ## the row is gone, the stage is not written yet
       'status_pending' => 'status-pending',   ## results are in; only the final status write failed
       'complete_seen'  => 'complete_seen',    ## when cleanup first found the job unfinalizable
-      'local_fault_told' => 'local_fault_told',   ## when the site admin was last told the job waits on this server
    );
 }
 
@@ -405,6 +413,7 @@ function job_state_path( $us3_db, $gfacID, $what )
    return cleanup_job_dir( $us3_db, $gfacID ) . '/' . $files[ $what ];
 }
 
+## Directory used as the cross-worker cleanup claim for one job.
 function cleanup_claim_path( $us3_db, $gfacID )
 {
    return job_state_path( $us3_db, $gfacID, 'claim' );
@@ -707,11 +716,22 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
    list( $runID, $editID, $dataType, $cell, $channel, $wl, $ext ) =
       explode( ".", $editXMLFilename );
 
+   ## The site admin first, so the submitter is told so only when that mail went out.
+   if ( $failed_here && $admin_detail === null && job_fail_is_internal( $msg ) )
+   {
+      $admin_detail = $msg;
+   }
+   $admin_told = $failed_here && $admin_detail !== null
+                 && mail_to_admin( 'fail', "Job $gfacID, request $requestID in $db: $admin_detail" );
+
    ## An unset listen-config address still gives the mail a sender, as common's notices do.
    $sender = ! empty( $admin_email ) ? $admin_email : 'root@localhost';
    $headers  = "From: $org_name Admin<$sender>"     . "\n";
-   ## One Cc header, to the configured admin address only.
-   $headers .= "Cc: $org_name Admin<$sender>\n";
+   ## One Cc header, to the configured admin address only, unless the admin already has this failure's detail.
+   if ( ! $admin_told )
+   {
+      $headers .= "Cc: $org_name Admin<$sender>\n";
+   }
 
    ## Set the reply address
    $headers .= "Reply-To: $org_name<$sender>"      . "\n";
@@ -751,13 +771,6 @@ write_logld( "$me mail_to_user(): sending email to $email_address for $gfacID" )
 
    if ( $failed_here )
    {
-      ## The site admin first, so the submitter is told so only when that mail went out.
-      if ( $admin_detail === null && job_fail_is_internal( $msg ) )
-      {
-         $admin_detail = $msg;
-      }
-      $admin_told = $admin_detail !== null
-                    && mail_to_admin( 'fail', "Job $gfacID, request $requestID in $db: $admin_detail" );
       $message .= job_fail_user_text( $msg, $admin_told );
    }
    else if ( $type != "success" )
@@ -1060,7 +1073,7 @@ write_logld( "$me: tarfile size: $lent");
       {
          return JOB_FETCH_RETRY;
       }
-      $GLOBALS[ 'job_fetch_fault' ] = "its results could not be written to its gfac.analysis row: $error";
+      $GLOBALS[ 'job_fetch_fault' ] = $error;
       return JOB_FETCH_LOCAL_FAULT;
    }
 
