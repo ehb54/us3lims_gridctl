@@ -304,7 +304,7 @@ function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $cause, $detail
       write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
    }
    @unlink( job_state_path( $us3_db, $key, 'complete_seen' ) );
-   $fault = md5( $cause );
+   $fault = hash( 'sha256', $cause );
    $told  = dirname( dirname( cleanup_job_dir( $us3_db, $key ) ) ) . "/.local_fault_told/$fault";
    clearstatcache( true, $told );
    $when = max( (int) @filemtime( $told ), isset( $told_here[ $fault ] ) ? $told_here[ $fault ] : 0 );
