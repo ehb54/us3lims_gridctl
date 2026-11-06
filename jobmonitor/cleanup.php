@@ -217,6 +217,8 @@ function job_staging_root( $work, $us3_db )
 const JOB_FETCH_LOCAL_FAULT = -3;
 ## get_local_files(): the database connection failed; nothing to report unless it lasts.
 const JOB_FETCH_RETRY = -4;
+## The largest archive gfac.analysis.tarfile holds (MEDIUMBLOB).
+const JOB_RESULTS_MAX_BYTES = 16777215;
 
 ## Free bytes under $root, or false when unknown.
 if ( ! function_exists( 'job_staging_free_bytes' ) ) {
@@ -304,6 +306,9 @@ function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $cause, $detail
       write_logld( "$me: a fault on this server, not the cluster, holds the results of $gfacID: $why; will retry" );
    }
    @unlink( job_state_path( $us3_db, $key, 'complete_seen' ) );
+   $waiting = job_state_path( $us3_db, $key, 'local_fault_wait' );
+   @mkdir( dirname( $waiting ), 0770, true );
+   @touch( $waiting );
    $fault = hash( 'sha256', $cause );
    $told  = dirname( dirname( cleanup_job_dir( $us3_db, $key ) ) ) . "/.local_fault_told/$fault";
    clearstatcache( true, $told );
@@ -315,7 +320,7 @@ function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $cause, $detail
       @touch( $told );
       mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster, and any other job with the same fault,"
                      . " is waiting on a fault of this server, not the cluster: $why."
-                     . " Each finishes by itself once that is fixed. This repeats daily while it lasts." );
+                     . " php uslims_jobs.php --busy lists every job left. Each finishes by itself once that is fixed. This repeats daily while it lasts." );
    }
    return 0;
 }
@@ -396,6 +401,7 @@ function job_state_files()
       'finalizing'     => 'finalizing',       ## the row is gone, the stage is not written yet
       'status_pending' => 'status-pending',   ## results are in; only the final status write failed
       'complete_seen'  => 'complete_seen',    ## when cleanup first found the job unfinalizable
+      'local_fault_wait' => 'local_fault_wait', ## results are stored and a fault of this server holds them
    );
 }
 
@@ -1027,7 +1033,11 @@ function get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key =
    ## Both remote candidates land at this one local name.
    $fn_tarfile = "analysis-results.tar";
 
-   if ( file_exists( $fn_tarfile ) )
+   ## No fix makes it fit, so it isn't read, and the job fails instead of waiting.
+   $too_large = 0;
+   if ( file_exists( $fn_tarfile ) && filesize( $fn_tarfile ) > JOB_RESULTS_MAX_BYTES )
+      $too_large = filesize( $fn_tarfile );
+   else if ( file_exists( $fn_tarfile ) )
       $tarfile = file_get_contents( $fn_tarfile );
 
 ##   $lense = strlen( $stderr );
@@ -1056,8 +1066,14 @@ write_logld( "$me: tarfile size: $lent");
          $args[] = (string) $value;
       }
    }
+   $too_large_failure = "Its results are " . ceil( $too_large / 1048576 ) . " MB, more than the 16 MB that can be stored";
    if ( ! $set )
    {
+      if ( $too_large )
+      {
+         $GLOBALS[ 'job_fetch_failure' ] = $too_large_failure;
+         return -2;
+      }
       return 1;
    }
    $args[] = (int) $id;
@@ -1073,10 +1089,21 @@ write_logld( "$me: tarfile size: $lent");
       {
          return JOB_FETCH_RETRY;
       }
+      ## ER_DATA_TOO_LONG: this never clears either.
+      if ( mysqli_errno( $db_handle ) === 1406 )
+      {
+         $GLOBALS[ 'job_fetch_failure' ] = "Its output is too large to store";
+         return -2;
+      }
       $GLOBALS[ 'job_fetch_fault' ] = $error;
       return JOB_FETCH_LOCAL_FAULT;
    }
 
+   if ( $too_large )
+   {
+      $GLOBALS[ 'job_fetch_failure' ] = $too_large_failure;
+      return -2;
+   }
    return 1;
 }
 

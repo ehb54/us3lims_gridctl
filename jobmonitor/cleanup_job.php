@@ -258,7 +258,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
       write_logld( "$me: could not tell which gfac.analysis row is $gfacID's - will retry" );
       return( 0 );
    }
-   $query = "SELECT status, cluster, metaschedulerClusterExecuting, id FROM gfac.analysis " .
+   $query = "SELECT status, cluster, metaschedulerClusterExecuting, id, LENGTH(tarfile) FROM gfac.analysis " .
             "WHERE gfacID = ?" . $row_sql[ 'sql' ];
    $key   = job_key( $gfacID, $exec_cluster );
 
@@ -290,7 +290,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
 ##write_logld( "$me:    db=$db; num_rows=$num_rows; queuestatus=$queuestatus" );
 ##}
 
-   list( $status, $cluster, $metaschedulerClusterExecuting, $id ) = mysqli_fetch_array( $result );
+   list( $status, $cluster, $metaschedulerClusterExecuting, $id, $stored_bytes ) = mysqli_fetch_array( $result );
 
    ## A metascheduler pseudo-cluster submission has no real sshport/workdir of
    ## its own to fetch results from; the dispatch worker's chosen real
@@ -306,7 +306,12 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    $seen_file     = job_state_path( $db, $key, 'complete_seen' );
    $fetch_failure = '';
 
-   $fetched = get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key );
+   ## Results already in the row aren't fetched and written again at each poll of a wait on this server.
+   ## Other polls do fetch: a file can still be arriving at the login node when Slurm says the job ended.
+   $fault_wait = job_state_path( $db, $key, 'local_fault_wait' );
+   clearstatcache( true, $fault_wait );
+   $fetched = (int) $stored_bytes > 0 && is_file( $fault_wait )
+            ? 1 : get_local_files( $db_handle, $cluster, $requestID, $id, $gfacID, $key );
 
    if ( $fetched === JOB_FETCH_RETRY )
    {
@@ -334,7 +339,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
    }
    else if ( $fetched === -2 )
    {
-      $fetch_failure = "Results could not be staged from $cluster";
+      $fetch_failure = $GLOBALS[ 'job_fetch_failure' ] ?? "Results could not be staged from $cluster";
       write_logld( "$me: results for $gfacID cannot be staged; failing the job" );
    }
 
@@ -391,6 +396,7 @@ function job_cleanup( $us3_db, $reqID, $db_handle, $exec_cluster = '' )
       {
          return job_local_fault_wait( $db, $key, $gfacID, $cluster, "could not expand its results under $work", $extract[ 'detail' ] );
       }
+      @unlink( $fault_wait );
    }
 
    if ( $has_results )

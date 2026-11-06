@@ -163,7 +163,8 @@ $io = array(
         $res = $rx->run( "squeue --noheader --all --states=all --user=\"\$(id -un)\" --format='%i|%k'",
                          array( 'retries' => 1, 'label' => 'dispatch reconcile' ) );
         if ( ! $res[ 'ok' ] ) {
-            return array( 'ok' => false, 'jobs' => array(), 'reason' => $res[ 'class' ] );
+            return array( 'ok' => false, 'jobs' => array(), 'reason' => $res[ 'class' ],
+                          'gone' => dispatch_worker_member_gone( $cluster, $global_cluster_details ) );
         }
         return array( 'ok' => true, 'reason' => '',
                       'jobs' => dispatch_worker_jobs_with_comment( $res[ 'stdout' ], submit_slurm::dispatch_comment( $token ) ) );

@@ -20,6 +20,7 @@ if ( ! function_exists( 'db_params_query' ) )
          reset( $last );
          unset( $last[ key( $last ) ] );
       }
+      $refs = array();
       try
       {
          $stmt = $last[ $key ] = mysqli_prepare( $link, $sql );
@@ -30,7 +31,6 @@ if ( ! function_exists( 'db_params_query' ) )
          if ( $args )
          {
             $types = '';
-            $refs  = array();
             foreach ( array_values( $args ) as $k => $v )
             {
                $types   .= is_int( $v ) ? 'i' : ( is_float( $v ) ? 'd' : 's' );
@@ -52,6 +52,14 @@ if ( ! function_exists( 'db_params_query' ) )
       catch ( mysqli_sql_exception $e )
       {
          return false;
+      }
+      finally
+      {
+         ## The statement stays open, and a monitor reconnects at each poll: it must not keep the values too.
+         foreach ( array_keys( $refs ) as $k )
+         {
+            $refs[ $k ] = null;
+         }
       }
    }
 }

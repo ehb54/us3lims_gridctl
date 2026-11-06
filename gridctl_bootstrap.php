@@ -8,8 +8,9 @@ if ( !isset( $us3bin ) ) {
 include_once "$us3bin/listen-config.php";
 
 if ( ( $listen_config_version ?? 0 ) < 2 ) {
-    $msg = "gridctl: $us3bin/listen-config.php is the pre-upgrade format; "
-         . "run php ~us3/lims/database/utils/uslims_upgrade.php";
+    $msg = "gridctl: $us3bin/listen-config.php is the pre-upgrade format. If jobs are unfinished, this gridctl can't finish"
+         . " them: check out the release that started them in gridctl and common, and finish them (php uslims_jobs.php --busy)."
+         . " Then move both back and run php ~us3/lims/database/utils/uslims_upgrade.php";
     if ( function_exists( 'syslog' ) ) {
         syslog( LOG_ERR, $msg );
     }

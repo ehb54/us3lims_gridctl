@@ -22,6 +22,8 @@ const DISPATCH_WORKER_KEEPALIVE_SECONDS = 60;
 ## How long a renewal after a finished copy is retried before the copy is given up on.
 const DISPATCH_WORKER_RENEW_RETRY_SECONDS = 300;
 const DISPATCH_WORKER_BUSY_REASON = 'another dispatch decision for this pool is in progress';
+## Separates what an operator wrote when closing a request from why the close still waits.
+const DISPATCH_CLOSE_WAITING = '; still held: ';
 
 ## The receipt spool: $global_dispatch_spool_dir, else lims/etc/dispatch-spool under the service account's home.
 function dispatch_spool_dir()
@@ -133,6 +135,12 @@ function dispatch_heartbeat_expected( array $cluster_details, $config, $marker, 
    return $active && (int) @filemtime( $config ) < $now - 120;
 }
 
+## Whether the cluster list, read and not empty, leaves $cluster out: an operator's word that the member is gone.
+function dispatch_worker_member_gone( $cluster, $cluster_details )
+{
+   return is_array( $cluster_details ) && $cluster_details && ! isset( $cluster_details[ $cluster ] );
+}
+
 ## Instance databases holding the dispatch tables.
 function dispatch_worker_instances( $link )
 {
@@ -141,13 +149,30 @@ function dispatch_worker_instances( $link )
    return $rows === null ? null : array_column( $rows, 'TABLE_SCHEMA' );
 }
 
+## One statement over every instance, with the database name in column d. Null if it failed, as when one
+## instance has lost its tables; the caller then asks each on its own, so one can't hide the others.
+function dispatch_worker_each_instance( $link, array $dbs, callable $select )
+{
+   if ( count( $dbs ) < 2 ) {
+      return null;
+   }
+   return dispatch_rows_checked( $link, implode( ' UNION ALL ', array_map( $select, $dbs ) ) );
+}
+
 ## The instances with any request not yet finished; the others need no dispatch work this pass.
 function dispatch_worker_busy_instances( $link, array $dbs )
 {
+   $select = function ( $db ) use ( $link ) {
+      return "SELECT '" . mysqli_real_escape_string( $link, $db ) . "' d FROM ( SELECT 1 FROM `$db`.dispatch_request
+         WHERE state NOT IN ('CLOSED','FAILED','EXPIRED','CANCELLED') LIMIT 1 ) unfinished";
+   };
+   $rows = dispatch_worker_each_instance( $link, $dbs, $select );
+   if ( $rows !== null ) {
+      return array_values( array_intersect( $dbs, array_column( $rows, 'd' ) ) );
+   }
    ## A failed lookup counts as busy: it says nothing about the requests.
-   return array_values( array_filter( $dbs, function ( $db ) use ( $link ) {
-      return dispatch_rows_checked( $link, "SELECT 1 FROM `$db`.dispatch_request
-         WHERE state NOT IN ('CLOSED','FAILED','EXPIRED','CANCELLED') LIMIT 1" ) !== array();
+   return array_values( array_filter( $dbs, function ( $db ) use ( $link, $select ) {
+      return dispatch_rows_checked( $link, $select( $db ) ) !== array();
    } ) );
 }
 
@@ -169,13 +194,20 @@ function dispatch_worker_next_due( $link, array $dbs )
 ## The submission directories pool intakes write to, from each instance's newest request.
 function dispatch_worker_submit_dirs( $link, array $dbs )
 {
-   $dirs = array();
-   foreach ( $dbs as $db ) {
-      $rows = dispatch_rows( $link, "SELECT inputRef FROM `$db`.dispatch_request WHERE inputRef <> ''
-         ORDER BY dispatchRequestID DESC LIMIT 1" );
-      if ( $rows ) {
-         $dirs[] = dirname( dirname( $rows[ 0 ][ 'inputRef' ] ) );
+   $select = function ( $db ) {
+      return "SELECT inputRef FROM ( SELECT inputRef FROM `$db`.dispatch_request WHERE inputRef <> ''
+         ORDER BY dispatchRequestID DESC LIMIT 1 ) newest";
+   };
+   $rows = dispatch_worker_each_instance( $link, $dbs, $select );
+   if ( $rows === null ) {
+      $rows = array();
+      foreach ( $dbs as $db ) {
+         $rows = array_merge( $rows, dispatch_rows( $link, $select( $db ) ) );
       }
+   }
+   $dirs = array();
+   foreach ( $rows as $r ) {
+      $dirs[] = dirname( dirname( $r[ 'inputRef' ] ) );
    }
    return array_values( array_unique( $dirs ) );
 }
@@ -366,8 +398,8 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       if ( ! dispatch_transition( $link, $db, $id, $generation, $from, $to, $reason, $fields ) ) {
          return 'lost';
       }
-      if ( $to === DISPATCH_FAILED && isset( $io[ 'failed' ] ) ) {
-         $io[ 'failed' ]( $reason );
+      if ( $to === DISPATCH_FAILED ) {
+         dispatch_worker_report_failed( $link, $db, $io, $reason );
       }
       if ( $to === DISPATCH_BLOCKED && isset( $io[ 'blocked' ] ) ) {
          $io[ 'blocked' ]( $reason, isset( $fields[ 'reasonCode' ] ) ? $fields[ 'reasonCode' ] : '' );
@@ -385,9 +417,7 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
       ## The disabled reason, applied to every never-submitted request of the pool.
       $failed = dispatch_fail_disabled_pool( $link, $db, $req[ 'pool' ] );
       $reason = "metascheduler '{$req['pool']}' is disabled (active=false)";
-      if ( isset( $io[ 'failed' ] ) ) {
-         $io[ 'failed' ]( $reason );
-      }
+      dispatch_worker_report_failed( $link, $db, $io, $reason );
       ## The others failed with it, and no attempt will ever report them.
       $others = array_diff( $failed, array( (int) $id ) );
       if ( $others && isset( $io[ 'pool_disabled' ] ) ) {
@@ -705,8 +735,8 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
    if ( $outcome[ 'certainty' ] === SUBMIT_UNKNOWN ) {
       return DISPATCH_SUBMISSION_UNKNOWN;
    }
-   if ( $next === DISPATCH_FAILED && isset( $io[ 'failed' ] ) ) {
-      $io[ 'failed' ]( $outcome[ 'reason' ] );
+   if ( $next === DISPATCH_FAILED ) {
+      dispatch_worker_report_failed( $link, $db, $io, $outcome[ 'reason' ] );
    }
    return $next;
 }
@@ -735,6 +765,15 @@ function dispatch_worker_track( $link, $db, $id, $generation, array $plan, $job_
    return DISPATCH_ACCEPTED;
 }
 
+## Report a terminal failure. A stage's status comes from here, not housekeeping: this may be the instance's last unsettled request.
+function dispatch_worker_report_failed( $link, $db, array $io, $reason )
+{
+   if ( isset( $io[ 'failed' ] ) ) {
+      $io[ 'failed' ]( $reason );
+   }
+   dispatch_mirror_autoflow( $link, $db );
+}
+
 /** Settle a close an operator requested, once the last look found no job. */
 function dispatch_recover_close( $link, $db, $id, $generation, $reason, array $io )
 {
@@ -756,7 +795,7 @@ function dispatch_recover_close( $link, $db, $id, $generation, $reason, array $i
  * exactly one match records the acceptance, anything else stays held. An
  * accepted request gets its tracking and monitor repaired. A requested
  * cancellation is delivered once the job is known. $io:
- *   find   fn( $cluster, $token ) => array( ok, jobs, reason ): jobs carrying the token
+ *   find   fn( $cluster, $token ) => array( ok, jobs, reason, gone ): jobs carrying the token; gone: dispatch_worker_member_gone()
  *   track  fn( array $plan, $job_id ) => bool
  *   cancel fn( $cluster, $job_id ) => whether the scheduler confirmed the cancellation
  * Returns the state the request was left in, or 'lost'.
@@ -779,7 +818,16 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
       $jobs = ! empty( $found[ 'ok' ] ) ? array_values( array_unique( $found[ 'jobs' ] ) ) : array();
       if ( empty( $found[ 'ok' ] ) || count( $jobs ) !== 1 ) {
          if ( $req[ 'reasonCode' ] === 'operator_close' && ! $jobs ) {
-            return dispatch_recover_close( $link, $db, $id, $generation, $req[ 'reason' ], $io );
+            ## What the operator wrote, without what a failed check added.
+            $close_reason = explode( DISPATCH_CLOSE_WAITING . "$cluster could not be queried", $req[ 'reason' ] )[ 0 ];
+            if ( ! empty( $found[ 'ok' ] ) || ! empty( $found[ 'gone' ] ) ) {
+               return dispatch_recover_close( $link, $db, $id, $generation, $close_reason, $io );
+            }
+            ## Its job can be running: a check that could not ask the member says nothing about it.
+            dispatch_reconcile_unresolved( $link, $db, $id, $generation,
+               $close_reason . DISPATCH_CLOSE_WAITING . "$cluster could not be queried: {$found['reason']}."
+               . " The close settles once it answers, or once it is removed from the configuration if it is gone for good" );
+            return DISPATCH_SUBMISSION_UNKNOWN;
          }
          $why = empty( $found[ 'ok' ] ) ? "$cluster could not be queried: {$found['reason']}"
               : ( $jobs ? "more than one job at $cluster carries this attempt: " . implode( ', ', $jobs )
