@@ -754,17 +754,19 @@ class job_state_machine
       ## back in progress: that guard stays. It used to apply to every write, which
       ## also blocked the corrections that matter, a stage wrongly failed by a
       ## premature timeout and then finished, or completed and then found to have
-      ## bad results. A later terminal verdict is allowed to replace an earlier one.
-      $guard = stage_status_is_terminal( $stage ) ? '' : " AND NOT status RLIKE ?";
+      ## bad results. A later terminal verdict is allowed to replace an earlier one,
+      ## except a cancel: submitctl.php has not yet stopped the job, and a
+      ## replacement would let it advance to the next stage instead.
+      $terminal = stage_status_is_terminal( $stage );
+      $guard    = $terminal ? " AND LOWER( COALESCE( status, '' ) ) <> ?" : " AND NOT status RLIKE ?";
 
-      if ( $guard === '' )
-         $this->logf( "update_autoflow_status() correcting to terminal '$stage'" );
+      if ( $terminal )
+         $this->logf( "update_autoflow_status() correcting to terminal '$stage' unless canceled" );
 
       $query = "UPDATE " . $this->us3_table( 'autoflowAnalysis' ) . " SET status = ?, statusMsg = ?"
          . " WHERE requestID = ? AND currentGfacID = ?" . $guard;
       $args  = array( (string) $stage, (string) $message, (int) $this->autoflowID, (string) $this->gfacID );
-      if ( $guard !== '' )
-         $args[] = stage_status_terminal_regex();
+      $args[] = $terminal ? JOB_STATUS_STAGE_CANCELED : stage_status_terminal_regex();
 
       $ok = (bool) $this->exec( $us3, $query, $args );
 
