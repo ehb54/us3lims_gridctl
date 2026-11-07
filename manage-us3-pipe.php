@@ -1,8 +1,8 @@
 <?php
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
-include "$class_dir/experiment_status.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
+gridctl_require_not_root( __FILE__, 'start', null, true );
 
 # add locking
 if ( isset( $lock_dir ) ) {
@@ -59,13 +59,13 @@ function process( $msg )
    // Convert to integer
    settype( $requestID, 'integer' );
 
-   // We need the gfacID
+   // Look up the scheduler job ID associated with this request.
    $resource = mysqli_connect( $dbhost, $user, $passwd, $db );
 
    if ( ! $resource )
    {
       write_log( "$self process(): Could not connect to MySQL - " . mysqli_error($resource) );
-      write_log( "$self process(): dbhost,user,passwd,db $dbhost, $user, $passwd, $db" );
+      write_log( "$self process(): dbhost,user,db $dbhost, $user, $db" );
       write_log( "$self process(): original msg - $msg" );
       return;
    }
@@ -85,10 +85,11 @@ function process( $msg )
      return;
    }
 
-   // Set flags for Airavata/Thrift and "Finished..."
+   // Read the current job-tracking state before processing the message.
    list( $gfacID ) = mysqli_fetch_row( $result );
 
-   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'";
+   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'"
+           . pipe_job_condition( $resource, $db, $requestID );
    $result2 = mysqli_query( $resource, $query2 );
    
    if ( ! $result2 )
@@ -105,71 +106,31 @@ function process( $msg )
      return;
    }   
 
-   $is_athrift  = preg_match( "/^US3-A/i", $gfacID );
    $is_finished = preg_match( "/^Finished/i", $message );
 
-   if ( $is_athrift )
-   {  // Process submitted thru Airavata/Thrift
-      if ( $is_finished )
-      {  // Message is "Finished..." : Update message and status
-write_log( "$self process(): Thrift + Finished" );
-        update_db( $db, $requestID, 'finished', $message );
-        update_aira( $gfacID, $message );     // wait for Airvata to deposit data
-      }
-      else
-      {  // Other messages : just update message
-//write_log( "$self process(): Thrift, NOT Finished" );
-        $updmsg = 'update';
-        if ( preg_match( "/^Starting/i", $message ) )
-           $updmsg = 'starting';
-        if ( preg_match( "/^Abort/i", $message ) )
-           $updmsg = 'aborted';
+   // Update the LIMS request and central job-tracking state directly.
+   if ( $is_finished )
+   {  // Local job finished — data should be there already
+      update_db( $db, $requestID, 'finished', $message );
+      update_gfac( $gfacID, "COMPLETE", $message, $db, $requestID );
+   }
 
-        update_db( $db, $requestID, $updmsg, $message );
-        update_gfac( $gfacID, "UPDATING", $message );
-      }
+   else if ( preg_match( "/^Starting/i", $message ) )
+   {
+     update_db( $db, $requestID, 'starting', $message );
+     update_gfac( $gfacID, "RUNNING", $message, $db, $requestID );
+   }
+
+   else if ( preg_match( "/^Abort/i", $message ) )
+   {
+     update_db( $db, $requestID, 'aborted', $message );
+     update_gfac( $gfacID, "CANCELED", $message, $db, $requestID );
    }
 
    else
-   {  // Not Airavata/Thrift
-      if ( $is_finished )
-      {  // Handle "Finished..." message
-         $hex = "[0-9a-fA-F]";
-
-         if ( preg_match( "/^US3-Experiment/i", $gfacID ) ||
-              preg_match( "/^US3-$hex{8}-$hex{4}-$hex{4}-$hex{4}-$hex{12}$/", $gfacID ) )
-         {
-            // Then it's a GFAC job
-            update_db( $db, $requestID, 'finished', $message );
-            update_gfac( $gfacID, "UPDATING", $message );     // wait for GFAC to deposit data
-            notify_gfac_done( $gfacID );                      // notify them to go get it
-         }
-
-         else
-         {
-            // It's a local job
-            update_db( $db, $requestID, 'finished', $message );
-            update_gfac( $gfacID, "COMPLETE", $message );     // data should be there already
-         }
-      }
-
-      else if ( preg_match( "/^Starting/i", $message ) )
-      {
-        update_db( $db, $requestID, 'starting', $message );
-        update_gfac( $gfacID, "RUNNING", $message );
-      }
-
-      else if ( preg_match( "/^Abort/i", $message ) )
-      {
-        update_db( $db, $requestID, 'aborted', $message );
-        update_gfac( $gfacID, "CANCELED", $message );
-      }
-
-      else
-      {
-        update_db( $db, $requestID, 'update', $message );
-        update_gfac( $gfacID, "UPDATING", $message );
-      }
+   {
+     update_db( $db, $requestID, 'update', $message );
+     update_gfac( $gfacID, "UPDATING", $message, $db, $requestID );
    }
 }
 
@@ -244,8 +205,27 @@ function update_db( $db, $requestID, $action, $message )
    mysqli_close( $resource );
 }
 
-// Function to update the global database status
-function update_gfac( $gfacID, $status, $message )
+// Update the central job-tracking status and append its message history.
+## This message's gfac.analysis row: the job number alone is not unique once
+## two clusters reuse it, so also its instance and, after the 4.3.0 upgrade
+## adds the column, its own request.
+function pipe_job_condition( $link, $db, $requestID )
+{
+  static $has_request_column = null;
+  if ( $has_request_column === null )
+  {
+    $gdb = isset( $GLOBALS[ 'gDB' ] ) && $GLOBALS[ 'gDB' ] !== '' ? $GLOBALS[ 'gDB' ] : 'gfac';
+    $stmt = mysqli_prepare( $link, "SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? "
+                                 . "AND TABLE_NAME = 'analysis' AND COLUMN_NAME = 'HPCAnalysisRequestID'" );
+    $res  = $stmt && mysqli_stmt_bind_param( $stmt, 's', $gdb ) && mysqli_stmt_execute( $stmt )
+          ? mysqli_stmt_get_result( $stmt ) : false;
+    $has_request_column = $res && mysqli_num_rows( $res ) > 0;
+  }
+  return " AND us3_db='" . mysqli_real_escape_string( $link, $db ) . "'"
+       . ( $has_request_column ? " AND HPCAnalysisRequestID=" . (int) $requestID : '' );
+}
+
+function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )
 {
   global $dbhost;
   global $guser;
@@ -259,13 +239,15 @@ function update_gfac( $gfacID, $status, $message )
                            'COMPLETE'
                          );
 
-  // Get data from global GFAC DB 
+  // Connect to the central job-tracking database.
   $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
   if ( ! $gLink )
   {
     write_log( "$self: Could not select DB $gDB " . mysqli_error( $gLink ) );
     return;
   }
+
+  $job_where = "WHERE gfacID='$gfacID'" . ( $db !== '' ? pipe_job_condition( $gLink, $db, $requestID ) : '' );
 
   $status = strtoupper( $status );
   if ( ! in_array( $status, $allowed_status ) )
@@ -279,7 +261,7 @@ function update_gfac( $gfacID, $status, $message )
   {
      $query = "UPDATE analysis " .
               "SET queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
-              "WHERE gfacID='$gfacID'";
+              $job_where;
 
 //write_log( "$self process(): updgf-u : status=$status" );
      mysqli_query( $gLink, $query );
@@ -289,15 +271,14 @@ function update_gfac( $gfacID, $status, $message )
   {
      $query = "UPDATE analysis SET status='$status', " .
               "queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
-              "WHERE gfacID='$gfacID'";
+              $job_where;
 
 //write_log( "$self process(): updgf-s : status=$status" );
      mysqli_query( $gLink, $query );
   }
 
   // Also update the queue_messages table
-  $query  = "SELECT id FROM analysis " .
-            "WHERE gfacID = '$gfacID'";
+  $query  = "SELECT id FROM analysis " . $job_where;
   $result = mysqli_query( $gLink, $query );
   if ( ! $result )
   {
@@ -326,76 +307,4 @@ function update_gfac( $gfacID, $status, $message )
   mysqli_close( $gLink );
 }
 
-// function to notify GFAC that the UDP message "Finished" has arrived
-function notify_gfac_done( $gfacID )
-{
-  global $serviceURL;
-  global $self;
-
-  $hex = "[0-9a-fA-F]";
-  if ( ! preg_match( "/^US3-Experiment/i", $gfacID ) &&
-       ! preg_match( "/^US3-$hex{8}-$hex{4}-$hex{4}-$hex{4}-$hex{12}$/", $gfacID ) )
-   {
-      // Then it's not a GFAC job
-      return false;
-   }
-
-   return true;
-}
-
-// Function to update the global database status (AThrift + Finished)
-function update_aira( $gfacID, $message )
-{
-   global $dbhost;
-   global $guser;
-   global $gpasswd;
-   global $gDB;
-   global $self;
-
-   // Get data from global GFAC DB 
-   $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
-   if ( ! $gLink )
-   {
-      write_log( "$self: Could not connect to DB $gDB " . mysqli_error( $gLink ) );
-      return;
-   }
-
-   // Update message and update status to 'FINISHED'
-   $query = "UPDATE analysis SET status='FINISHED', " .
-            "queue_msg='" . mysqli_real_escape_string( $gLink, $message ) . "' " .
-            "WHERE gfacID='$gfacID'";
-
-   mysqli_query( $gLink, $query );
-   write_log( "$self: Status FINISHED and 'Finished...' message updated" );
-
-   // Also update the queue_messages table
-   $query  = "SELECT id FROM analysis " .
-             "WHERE gfacID = '$gfacID'";
-   $result = mysqli_query( $gLink, $query );
-   if ( ! $result )
-   {
-      write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
-      return;
-   }
-
-   if ( mysqli_num_rows( $result ) == 0 )
-   {
-//      write_log( "$self: can't find $gfacID in GFAC db" );
-      return;
-   }
-
-   list( $aID ) = mysqli_fetch_array( $result );
-
-   $query  = "INSERT INTO queue_messages " .
-             "SET analysisID = $aID, " .
-             "message = '" . mysqli_real_escape_string( $gLink, $message ) . "'";
-   $result = mysqli_query( $gLink, $query );
-   if ( ! $result )
-   {
-      write_log( "$self: bad query: $query " . mysqli_error( $gLink ) );
-      return;
-   }
-
-   mysqli_close( $gLink );
-}
 ?>

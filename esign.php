@@ -1,16 +1,17 @@
 <?php
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
-include "$us3bin/listen-config.php";
-include "$class_dir/experiment_status.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
+## This is a while(1) daemon exactly like listen.php/manage-us3-pipe.php,
+## whose own suggested remedy already backgrounds correctly -- this one
+## didn't, so the suggested fix, copy-pasted as printed, ran the daemon
+## tied to the operator's own shell instead of surviving it.
+gridctl_require_not_root( __FILE__, 'start', null, true );
 
 # ********* start user defines *************
 
 # the polling interval
 $poll_sleep_seconds = 120;
-
-# define admin_email to override listen-config.php's default
-$admin_email = "emre.brookes@umt.edu";
 
 # resend email after hours
 
@@ -93,7 +94,7 @@ function db_connect() {
     do {
         $db_handle = mysqli_connect( $dbhost, $user, $passwd, $db );
         if ( !$db_handle ) {
-            write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in ${poll_sleep_seconds}s" );
+            write_logls( "could not connect to mysql: $dbhost, $user, $db. Will retry in {$poll_sleep_seconds}s" );
             sleep( $poll_sleep_seconds );
         }
     } while ( !$db_handle );
@@ -347,7 +348,6 @@ while( 1 ) {
                         ## send SME email
 
                         $mailto = implode( ",", $smeEmails );
-                        # $mailto = "emre.brookes@umt.edu";
 
                         $headers  = 
                             "From: GMP e-signature signed $host_name<noreply@$host_name>\n"
@@ -355,7 +355,7 @@ while( 1 ) {
 
                         $subject = "[$lims_db@$host_name] : GMP Report e-signature signed ($GMPReportID)";
 
-                        $now = date("m-d-Y H:i:m");
+                        $now = date("m-d-Y H:i:s");
 
                         if ( $do_send_emails ) {
                             if (
@@ -407,7 +407,7 @@ while( 1 ) {
                                     }
 
                                     $query =
-                                        "UPDATE ${lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
+                                    "UPDATE {$lims_db}.autoflowGMPReportEsign set eSignStatusJson='"
                                         . str_replace( "'", "\'", json_encode( $update_eSignStatusJson ) )
                                         . "' where ID = $ID"
                                         ;
@@ -517,7 +517,6 @@ while( 1 ) {
                 ;
 
             $mailto = $person_obj->email;
-            # $mailto = "emre.brookes@umt.edu";
 
             $headers  = 
                 "From: GMP e-signature request $host_name<noreply@$host_name>\n"
@@ -557,7 +556,7 @@ while( 1 ) {
     # echo "================================================================================\n";
     
     if ( !$work_done ) {
-        write_logls( "no requests to process sleeping ${poll_sleep_seconds}s", 2 );
+        write_logls( "no requests to process sleeping {$poll_sleep_seconds}s", 2 );
         sleep( $poll_sleep_seconds );
     }
 }
