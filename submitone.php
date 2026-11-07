@@ -509,6 +509,7 @@ echo "preparing to call $php_queue_setup_1\n";
 ## so $_SESSION['gwhostid'] is populated with the actual host name.
 
 $queue = "batch";
+$host_name = '';
 
 $global_config_file = $class_dir . "../global_config.php";
 try {

@@ -191,6 +191,95 @@ function dispatch_worker_next_due( $link, array $dbs )
    return $next;
 }
 
+/**
+ * What each instance with an unfinished request needs, in one statement over every instance: how many
+ * requests each lookup of the pass would find (lost, expire, recover, ready), waits past their notice time
+ * (notify), running jobs (monitored), seconds until a pool request is due as dispatch_worker_next_due()
+ * gives them (due), and a signature of what the autoflow mirror and the alert scan read (sig), including
+ * the stage rows of the instances in $autoflow, which have that table. Instances with nothing unfinished
+ * are left out. One whose lookup failed maps to null, which means all of it.
+ */
+function dispatch_worker_agenda( $link, array $dbs, array $autoflow = array() )
+{
+   $untracked = (int) DISPATCH_UNTRACKED_ALERT_SECONDS;
+   $select = function ( $db ) use ( $link, $untracked, $autoflow ) {
+      $stages = in_array( $db, $autoflow, true )
+              ? "(SELECT CONCAT_WS(':', COUNT(*), BIT_XOR(CRC32(CONCAT_WS('|', requestID, QUOTE(status), QUOTE(statusMsg),
+                   QUOTE(currentGfacID), QUOTE(currentHPCARID))))) FROM `$db`.autoflowAnalysis)" : "''";
+      return "SELECT '" . mysqli_real_escape_string( $link, $db ) . "' d,
+            COALESCE(SUM(state = 'SUBMITTING' AND claimExpiresAt < UTC_TIMESTAMP()), 0) lost,
+            COALESCE(SUM(state IN ('PENDING','ASSESSING','WAITING','STAGING') AND deadlineAt <= UTC_TIMESTAMP()), 0) expire,
+            COALESCE(SUM(( state IN ('SUBMISSION_UNKNOWN','ACCEPTED') OR ( state = 'MONITORED' AND cancelRequested = 1 ) )
+               AND (retryAt IS NULL OR retryAt <= UTC_TIMESTAMP()) AND (claimExpiresAt IS NULL OR claimExpiresAt < UTC_TIMESTAMP())), 0) recover,
+            COALESCE(SUM(batchSealed = 1 AND deadlineAt > UTC_TIMESTAMP() AND (
+               (state IN ('PENDING','WAITING') AND (retryAt IS NULL OR retryAt <= UTC_TIMESTAMP()))
+               OR (state IN ('ASSESSING','STAGING') AND claimExpiresAt < UTC_TIMESTAMP()) )), 0) ready,
+            COALESCE(SUM(notifiedAt IS NULL AND notifyAt <= UTC_TIMESTAMP() AND state IN ('PENDING','ASSESSING','WAITING','STAGING')), 0) notify,
+            SUM(state = 'MONITORED') monitored,
+            GREATEST(0, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), MIN(CASE WHEN state IN ('PENDING','WAITING') AND batchSealed = 1
+               AND deadlineAt > UTC_TIMESTAMP() THEN COALESCE(retryAt, UTC_TIMESTAMP()) END))) due,
+            CONCAT_WS('|', COUNT(*), BIT_XOR(CRC32(CONCAT_WS('|', dispatchRequestID, state, QUOTE(reasonCode), QUOTE(reason),
+               QUOTE(selectedCluster), pool, QUOTE(retryAt), QUOTE(notifiedAt), cancelRequested, QUOTE(autoflowAnalysisID),
+               HPCAnalysisRequestID))), SUM(state = 'ACCEPTED' AND updatedAt < UTC_TIMESTAMP() - INTERVAL $untracked SECOND),
+               (SELECT MAX(eventID) FROM `$db`.dispatch_event), $stages) sig
+         FROM `$db`.dispatch_request
+         WHERE state IN ('PENDING','ASSESSING','WAITING','STAGING','SUBMITTING','SUBMISSION_UNKNOWN','ACCEPTED','MONITORED','BLOCKED')
+         HAVING COUNT(*) > 0";
+   };
+   $rows = dispatch_worker_each_instance( $link, $dbs, $select );
+   $failed = array();
+   if ( $rows === null ) {
+      $rows = array();
+      foreach ( $dbs as $db ) {
+         $one = dispatch_rows_checked( $link, $select( $db ) );
+         if ( $one === null ) {
+            $failed[ $db ] = true;
+         } else {
+            $rows = array_merge( $rows, $one );
+         }
+      }
+   }
+   $by_db = array_column( $rows, null, 'd' );
+   $read = microtime( true );
+   $agenda = array();
+   foreach ( $dbs as $db ) {
+      if ( isset( $failed[ $db ] ) ) {
+         $agenda[ $db ] = null;
+      } elseif ( isset( $by_db[ $db ] ) ) {
+         $agenda[ $db ] = $by_db[ $db ] + array( '_read' => $read );
+      }
+   }
+   return $agenda;
+}
+
+## The seconds until the earliest pool request is due, counted from now; an instance the agenda could not read is asked here.
+function dispatch_worker_agenda_due( $link, array $agenda )
+{
+   $next = null;
+   $unread = array();
+   foreach ( $agenda as $db => $row ) {
+      if ( $row === null ) {
+         $unread[] = $db;
+      } elseif ( $row[ 'due' ] !== null ) {
+         $left = max( 0, (int) $row[ 'due' ] - (int) floor( microtime( true ) - $row[ '_read' ] ) );
+         $next = $next === null ? $left : min( $next, $left );
+      }
+   }
+   $asked = $unread ? dispatch_worker_next_due( $link, $unread ) : null;
+   return $asked === null ? $next : ( $next === null ? $asked : min( $next, $asked ) );
+}
+
+## The minute's housekeeping an instance needs: close (a job is running), notify (a wait passed its notice
+## time) and mirror (a request changed since its last mirror). Without an agenda row, all of it.
+function dispatch_worker_housekeeping( array $row = null, $mirrored_sig = null )
+{
+   if ( $row === null ) {
+      return array( 'close' => true, 'notify' => true, 'mirror' => true );
+   }
+   return array( 'close' => (int) $row[ 'monitored' ] > 0, 'notify' => (int) $row[ 'notify' ] > 0,
+                 'mirror' => $mirrored_sig === null || $mirrored_sig !== $row[ 'sig' ] );
+}
+
 ## The submission directories pool intakes write to, from each instance's newest request.
 function dispatch_worker_submit_dirs( $link, array $dbs )
 {
@@ -278,7 +367,8 @@ function dispatch_worker_backoff( $waits, $jitter = null )
  * each and $opts['capacity'] in all. Recovery of held and accepted requests
  * comes before new attempts. $spawn( $db, $id, $generation ) starts the child.
  * $opts['spool'] names the receipt spool directory; $opts['expired']( $db, $ids ) is told of
- * the requests this pass expired. Returns the claims as "db:id".
+ * the requests this pass expired. $opts['agenda'] is dispatch_worker_agenda()'s result: a lookup
+ * it found nothing for is skipped. Returns the claims as "db:id".
  */
 function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
 {
@@ -287,24 +377,33 @@ function dispatch_worker_pass( $link, array $dbs, array $opts, callable $spawn )
    $lease = isset( $opts[ 'lease' ] ) ? (int) $opts[ 'lease' ] : DISPATCH_WORKER_LEASE_SECONDS;
    $gdb = isset( $opts[ 'gdb' ] ) ? $opts[ 'gdb' ] : 'gfac';
 
-   if ( ! empty( $opts[ 'spool' ] ) ) {
-      dispatch_spool_replay( $link, $opts[ 'spool' ], $gdb );
+   ## A replayed receipt changes requests the agenda was read before, so this pass looks at everything.
+   if ( ! empty( $opts[ 'spool' ] ) && dispatch_spool_replay( $link, $opts[ 'spool' ], $gdb ) ) {
+      unset( $opts[ 'agenda' ] );
    }
 
    $queues = array();
    foreach ( $dbs as $db ) {
-      dispatch_hold_lost_submissions( $link, $db );
-      $expired = dispatch_expire_due( $link, $db );
+      $row = isset( $opts[ 'agenda' ][ $db ] ) ? $opts[ 'agenda' ][ $db ] : null;
+      $due = function ( $what ) use ( $row ) {
+         return $row === null || (int) $row[ $what ] > 0;
+      };
+      ## A submission held here is checked in this pass, as before.
+      $held = $due( 'lost' ) ? dispatch_hold_lost_submissions( $link, $db ) : array();
+      $expired = $due( 'expire' ) ? dispatch_expire_due( $link, $db ) : array();
       if ( $expired && isset( $opts[ 'expired' ] ) ) {
          $opts[ 'expired' ]( $db, $expired );
       }
       if ( $capacity > 0 ) {
          $queues[ $db ] = array();
-         foreach ( dispatch_recovery_ready( $link, $db, $per ) as $id ) {
+         foreach ( $held || $due( 'recover' ) ? dispatch_recovery_ready( $link, $db, $per ) : array() as $id ) {
             $queues[ $db ][] = array( 'recover', $id );
          }
-         foreach ( dispatch_ready( $link, $db, $per ) as $id ) {
+         foreach ( $due( 'ready' ) ? dispatch_ready( $link, $db, $per ) : array() as $id ) {
             $queues[ $db ][] = array( 'attempt', $id );
+         }
+         if ( ! $queues[ $db ] ) {
+            unset( $queues[ $db ] );
          }
       }
    }

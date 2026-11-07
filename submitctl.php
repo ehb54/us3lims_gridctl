@@ -130,6 +130,20 @@ function idle_nap_seconds( $poll, $autoflow_waiting, $autoflow_running, $next_du
     return $next_due === null ? $poll : max( 1, min( $poll, (int) $next_due ) );
 }
 
+## The instances whose autoflow table a pass reads: all of them on the first pass, after autoflow work and once
+## a poll has passed since they were last all read, as 4.2.0 reads them; otherwise those with a waiting stage.
+function autoflow_read_dbs( array $limsdbs, $full_at, $poll, $now, $after_work, array $waiting ) {
+    if ( $after_work || $now - $full_at >= $poll ) {
+        return $limsdbs;
+    }
+    return array_values( array_intersect( $limsdbs, array_keys( $waiting ) ) );
+}
+
+## Seconds until every autoflow table is due to be read again.
+function autoflow_poll_left( $full_at, $poll, $now ) {
+    return max( 1, (int) ceil( $poll - ( $now - $full_at ) ) );
+}
+
 ## With nothing to watch the nap is one sleep, as 4.2.0's is; otherwise it looks each second.
 function idle_nap_step( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
     return $tick === null && $running === null && ! array_filter( (array) $watch_dirs, 'strlen' ) ? max( 1, (int) $seconds ) : 1;
@@ -355,6 +369,14 @@ $last_purge   = 0;
 $uploads_kept = array();
 $last_housekeeping = 0;
 $submission_grace_until = 0;
+## What each busy instance needs this pass, and the signatures its last mirror and alert scan saw.
+$agenda = array();
+$mirrored = array();
+$scanned = array();
+## When the autoflow tables were last all read, and what the next pass reads between polls.
+$autoflow_full_at = 0.0;
+$autoflow_after_work = false;
+$autoflow_waiting_dbs = array();
 write_logls( ( $pool_state[ 'on' ] ? '' : 'no active metascheduler pool or unfinished request; ' )
              . "dispatch instances: " . ( $dispatch_dbs ? implode( ', ', $dispatch_dbs ) : 'none' )
              . "; at most $max_children submissions at once", 1 );
@@ -388,8 +410,9 @@ while( 1 ) {
         $dispatch_dbs_read = time();
     }
 
-    ## Only instances with unfinished requests have dispatch work (one indexed lookup each).
-    $busy_dbs = dispatch_worker_busy_instances( $db_handle, $dispatch_dbs );
+    ## Only instances with unfinished requests have dispatch work, and only what is due there: one statement for all.
+    $agenda = $dispatch_dbs ? dispatch_worker_agenda( $db_handle, $dispatch_dbs, $limsdbs ) : array();
+    $busy_dbs = array_keys( $agenda );
     $settled = dispatch_worker_pool_state_settled( $pool_state, $busy_dbs );
     if ( $settled[ 'on' ] !== $pool_state[ 'on' ] ) {
         write_logls( "dispatch worker stopped: no active pool and no unfinished request", 1 );
@@ -407,20 +430,35 @@ while( 1 ) {
     if ( $pool_state[ 'on' ] && time() - $last_housekeeping >= 60 ) {
         dispatch_heartbeat_beat( $db_handle, 'gfac', $dispatch_owner );
         dispatch_alert_resolve( $db_handle, 'gfac', 'worker_heartbeat', 'the dispatch worker is running' );
-        foreach ( $busy_dbs as $dispatch_db ) {
-            dispatch_close_finished( $db_handle, $dispatch_db );
-            dispatch_mirror_autoflow( $db_handle, $dispatch_db );
-            dispatch_mark_waiting_notified( $db_handle, $dispatch_db );
+        ## A request that has not changed since the last minute, such as one held for an operator, costs nothing here.
+        $mirrored = array_intersect_key( $mirrored, $agenda );
+        $sigs = array();
+        foreach ( $agenda as $dispatch_db => $row ) {
+            $need = dispatch_worker_housekeeping( $row, isset( $mirrored[ $dispatch_db ] ) ? $mirrored[ $dispatch_db ] : null );
+            if ( $need[ 'close' ] ) {
+                dispatch_close_finished( $db_handle, $dispatch_db );
+            }
+            $marked = $need[ 'notify' ] ? dispatch_mark_waiting_notified( $db_handle, $dispatch_db ) : 0;
+            ## Taken as done only when it worked: a failed mirror is tried again next minute.
+            $ok = $need[ 'mirror' ] || $marked ? dispatch_mirror_autoflow( $db_handle, $dispatch_db ) !== null : true;
+            $mirrored[ $dispatch_db ] = $row !== null && ! $marked && $ok ? $row[ 'sig' ] : null;
+            if ( $row !== null ) {
+                $sigs[ $dispatch_db ] = $row[ 'sig' ];
+            }
         }
         ## Mail first, so an item raised since the last scan is told before the scan can close it.
         dispatch_alert_email_pending( $db_handle, 'gfac', ! empty( $global_dispatch_alert_email ), $site_admin_send );
-        dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs );
+        $scanned = array_intersect_key( $scanned, $agenda );
+        ## Requests the database fix released are due now; this pass looks at everything in their instances.
+        foreach ( dispatch_alert_scan( $db_handle, 'gfac', $dispatch_dbs, $busy_dbs, $sigs, $scanned ) as $released_db ) {
+            $agenda[ $released_db ] = null;
+        }
         $last_housekeeping = time();
     }
 
     $claimed = dispatch_worker_pass( $db_handle, $busy_dbs,
         array( 'capacity' => $max_children - reap_children(), 'owner' => $dispatch_owner,
-               'spool' => dispatch_spool_dir(), 'expired' => $dispatch_expired ),
+               'spool' => dispatch_spool_dir(), 'expired' => $dispatch_expired, 'agenda' => $agenda ),
         function ( $lims_db, $id, $generation ) use ( $home, $dispatch_owner ) {
             spawn_child( array( 'php', "{$home}/bin/dispatchone.php", $lims_db, $id, $generation, $dispatch_owner ),
                          "{$home}/etc/submit.log" );
@@ -449,7 +487,14 @@ while( 1 ) {
         $last_purge = time();
     }
 
-    foreach ( $limsdbs as $lims_db ) {
+    ## Every autoflow table each poll and after autoflow work, as 4.2.0 reads them; a pass started by
+    ## dispatch work reads only the instances with a stage waiting for a submission slot.
+    $autoflow_dbs = autoflow_read_dbs( $limsdbs, $autoflow_full_at, $poll_sleep_seconds, microtime( true ),
+                                       $autoflow_after_work, $autoflow_waiting_dbs );
+    $autoflow_full = $autoflow_dbs === $limsdbs;
+    $autoflow_after_work = false;
+    $autoflow_waiting_dbs = array();
+    foreach ( $autoflow_dbs as $lims_db ) {
         write_logls( "checking mysql db {$lims_db}", 2 );
 
         $query        = "SELECT {$id_field}, clusterDefault, status, currentGfacID, currentHPCARID, statusMsg, nextWaitStatus, nextWaitStatusMsg, statusJson, createUser, updateTime, stageSubmitTime FROM {$lims_db}.{$submit_request_table_name}";
@@ -501,6 +546,7 @@ while( 1 ) {
                     write_logls( "updating table {$submit_request_table_name} {$id_field} {$ID} nextWaitStatus", 2 );
                 }
                 $work_done = 1;
+                $autoflow_after_work = true;
                 continue;
             }
 
@@ -534,6 +580,7 @@ while( 1 ) {
                 if ( reap_children( 'autoflow' ) >= $max_autoflow_children ) {
                     write_logls( "{$submit_request_table_name} {$id_field} $ID waits: $max_autoflow_children autoflow submissions running", 2 );
                     $autoflow_waiting = true;
+                    $autoflow_waiting_dbs[ $lims_db ] = true;
                     continue;
                 }
                 $stage = array_shift( $statusJson->{ "to_process" } );
@@ -556,6 +603,7 @@ while( 1 ) {
                 ## Bounded apart from dispatch attempts, and high enough that ready stages start at once as in 4.2.0.
                 spawn_child( array( 'php', "{$home}/bin/submitone.php", $lims_db, $ID ), "{$home}/etc/submit.log", 'autoflow' );
                 $work_done = 1;
+                $autoflow_after_work = true;
                 continue;
             }
 
@@ -611,16 +659,21 @@ while( 1 ) {
                 write_logls( "success deleting {$id_field} {$ID} from {$submit_request_table_name}.", 2 );
             }
             $work_done = 1;
+            $autoflow_after_work = true;
         }
+    }
+    if ( $autoflow_full ) {
+        $autoflow_full_at = microtime( true );
     }
     if ( !$work_done ) {
         ## A pool stage is taken about as fast as a direct one: the nap ends when a request is due,
         ## and a new submission directory starts a short run of 1 s passes for its intake.
         ## Only on a host with dispatch instances, and a due request only counts while a child can take it.
         $pools = (bool) $dispatch_dbs;
-        $nap = idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, 0,
-                                 $busy_dbs && reap_children() < $max_children ? dispatch_worker_next_due( $db_handle, $busy_dbs ) : null,
-                                 $pools && time() < $submission_grace_until );
+        $nap = min( autoflow_poll_left( $autoflow_full_at, $poll_sleep_seconds, microtime( true ) ),
+                    idle_nap_seconds( $poll_sleep_seconds, $autoflow_waiting, 0,
+                                      $busy_dbs && reap_children() < $max_children ? dispatch_worker_agenda_due( $db_handle, $agenda ) : null,
+                                      $pools && time() < $submission_grace_until ) );
         write_logls( "no requests to process sleeping {$nap}s", 2 );
         ## A new submission directory: a few 1 s passes until its intake commits.
         if ( idle_nap( $nap, $pools ? $watch_dirs : array(), null,
