@@ -320,7 +320,7 @@ function job_local_fault_wait( $us3_db, $key, $gfacID, $cluster, $cause, $detail
       @touch( $told );
       mail_to_admin( 'fail', "Completed job $gfacID in $us3_db on $cluster, and any other job with the same fault,"
                      . " is waiting on a fault of this server, not the cluster: $why."
-                     . " php uslims_jobs.php --busy lists every job left. Each finishes by itself once that is fixed. This repeats daily while it lasts." );
+                     . " As us3, php ~us3/lims/database/utils/uslims_jobs.php --busy lists every job left. Each finishes by itself once that is fixed. This repeats daily while it lasts." );
    }
    return 0;
 }

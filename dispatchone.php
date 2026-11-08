@@ -158,13 +158,16 @@ $io = array(
     },
     ## Jobs at $cluster carrying the attempt token in their comment. --states=all keeps a job that
     ## already finished (within MinJobAge); an empty answer still never proves nonacceptance.
-    'find' => function ( $cluster, $token ) use ( $global_cluster_details ) {
-        $rx = new remote_exec( $cluster, $global_cluster_details, 'elog2' );
+    ## Uses global_config.php's whole list: a member the instance's cluster_config.php hides still holds its job.
+    'find' => function ( $cluster, $token ) {
+        $host_details = isset( $GLOBALS[ 'cluster_details' ] ) && is_array( $GLOBALS[ 'cluster_details' ] )
+                      ? $GLOBALS[ 'cluster_details' ] : array();
+        $rx = new remote_exec( $cluster, $host_details, 'elog2' );
         $res = $rx->run( "squeue --noheader --all --states=all --user=\"\$(id -un)\" --format='%i|%k'",
                          array( 'retries' => 1, 'label' => 'dispatch reconcile' ) );
         if ( ! $res[ 'ok' ] ) {
             return array( 'ok' => false, 'jobs' => array(), 'reason' => $res[ 'class' ],
-                          'gone' => dispatch_worker_member_gone( $cluster, $global_cluster_details ) );
+                          'gone' => dispatch_worker_member_gone( $cluster, $host_details ) );
         }
         return array( 'ok' => true, 'reason' => '',
                       'jobs' => dispatch_worker_jobs_with_comment( $res[ 'stdout' ], submit_slurm::dispatch_comment( $token ) ) );

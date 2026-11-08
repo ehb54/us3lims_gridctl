@@ -925,7 +925,7 @@ function dispatch_recover_run( $link, $gdb, $db, $id, $generation, $owner, array
             ## Its job can be running: a check that could not ask the member says nothing about it.
             dispatch_reconcile_unresolved( $link, $db, $id, $generation,
                $close_reason . DISPATCH_CLOSE_WAITING . "$cluster could not be queried: {$found['reason']}."
-               . " The close settles once it answers, or once it is removed from the configuration if it is gone for good" );
+               . " The close settles once it answers, or once it is removed from \$cluster_details in global_config.php if it is gone for good" );
             return DISPATCH_SUBMISSION_UNKNOWN;
          }
          $why = empty( $found[ 'ok' ] ) ? "$cluster could not be queried: {$found['reason']}"
