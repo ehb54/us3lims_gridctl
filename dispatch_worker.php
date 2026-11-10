@@ -844,12 +844,13 @@ function dispatch_attempt_run( $link, $gdb, $db, $id, $generation, $owner, array
 /**
  * Write tracking for an accepted job and attach its monitor through $io['track'],
  * then move the request to MONITORED. A failure keeps it ACCEPTED for a later
- * repair; it is never a reason to submit again.
+ * repair; it is never a reason to submit again. $io['track'] returns true, or
+ * false or why it failed, which the request's reason carries to the operator.
  */
 function dispatch_worker_track( $link, $db, $id, $generation, array $plan, $job_id, array $io, $note = '' )
 {
-   $ok = isset( $io[ 'track' ] ) && $io[ 'track' ]( $plan, $job_id );
-   if ( $ok && dispatch_mark_monitored( $link, $db, $id, "tracking recorded and monitor attached$note" ) ) {
+   $ok = isset( $io[ 'track' ] ) ? $io[ 'track' ]( $plan, $job_id ) : false;
+   if ( $ok === true && dispatch_mark_monitored( $link, $db, $id, "tracking recorded and monitor attached$note" ) ) {
       ## After the move, which succeeds once: one record per request, and a failure here costs only the record.
       if ( isset( $io[ 'advise' ] ) ) {
          $io[ 'advise' ]( $job_id );
@@ -860,7 +861,8 @@ function dispatch_worker_track( $link, $db, $id, $generation, array $plan, $job_
            : DISPATCH_MONITORED;
    }
    dispatch_repair_later( $link, $db, $id, $generation,
-                          "accepted as {$plan['cluster']} job $job_id; restoring tracking$note" );
+                          "accepted as {$plan['cluster']} job $job_id; restoring tracking$note"
+                          . ( is_string( $ok ) && $ok !== '' ? ": $ok" : '' ) );
    return DISPATCH_ACCEPTED;
 }
 

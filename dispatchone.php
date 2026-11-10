@@ -150,7 +150,10 @@ $io = array(
         $loaded = $load_job();
         $host_details = isset( $GLOBALS[ 'cluster_details' ] ) && is_array( $GLOBALS[ 'cluster_details' ] )
                       ? $GLOBALS[ 'cluster_details' ] : array();
-        return ! is_string( $loaded ) && $loaded->track_accepted( $job_id, $plan, $host_details );
+        if ( is_string( $loaded ) ) {
+            return $loaded;
+        }
+        return $loaded->track_accepted( $job_id, $plan, $host_details ) ? true : $loaded->tracking_failure();
     },
     'advise' => function ( $job_id ) use ( $load_job ) {
         $loaded = $load_job();
