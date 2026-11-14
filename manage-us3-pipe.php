@@ -88,7 +88,7 @@ function process( $msg )
    // Read the current job-tracking state before processing the message.
    list( $gfacID ) = mysqli_fetch_row( $result );
 
-   $query2 = "SELECT status from gfac.analysis where gfacID='$gfacID'"
+   $query2 = "SELECT status from gfac.analysis where gfacID='" . mysqli_real_escape_string( $resource, (string) $gfacID ) . "'"
            . pipe_job_condition( $resource, $db, $requestID );
    $result2 = mysqli_query( $resource, $query2 );
    
@@ -199,7 +199,7 @@ function update_db( $db, $requestID, $action, $message )
    }
 
    $query .= "lastMessage='" . mysqli_real_escape_string( $resource, $message ) . "'" .
-             "WHERE HPCAnalysisResultID=$resultID";
+             "WHERE HPCAnalysisResultID=" . (int) $resultID;
 
    mysqli_query( $resource, $query );
    mysqli_close( $resource );
@@ -247,7 +247,7 @@ function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )
     return;
   }
 
-  $job_where = "WHERE gfacID='$gfacID'" . ( $db !== '' ? pipe_job_condition( $gLink, $db, $requestID ) : '' );
+  $job_where = "WHERE gfacID='" . mysqli_real_escape_string( $gLink, (string) $gfacID ) . "'" . ( $db !== '' ? pipe_job_condition( $gLink, $db, $requestID ) : '' );
 
   $status = strtoupper( $status );
   if ( ! in_array( $status, $allowed_status ) )
@@ -295,7 +295,7 @@ function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )
   list( $aID ) = mysqli_fetch_array( $result );
 
   $query  = "INSERT INTO queue_messages " .
-            "SET analysisID = $aID, " .
+            "SET analysisID = " . (int) $aID . ", " .
             "message = '" . mysqli_real_escape_string( $gLink, $message ) . "'";
   $result = mysqli_query( $gLink, $query );
   if ( ! $result )

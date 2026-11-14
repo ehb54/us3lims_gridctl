@@ -146,7 +146,8 @@ function dispatch_worker_instances( $link )
 {
    $rows = dispatch_rows_checked( $link, "SELECT TABLE_SCHEMA FROM information_schema.TABLES
       WHERE TABLE_NAME = 'dispatch_request' AND TABLE_SCHEMA LIKE 'uslims3\\_%' ORDER BY TABLE_SCHEMA" );
-   return $rows === null ? null : array_column( $rows, 'TABLE_SCHEMA' );
+   ## Only names the job monitor accepts, since each is put into SQL as an identifier.
+   return $rows === null ? null : array_values( preg_grep( '/^uslims3_[A-Za-z0-9_]+\z/', array_column( $rows, 'TABLE_SCHEMA' ) ) );
 }
 
 ## One statement over every instance, with the database name in column d. Null if it failed, as when one
