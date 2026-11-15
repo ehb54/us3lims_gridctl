@@ -1,6 +1,6 @@
 <?php
 
-include "listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 
 $gfac_link = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
 

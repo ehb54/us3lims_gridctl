@@ -3,28 +3,40 @@
 $us3lims = exec( "ls -d ~us3/lims" );
 $us3bin  = "$us3lims/bin";
 $us3util = "$us3lims/database/utils";
-$us3jm   = "$us3lims/bin/jobmonitor";
+$us3jm   = __DIR__;   ## this directory, wherever the repo was deployed
 
-include "$us3bin/listen-config.php";
-include $class_dir_p . "experiment_status.php";
-include $class_dir_p . "experiment_errors.php";
-include $class_dir_p . "experiment_cancel.php";
-include $class_dir_p . "experiment_resource.php";
-include $class_dir_p . "job_details.php";
-include $class_dir_p . "../global_config.php";
+require_once dirname( __DIR__ ) . '/gridctl_bootstrap.php';
+## jobmonitor.php's real invocation is "dbname gfacID HPCAnalysisRequestID [cluster]",
+## not the literal word "start" -- pass the actual arguments through so the
+## printed remedy can be run as-is instead of failing with rc 255 for a
+## missing argument.
+gridctl_require_not_root( __FILE__, 'start',
+    implode( ' ', array_map( 'escapeshellarg', array_slice( $argv, 1 ) ) ) );
+include_once $class_dir . "../global_config.php";
 
+include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
+include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"
 include "$us3jm/gridctl.php";
-include "$us3jm/cleanup.php";
-include "$us3jm/cleanup_gfac.php";
-
-include "$us3util/utility.php";
+include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
+include_once "$us3jm/cleanup_job.php";
 
 # ********* start user defines *************
 ## some could be pushed to listen-config.php
 
 # the polling interval
-$poll_sleep_seconds = 165 + random_int( 10, 30 );
 $poll_sleep_seconds = 30;
+
+## ultrascan-tickets#1120: +/-20% jitter on the steady-state poll, never
+## below 1s. Many monitors (one per job) start close together -- a batch
+## submission, or services.php's own boot restart relaunching several at
+## once -- and without this they stay in lockstep every $poll_sleep_seconds
+## for as long as they keep running, all hitting the DB and the cluster at
+## the same instant instead of spread across the interval.
+function jobmonitor_poll_sleep_seconds( $base ) {
+   $base   = max( 1, (int) $base );
+   $jitter = (int) round( $base * 0.2 );
+   return $jitter <= 0 ? $base : max( 1, $base + random_int( -$jitter, $jitter ) );
+}
 
 # logging_level 
 # 0 : minimal messages (expected value for production)
@@ -41,19 +53,25 @@ $ll_base_dir  = "$us3lims/etc/joblog";
 
 # process arguments or die
 
-$notes = "usage: $self dbname gfacID HPCAnalysisRequestID
+$notes = "usage: $self dbname gfacID HPCAnalysisRequestID [cluster]
+cluster is the job's execution cluster; without it the job ID must be unique in gfac.analysis
 ";
 
 $u_argv = $argv;
 array_shift( $u_argv ); # first element is program name
 
-if ( count( $u_argv ) != 3 ) {
+if ( count( $u_argv ) != 3 && count( $u_argv ) != 4 ) {
     error_exit( $notes );
 }
 
 $us3_db = array_shift( $u_argv );
 $gfacID = array_shift( $u_argv );
 $hpcrid = array_shift( $u_argv );
+$job_cluster = count( $u_argv ) ? array_shift( $u_argv ) : '';
+
+if ( $job_cluster !== '' && !preg_match( '/^[A-Za-z0-9._-]+$/', $job_cluster ) ) {
+    $errors .= "cluster has an invalid format\n";
+}
 
 if ( !preg_match( '/^uslims3_[A-Za-z0-9_]*$/', $us3_db ) ) {
     $errors .= "dbname has an invalid format\n";
@@ -69,7 +87,7 @@ if ( !filter_var( $hpcrid, FILTER_VALIDATE_INT ) ) {
 
 flush_errors_exit();
 
-$lock_dir = "$ll_base_dir/$us3_db/$gfacID";
+$lock_dir = "$ll_base_dir/$us3_db/" . job_key( $gfacID, $job_cluster );
 
 if ( !is_dir( $lock_dir ) ) {
     mkdir( $lock_dir, 0770, true );
@@ -119,6 +137,19 @@ if ( !$nofork ) {
 
     $cancel_shutdown_kill = true;
 
+    ## fclose() above freed fds 0/1/2 with nothing yet to reclaim fd 0: the
+    ## next two fopen()s below would otherwise land on fds 0 and 1, not 1
+    ## and 2, leaving the real fd 2 unclaimed -- and unclaimed is not
+    ## "closed": the next thing in this process that opens anything (the
+    ## per-poll mysqli reconnect in open_db_or_retry(), reliably, since it
+    ## runs before almost everything else) claims the lowest free fd, which
+    ## is then fd 2, for as long as that connection lives. Any later exec()
+    ## without its own explicit `2>` inherits that fd by number and gets a
+    ## live MariaDB socket standing in for its stderr, not a harmless sink.
+    ## Opening /dev/null here first claims fd 0, so $STDOUT/$STDERR land on
+    ## 1 and 2 as intended and fd 2 is never left free for anything else to
+    ## pick up.
+    $STDIN  = fopen( '/dev/null', 'rb' );
     $STDOUT = fopen( $logfile, 'ab' );
     $STDERR = fopen( $logfile, 'ab' );
 }
@@ -154,40 +185,78 @@ pcntl_signal(SIGHUP,  "sig_handler");
 write_logld( "monitoring db $us3_db gfac $gfacID HPCReqID $hpcrid" );
 
 # open db
-open_db();
+## A plain open_db() here would exit outright on a MariaDB blip, including a
+## monitor the boot restart (services.php) had just launched to pick a job
+## back up right after an unclean shutdown -- exactly when a blip is most
+## likely. The main loop below already uses open_db_or_retry() for this
+## reason; the startup connect does too.
+open_db_or_retry();
 
 write_logld( "db opened" );
 
-# gfac?
+## This job's own gfac.analysis row: its cluster when given, and its request where the table records it.
+## Asked again after a blip: without it the monitor would poll and write another job's row.
+while ( ( $job_row_sql = job_row_condition( $db_handle, $gfacID, $job_cluster, $hpcrid ) ) === null ) {
+    write_logld( "could not tell which gfac.analysis row is this job's; retrying in 30s" );
+    sleep( 30 );
+    open_db_or_retry();
+}
 
 $work_done = false;
 $max_loop  = 0; ## set to non zero for testing
 $loop      = 0;
 
+## Without a cluster argument the job ID alone must identify one row: two
+## clusters can issue the same Slurm number, and guessing would monitor (and
+## later finalize) the wrong job.
+if ( $job_cluster === '' ) {
+    $count_res  = db_params_query( $db_handle, "select count(*) from gfac.analysis where gfacID = ?" . $job_row_sql[ 'sql' ],
+                                   array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] ) );
+    $count_row  = $count_res ? mysqli_fetch_row( $count_res ) : null;
+    if ( $count_row && (int) $count_row[ 0 ] > 1 ) {
+        mysqli_close( $db_handle );
+        error_exit( "gfacID $gfacID matches more than one gfac.analysis row; restart with its cluster argument" );
+    }
+}
+
 if (
     false ===
     ( $res_analysis =
-      db_obj_result( $db_handle
+      listen_db_obj_result( $db_handle
                      ,"select"
                      . " cluster"
+                     . " ,metaschedulerClusterExecuting"
                      . " ,status"
                      . " ,queue_msg"
-                     . " ,UNIX_TIMESTAMP(time)"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
                      . " ,time"
                      . " ,autoflowAnalysisID"
                      . " from gfac.analysis"
-                     . " where gfacID = \"$gfacID\""
+                     . " where gfacID = ?"
+                     . $job_row_sql[ 'sql' ]
                      ,false
                      ,true
+                     ,array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] )
       ) ) ) {
     mysqli_close( $db_handle );
-    error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+    error_exit( "gfacID $gfacID not found in gfac.analysis" );
 }
 
-$cluster            = $res_analysis->{"cluster"};
+## A metascheduler pseudo-cluster submission (cluster_shortname stays the
+## pseudo name, e.g. 'metascheduler') has no real sshport/workdir of its own;
+## the real destination the dispatch worker chose lives in this column
+## instead (see submit_slurm.php's update_db()). Probing
+## the pseudo name directly would try to SSH into a destination that does
+## not exist. queue_viewer.php and queuepos.php already apply this same
+## preference; this is the one place in the monitor itself that fetches the
+## job's cluster, once, at startup, so the fix belongs only here.
+$cluster            = empty( $res_analysis->{"metaschedulerClusterExecuting"} )
+                      ? $res_analysis->{"cluster"}
+                      : $res_analysis->{"metaschedulerClusterExecuting"};
 $status             = $res_analysis->{"status"};
 $queue_msg          = $res_analysis->{"queue_msg"};
-$time               = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+## gfac.analysis.time twice: the epoch for the stall clocks, the text for the admin mail.
+$update_epoch       = $res_analysis->{"update_epoch"};
 $updateTime         = $res_analysis->{"time"};
 $autoflowAnalysisID = $res_analysis->{"autoflowAnalysisID"};
 
@@ -197,60 +266,76 @@ $autoflowID         = is_object( $type_id_obj ) && isset( $type_id_obj->autoflow
 
 write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
 
-## debugging
-## 
-## debug_json( timestamp("analysis"), $res_analysis );
-## update_autoflow_models(1,2,"00000000-0000-0000-0000-000000000000");
-## update_autoflow_models(3,4,"a71cda5a-a8cb-41a5-9858-10c9296a3e6e");
-## exit(-1);
-
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
-    open_db();
+    open_db_or_retry();
     while ( !mysqli_ping( $db_handle ) ) {
         write_logld( "mysql server has gone away" );
         sleep( $poll_sleep_seconds / 2 );
         write_logld( "attempting to reconnect" );
-        open_db();
+        open_db_or_retry();
         if ( mysqli_ping( $db_handle ) ) {
             write_logld( "reconnected - success" );
-        }            
+        }
     }
-    
-    if (
-        false ===
-        ( $res_analysis =
-          db_obj_result( $db_handle
-                         ,"select"
-                         . " status"
-                         . " ,queue_msg"
-                         . " ,metaschedulerClusterExecuting"
-                         . " ,UNIX_TIMESTAMP(time)"
-                         . " ,time"
-                         . " from gfac.analysis"
-                         . " where gfacID = \"$gfacID\""
-                         ,false
-                         ,true
-          ) ) ) {
+
+    $poll_result = db_params_query( $db_handle, "select"
+                     . " status"
+                     . " ,queue_msg"
+                     . " ,UNIX_TIMESTAMP(time) AS update_epoch"
+                     . " ,time"
+                     . " from gfac.analysis"
+                     . " where gfacID = ?"
+                     . $job_row_sql[ 'sql' ]
+                     , array_merge( array( (string) $gfacID ), $job_row_sql[ 'args' ] ) );
+
+    if ( $poll_result === false ) {
+        ## The query itself failed, not "no such row": a connection that went
+        ## bad between the ping above and this statement, or a transient
+        ## server error. Retry the poll instead of treating a database hiccup
+        ## as the job's row having vanished.
+        write_logld( "poll query failed: " . mysqli_error( $db_handle ) . ", will retry" );
         mysqli_close( $db_handle );
-        error_exit( timestamp( "gfacID $gfacID not found in gfac.analysis" ) );
+        sleep( $poll_sleep_seconds );
+        continue;
     }
+
+    $res_analysis = mysqli_fetch_object( $poll_result );
+
+    if ( $res_analysis === null ) {
+        mysqli_close( $db_handle );
+        error_exit( "gfacID $gfacID not found in gfac.analysis" );
+    }
+
+    ## One probe answer per poll: check_job() and the stall paths ask the same
+    ## question, and the cache is what keeps that to a single call to the
+    ## cluster -- over ssh, or run directly for a 'localhost' => true one.
+    job_state_machine::reset_status_cache();
 
     $status                         = $res_analysis->{"status"};
     $queue_msg                      = $res_analysis->{"queue_msg"};
-    $time                           = $res_analysis->{"UNIX_TIMESTAMP(time)"};
+    $update_epoch                   = $res_analysis->{"update_epoch"};
     $updateTime                     = $res_analysis->{"time"};
-    $metascheduler_cluser_executing = $res_analysis->{"metaschedulerClusterExecuting"};
 
-    if ( check_job() ) {
+    ## An uncaught exception here (e.g. common's remote_exec rejecting a bad
+    ## cluster policy) is otherwise a fatal error: the monitor dies with no
+    ## sweep to notice, and the job it was watching is stranded silently.
+    try {
+        $job_done = check_job();
+    } catch ( Throwable $e ) {
+        write_logld( "check_job() threw: " . $e->getMessage() . ", will retry" );
+        $job_done = false;
+    }
+
+    if ( $job_done ) {
         write_logld( "jobmonitor.php exiting" );
         mysqli_close( $db_handle );
         exit(0);
     }
 
     mysqli_close( $db_handle );
-    sleep( $poll_sleep_seconds );
+    sleep( jobmonitor_poll_sleep_seconds( $poll_sleep_seconds ) );
 }
 
 mysqli_close( $db_handle );
-error_exit( timestamp( "dropped out of main loop, this should not happen" ) );
+error_exit( "dropped out of main loop, this should not happen" );

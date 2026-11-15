@@ -1,0 +1,65 @@
+<?php
+## mysqli_query() with bound values: a result set for a statement that returns rows, true for any
+## other, false on failure, with mysqli_errno()/mysqli_error() on $link describing the failure.
+## An int argument binds as an integer, a float as a double, anything else as a string. Each link's
+## last statement stays open until that link's next call, since closing it clears the link's error
+## and affected-row count.
+if ( ! function_exists( 'db_params_query' ) )
+{
+   function db_params_query( $link, $sql, array $args = array() )
+   {
+      static $last = array();
+      if ( ! $link instanceof mysqli )
+      {
+         return false;
+      }
+      $key = spl_object_id( $link );
+      unset( $last[ $key ] );
+      if ( count( $last ) >= 8 )
+      {
+         reset( $last );
+         unset( $last[ key( $last ) ] );
+      }
+      $refs = array();
+      try
+      {
+         $stmt = $last[ $key ] = mysqli_prepare( $link, $sql );
+         if ( ! $stmt )
+         {
+            return false;
+         }
+         if ( $args )
+         {
+            $types = '';
+            foreach ( array_values( $args ) as $k => $v )
+            {
+               $types   .= is_int( $v ) ? 'i' : ( is_float( $v ) ? 'd' : 's' );
+               $refs[ $k ] = $v;
+            }
+            $bind = array( $stmt, $types );
+            foreach ( $refs as $k => $v )
+            {
+               $bind[] = &$refs[ $k ];
+            }
+            call_user_func_array( 'mysqli_stmt_bind_param', $bind );
+         }
+         if ( ! mysqli_stmt_execute( $stmt ) )
+         {
+            return false;
+         }
+         return mysqli_stmt_result_metadata( $stmt ) ? mysqli_stmt_get_result( $stmt ) : true;
+      }
+      catch ( mysqli_sql_exception $e )
+      {
+         return false;
+      }
+      finally
+      {
+         ## The statement stays open, and a monitor reconnects at each poll: it must not keep the values too.
+         foreach ( array_keys( $refs ) as $k )
+         {
+            $refs[ $k ] = null;
+         }
+      }
+   }
+}

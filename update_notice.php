@@ -2,7 +2,7 @@
 
 $us3bin = exec( "ls -d ~us3/lims/bin" );
 $us3etc = exec( "ls -d ~us3/lims/etc" );
-include_once "$us3bin/listen-config.php";
+require_once __DIR__ . '/gridctl_bootstrap.php';
 
 // Get the US3 system release of latest file on download site
 //$s_cmd1 = "ssh us3@ultrascan.uthscsa.edu 'ls -t /srv/www/htdocs/ultrascan3/software/us3*";
