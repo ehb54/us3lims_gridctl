@@ -81,6 +81,26 @@ function open_db_or_retry() {
     }
 }
 
+## Whether the connection still answers. mysqli_ping() is deprecated in PHP 8.4;
+## a trivial query tells the same on PHP 7.4 through 8.4, in any mysqli_report() mode.
+if ( !function_exists( 'db_alive' ) ) {
+    function db_alive( $db_handle ) {
+        if ( !( $db_handle instanceof mysqli ) ) {
+            return false;
+        }
+        try {
+            $res = @mysqli_query( $db_handle, "SELECT 1" );
+        } catch ( mysqli_sql_exception $e ) {
+            return false;
+        }
+        if ( $res instanceof mysqli_result ) {
+            mysqli_free_result( $res );
+            return true;
+        }
+        return false;
+    }
+}
+
 // Not db_obj_result(): submitone.php declares its own and includes this file.
 ## $args: values bound to the query's ? placeholders.
 function listen_db_obj_result( $db_handle, $query, $die_on_error = false, $return_obj = false, array $args = array() ) {

@@ -269,12 +269,12 @@ write_logld( "autoflowType $autoflowType autoflowID $autoflowID" );
 while( 1 ) {
     write_logld( "jobmonitor.php: main loop" );
     open_db_or_retry();
-    while ( !mysqli_ping( $db_handle ) ) {
+    while ( !db_alive( $db_handle ) ) {
         write_logld( "mysql server has gone away" );
         sleep( $poll_sleep_seconds / 2 );
         write_logld( "attempting to reconnect" );
         open_db_or_retry();
-        if ( mysqli_ping( $db_handle ) ) {
+        if ( db_alive( $db_handle ) ) {
             write_logld( "reconnected - success" );
         }
     }
