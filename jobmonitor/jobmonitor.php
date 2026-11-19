@@ -16,7 +16,7 @@ include_once $class_dir . "../global_config.php";
 
 include_once __DIR__ . "/../cluster_probe.php";  ## ask a cluster about a job
 include_once __DIR__ . "/../job_state_machine.php";  ## the one implementation of "what happens to this job"
-include "$us3jm/gridctl.php";
+include "$us3jm/job_functions.php";
 include "$us3jm/cleanup.php";   ## get_local_files()/mail_to_user()/parse_xml() used by job_cleanup()
 include_once "$us3jm/cleanup_job.php";
 
@@ -318,8 +318,8 @@ while( 1 ) {
     $updateTime                     = $res_analysis->{"time"};
 
     ## An uncaught exception here (e.g. common's remote_exec rejecting a bad
-    ## cluster policy) is otherwise a fatal error: the monitor dies with no
-    ## sweep to notice, and the job it was watching is stranded silently.
+    ## cluster policy) is otherwise a fatal error: the monitor dies and the
+    ## job it was watching is stranded silently.
     try {
         $job_done = check_job();
     } catch ( Throwable $e ) {
