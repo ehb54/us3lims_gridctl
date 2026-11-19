@@ -145,7 +145,7 @@ function autoflow_poll_left( $full_at, $poll, $now ) {
 }
 
 ## With nothing to watch the nap is one sleep, as 4.2.0's is; otherwise it looks each second.
-function idle_nap_step( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
+function idle_nap_step( $seconds, $watch_dirs, ?callable $tick = null, ?callable $running = null ) {
     return $tick === null && $running === null && ! array_filter( (array) $watch_dirs, 'strlen' ) ? max( 1, (int) $seconds ) : 1;
 }
 
@@ -156,7 +156,7 @@ function submitctl_log_errors_to( $file ) {
 
 ## Sleep up to $seconds; returns true early when a directory in $watch_dirs changes (a new
 ## submission's directory), and 'child' when $running() drops (a child exited and freed a slot).
-function idle_nap( $seconds, $watch_dirs, callable $tick = null, callable $running = null ) {
+function idle_nap( $seconds, $watch_dirs, ?callable $tick = null, ?callable $running = null ) {
     ## mtime has 1 s resolution; a new subdirectory also changes the link count.
     $mark = function () use ( $watch_dirs ) {
         $out = array();
