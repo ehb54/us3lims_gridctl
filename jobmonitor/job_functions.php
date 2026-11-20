@@ -95,8 +95,7 @@ function check_job() {
         ## Keep monitoring: submit_timeout() is the second window. It has to be
         ## re-entered until it either reconciles the job or escalates to FAILED,
         ## which is what collects the results and tells the user. Returning true
-        ## here ended the monitor after one call and left the row stranded, which
-        ## only the gridctl.php cron sweep used to pick up.
+        ## here would end the monitor after one call and leave the row stranded.
         case "SUBMIT_TIMEOUT":
             submit_timeout( $update_epoch );
             break;
@@ -307,7 +306,7 @@ function mail_to_admin( $type, $msg ) {
 
    $subject       = "US3 Error Notification";
    $message       = "
-   UltraScan job error notification from gridctl.php ($servhost):
+   UltraScan job error notification from jobmonitor.php ($servhost):
 
    Update Time    :  $updateTime  [ now=$tnow ]
    GFAC Status    :  $status

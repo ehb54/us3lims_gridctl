@@ -150,7 +150,7 @@ function format_mail_reason( $reason, $max_length = 500 ) {
 ## Neither fail_job() nor error() ever told anyone a submission failed --
 ## both only ever wrote statusMsg to the DB. $org_name/$admin_email/
 ## $servhost all come from listen-config.php, same as mail_to_admin()
-## (jobmonitor/gridctl.php) already reads for a running job's own failure
+## (jobmonitor/job_functions.php) already reads for a running job's own failure
 ## mail -- that function isn't reused directly here since its message
 ## format is written for a job already mid-poll ($updateTime/$status/
 ## $cluster), not a submission that never got that far.

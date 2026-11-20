@@ -2,12 +2,9 @@
 /*
  * job_state_machine.php
  *
- * Job-state policy for jobmonitor/gridctl.php, the per-job daemon that is now
- * the only thing acting on these rows (the per-minute cron sweep this was
- * once shared with is gone). The policy lives here anyway, with connections,
- * logger and mailer as constructor arguments, rather than back in gridctl.php,
- * which exposes the methods as global one-line shims for the shared cleanup
- * code.
+ * Job-state policy for the per-job monitor, with connections, logger and
+ * mailer supplied as constructor arguments. jobmonitor/job_functions.php
+ * exposes the methods as global one-line shims for the shared cleanup code.
  */
 
 ## Guarded so a test process that already loaded cluster_probe.php does not reload it.
@@ -845,9 +842,7 @@ class job_state_machine
       $result_id = (int) $row[ 0 ];
 
       ## Terminal does not mean immutable: the two transitions below are real
-      ## outcomes, not a stale sweep rewriting a finished row (the sweep this
-      ## guard was written against is gone; only this per-job daemon, reading
-      ## its own fresh probe, calls this now).
+      ## outcomes reported by this per-job monitor using its own fresh probe.
       ##
       ##  - completed -> failed: the scheduler reported the job finished, but
       ##    importing its results then failed. The scientist needs to see

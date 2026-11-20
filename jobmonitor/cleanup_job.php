@@ -41,7 +41,7 @@ if ( ! function_exists( 'write_logld' ) ) {
 
 /**
  * Reopen the global $db_handle that job_machine()'s shim functions
- * (gridctl.php) read fresh on every call, so a retry after this point
+ * (job_functions.php) read fresh on every call, so a retry after this point
  * reaches a live connection instead of reusing one a MariaDB restart
  * already killed. Best-effort: on failure, $db_handle is left exactly as
  * it was, so the caller's own retry still fails the same way and reports
