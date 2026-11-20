@@ -99,7 +99,7 @@ $noteLink = mysqli_connect( $dbhost, $dbuser, $dbpassw, $notice_db );
 
 if ( ! $noteLink )
 {
-   echo "Could not connect to DB $notice_db - " . mysqli_error($noteLink) . "\n";
+   echo "Could not connect to DB $notice_db - " . mysqli_connect_error() . "\n";
    exit();
 }
    
