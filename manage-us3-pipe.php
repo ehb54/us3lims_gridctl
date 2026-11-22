@@ -64,7 +64,7 @@ function process( $msg )
 
    if ( ! $resource )
    {
-      write_log( "$self process(): Could not connect to MySQL - " . mysqli_error($resource) );
+      write_log( "$self process(): Could not connect to MySQL - " . mysqli_connect_error() );
       write_log( "$self process(): dbhost,user,db $dbhost, $user, $db" );
       write_log( "$self process(): original msg - $msg" );
       return;
@@ -145,7 +145,7 @@ function update_db( $db, $requestID, $action, $message )
 
    if ( ! $resource )
    {
-     write_log( "$self: Could not connect to DB $db " . mysqli_error( $resource ) );
+     write_log( "$self: Could not connect to DB $db " . mysqli_connect_error() );
      return;
    }
 
@@ -243,7 +243,7 @@ function update_gfac( $gfacID, $status, $message, $db = '', $requestID = 0 )
   $gLink     = mysqli_connect( $dbhost, $guser, $gpasswd, $gDB );
   if ( ! $gLink )
   {
-    write_log( "$self: Could not select DB $gDB " . mysqli_error( $gLink ) );
+    write_log( "$self: Could not select DB $gDB " . mysqli_connect_error() );
     return;
   }
 

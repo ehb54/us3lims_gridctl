@@ -53,7 +53,7 @@ function dispatch_worker_read_active_pools( $config )
  * Returns the new state: signature (null: not settled), checked, active, on, dbs, unread. $read and
  * $instances are for tests.
  */
-function dispatch_worker_pool_state( $link, $config, array $state = null, callable $read = null, callable $instances = null )
+function dispatch_worker_pool_state( $link, $config, ?array $state = null, ?callable $read = null, ?callable $instances = null )
 {
    ## The content, since a copy can keep the old mtime and two writes can share a second.
    $signature = @md5_file( $config );
@@ -81,7 +81,7 @@ function dispatch_worker_pool_state( $link, $config, array $state = null, callab
 }
 
 ## An item on the dashboard while the pool list cannot be read; a good read closes it, also after a restart.
-function dispatch_worker_pool_report( $link, $gdb, $config, array $was = null, array $now = array() )
+function dispatch_worker_pool_report( $link, $gdb, $config, ?array $was = null, array $now = array() )
 {
    $was_unread = $was !== null && ! empty( $was[ 'unread' ] );
    ## Raised on each pass while unreadable: one that failed is tried again, and an open item stays one item.
@@ -272,7 +272,7 @@ function dispatch_worker_agenda_due( $link, array $agenda )
 
 ## The minute's housekeeping an instance needs: close (a job is running), notify (a wait passed its notice
 ## time) and mirror (a request changed since its last mirror). Without an agenda row, all of it.
-function dispatch_worker_housekeeping( array $row = null, $mirrored_sig = null )
+function dispatch_worker_housekeeping( ?array $row = null, $mirrored_sig = null )
 {
    if ( $row === null ) {
       return array( 'close' => true, 'notify' => true, 'mirror' => true );
