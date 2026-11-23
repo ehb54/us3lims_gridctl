@@ -59,6 +59,10 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => 'ssh bridges2.psc.edu us3lims_gridctl/status/slurm RM-shared'
      ]
+     ,'bridges2-gamc' => [
+         'active'   => false
+         ,'status'  => 'ssh bridges2.psc.edu us3lims_gridctl/status/slurm RM'
+     ]
      ,'expanse' => [
          'active'   => false
          ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm shared'
