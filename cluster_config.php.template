@@ -11,10 +11,6 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => 'ssh us3iab-node1 /home/us3/bin/status/slurm batch'
      ]
-     ,'us3iab-devel' => [
-         'active'   => false
-         ,'status'  => 'ssh us3iab-devel /home/us3/bin/status/slurm batch'
-     ]
      ,'anvil' => [
          'active'   => false
          ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm shared'
@@ -27,18 +23,6 @@ $cluster_configuration =
          'active'   => false
          ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm standard'
      ]
-     ,'lonestar5' => [
-         'active'   => false
-         ,'status'  => 'exit'
-     ]
-     ,'lonestar6' => [
-         'active'   => false
-         ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm normal 2>/dev/null)'
-     ]
-     ,'lonestar6-gamc' => [
-         'active'   => false
-         ,'status'  => '(ssh ls6.tacc.utexas.edu us3lims_gridctl/status/slurm large 2>/dev/null)'
-     ]
      ,'stampede2' => [
          'active'   => false
          ,'status'  => '(ssh stampede2.tacc.utexas.edu us3lims_gridctl/status/slurm skx-normal 2>/dev/null)'
@@ -46,14 +30,6 @@ $cluster_configuration =
      ,'jetstream' => [
          'active'   => false
          ,'status'  => 'ssh js-169-137.jetstream-cloud.org us3lims_gridctl/status/slurm batch'
-     ]
-     ,'jetstream-local' => [
-         'active'   => false
-         ,'status'  => 'ssh js-169-137.jetstream-cloud.org us3lims_gridctl/status/slurm batch'
-     ]
-     ,'juwels' => [
-         'active'   => false
-         ,'status'  => 'exit'
      ]
      ,'bridges2' => [
          'active'   => false
@@ -74,18 +50,6 @@ $cluster_configuration =
      ,'expanse-gamc' => [
          'active'   => false
          ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm compute'
-     ]
-     ,'umontana-local' => [
-         'active'   => false
-         ,'status'  => 'ssh bd142854e@login.gscc.umt.edu us3lims_gridctl/status/slurm ALL'
-     ]
-     ,'demeler1-local' => [
-         'active'   => false
-         ,'status'  => 'ssh demeler1.uleth.ca us3lims_gridctl/status/slurm batch'
-     ]
-     ,'demeler9-local' => [
-         'active'   => false
-         ,'status'  => 'ssh demeler9.uleth.ca us3lims_gridctl/status/slurm batch'
      ]
     ]
     ;
