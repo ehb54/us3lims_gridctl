@@ -17,11 +17,15 @@ $cluster_configuration =
      ]
      ,'anvil-bigmem' => [
          'active'   => false
-         ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm shared'
+         ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm highmem'
      ]
      ,'anvil-gamc' => [
          'active'   => false
-         ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm standard'
+         ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm wholenode'
+     ]
+     ,'anvil-gamc-bigmem' => [
+         'active'   => false
+         ,'status'  => 'ssh x-us3@anvil.rcac.purdue.edu /home/x-us3/us3lims_gridctl/status/slurm highmem'
      ]
      ,'stampede2' => [
          'active'   => false
@@ -45,7 +49,7 @@ $cluster_configuration =
      ]
      ,'expanse-bigmem' => [
          'active'   => false
-         ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm shared'
+         ,'status'  => 'ssh login.expanse.sdsc.edu us3lims_gridctl/status/slurm large-shared'
      ]
      ,'expanse-gamc' => [
          'active'   => false
