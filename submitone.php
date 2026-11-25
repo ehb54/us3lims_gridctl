@@ -85,27 +85,6 @@ function check_cli_errors() {
     }
 }
 
-## The included web pages (e.g. 2DSA_2.php) don't push job submission
-## failures into $cli_errors themselves - they only echo an ERROR:
-## line into the dumped output. Scan the dump for that and fold any
-## such lines into $cli_errors so check_cli_errors() catches them too.
-function check_cli_errors_in_dump() {
-    global $dumpfile;
-    global $cli_errors;
-
-    if ( ! file_exists( $dumpfile ) ) {
-        return;
-    }
-
-    $dump = file_get_contents( $dumpfile );
-    if ( preg_match_all( '/^.*ERROR:.*$/m', $dump, $matches ) ) {
-        ## common prints pool-definition findings as WARNING:, so only an ERROR: fails the stage
-        foreach ( $matches[ 0 ] as $line ) {
-            $cli_errors[] = $line;
-        }
-    }
-}
-
 ## The Reason field has no guard against
 ## whatever an included page's $cli_errors/error_get_last() text happens
 ## to contain -- an included web page's own fatal can leave HTML tags or
@@ -113,12 +92,10 @@ function check_cli_errors_in_dump() {
 ## then goes out verbatim as a several-hundred-character unreadable blob.
 ## Pure (no mail/global access) so it is testable on strings alone, same
 ## pattern as every other decision function in this file.
-## Three more things an included page's own
-## dump can leave in here besides HTML tags -- a print_r()-style array
+## Three more things an included page
+## can leave in here besides HTML tags -- a print_r()-style array
 ## index marker ("[0] => ", left behind when something upstream dumped an
-## array instead of joining it), the identical error duplicated (a direct
-## call's own $reason and the dump-scanned copy of that exact same line,
-## folded into one joined string by check_cli_errors_in_dump()), and a
+## array instead of joining it), the identical error duplicated, and a
 ## byte-count truncation that can split a multi-byte UTF-8 character in
 ## two, leaving invalid UTF-8 in the mail body.
 function format_mail_reason( $reason, $max_length = 500 ) {
@@ -357,7 +334,7 @@ function submitone_shutdown_handler() {
 
     $request_id = (int) $ID;
     $statement  = mysqli_prepare( $db_handle,
-        "SELECT status FROM autoflowAnalysis WHERE requestID = ?" );
+        "SELECT status, statusMsg FROM autoflowAnalysis WHERE requestID = ?" );
     if ( ! $statement ) {
         return;
     }
@@ -400,6 +377,15 @@ function submitone_shutdown_handler() {
         $msg  = $last === null
                 ? "submitone.php exited without submitting the job"
                 : "submitone.php aborted: " . $last[ 'message' ];
+        ## common's own reason says whether the job may have been submitted.
+        if ( $status === 'SUBMIT_TIMEOUT' && trim( (string) $row->{'statusMsg'} ) !== '' ) {
+            $msg = $row->{'statusMsg'};
+        }
+    }
+
+    ## A host configuration error is often why a page refused; the pages collect them while loading it.
+    if ( ! empty( $GLOBALS[ 'cluster_config_errors' ] ) ) {
+        $msg .= '; ' . implode( '; ', array_unique( $GLOBALS[ 'cluster_config_errors' ] ) );
     }
 
     write_logl( "$self: {$id_field} {$ID} still $status at shutdown, marking FAILED: $msg", 0 );
@@ -867,7 +853,6 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_pcsa_1 );
     while (ob_get_level()) ob_end_flush();
-    check_cli_errors_in_dump();
     check_cli_errors();
 
 } else {
@@ -991,6 +976,5 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_2dsa_1 );
     while (ob_get_level()) ob_end_flush();
-    check_cli_errors_in_dump();
     check_cli_errors();
 }
