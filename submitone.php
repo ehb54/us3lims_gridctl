@@ -353,6 +353,19 @@ function submitone_shutdown_handler() {
     ## SUBMIT_TIMEOUT (from markAutoflowSubmitFailed) also has no Slurm job, and
     ## submitctl reads it as still in progress, so it is failed here the same way.
     $status = strtoupper( $row->{'status'} );
+    global $gridctl_submission_failure_reason;
+    if ( $status === 'SUBMITTED' ) {
+        $tracking_warning = $GLOBALS['gridctl_submission_tracking_warning'] ?? '';
+        if ( $tracking_warning === '' && preg_match( '/^job .* was accepted but not fully recorded; do not resubmit:/',
+                                                     $gridctl_submission_failure_reason ?? '' ) ) {
+            $tracking_warning = $gridctl_submission_failure_reason;
+        }
+        if ( $tracking_warning !== '' ) {
+            write_logl( "$self: {$id_field} {$ID}: $tracking_warning", 0 );
+            mail_submission_fail_to_admin( $tracking_warning );
+        }
+        return;
+    }
     if ( $status !== 'READY' && $status !== 'SUBMIT_TIMEOUT' ) {
         return;
     }
@@ -369,7 +382,6 @@ function submitone_shutdown_handler() {
     ## reports an unrelated incidental warning/notice (confirmed: "Undefined
     ## index: authenticatePAM" from links.php on a PAM+GMP site), never the
     ## actual refusal.
-    global $gridctl_submission_failure_reason;
     if ( isset( $gridctl_submission_failure_reason ) && $gridctl_submission_failure_reason !== '' ) {
         $msg = "submitone.php aborted: $gridctl_submission_failure_reason";
     } else {
@@ -383,9 +395,9 @@ function submitone_shutdown_handler() {
         }
     }
 
-    ## A host configuration error is often why a page refused; the pages collect them while loading it.
     if ( ! empty( $GLOBALS[ 'cluster_config_errors' ] ) ) {
-        $msg .= '; ' . implode( '; ', array_unique( $GLOBALS[ 'cluster_config_errors' ] ) );
+        write_logl( "$self: cluster configuration: "
+                    . implode( '; ', array_unique( $GLOBALS[ 'cluster_config_errors' ] ) ), 0 );
     }
 
     write_logl( "$self: {$id_field} {$ID} still $status at shutdown, marking FAILED: $msg", 0 );
@@ -600,7 +612,13 @@ $_POST = $_REQUEST;
 echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
 
 function dump_it( $str ) {
-   global $dumpfile;
+   global $dumpfile, $gridctl_submission_failure_reason;
+   ## Legacy dbinst reports this local tar failure only on stdout.
+   ## Use its specific prefix to avoid treating scheduler output as a refusal.
+   if ( empty( $gridctl_submission_failure_reason ) &&
+        preg_match( '/^ERROR: file_writer: tar failed \(status \d+\) for [^\r\n]*/m', $str, $match ) ) {
+       $gridctl_submission_failure_reason = $match[0];
+   }
    file_put_contents( $dumpfile, $str, FILE_APPEND );
    chmod( $dumpfile, 0640 );
    return true;
