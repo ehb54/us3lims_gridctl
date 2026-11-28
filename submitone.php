@@ -85,27 +85,6 @@ function check_cli_errors() {
     }
 }
 
-## The included web pages (e.g. 2DSA_2.php) don't push job submission
-## failures into $cli_errors themselves - they only echo an ERROR:
-## line into the dumped output. Scan the dump for that and fold any
-## such lines into $cli_errors so check_cli_errors() catches them too.
-function check_cli_errors_in_dump() {
-    global $dumpfile;
-    global $cli_errors;
-
-    if ( ! file_exists( $dumpfile ) ) {
-        return;
-    }
-
-    $dump = file_get_contents( $dumpfile );
-    if ( preg_match_all( '/^.*ERROR:.*$/m', $dump, $matches ) ) {
-        ## common prints pool-definition findings as WARNING:, so only an ERROR: fails the stage
-        foreach ( $matches[ 0 ] as $line ) {
-            $cli_errors[] = $line;
-        }
-    }
-}
-
 ## The Reason field has no guard against
 ## whatever an included page's $cli_errors/error_get_last() text happens
 ## to contain -- an included web page's own fatal can leave HTML tags or
@@ -113,12 +92,10 @@ function check_cli_errors_in_dump() {
 ## then goes out verbatim as a several-hundred-character unreadable blob.
 ## Pure (no mail/global access) so it is testable on strings alone, same
 ## pattern as every other decision function in this file.
-## Three more things an included page's own
-## dump can leave in here besides HTML tags -- a print_r()-style array
+## Three more things an included page
+## can leave in here besides HTML tags -- a print_r()-style array
 ## index marker ("[0] => ", left behind when something upstream dumped an
-## array instead of joining it), the identical error duplicated (a direct
-## call's own $reason and the dump-scanned copy of that exact same line,
-## folded into one joined string by check_cli_errors_in_dump()), and a
+## array instead of joining it), the identical error duplicated, and a
 ## byte-count truncation that can split a multi-byte UTF-8 character in
 ## two, leaving invalid UTF-8 in the mail body.
 function format_mail_reason( $reason, $max_length = 500 ) {
@@ -357,7 +334,7 @@ function submitone_shutdown_handler() {
 
     $request_id = (int) $ID;
     $statement  = mysqli_prepare( $db_handle,
-        "SELECT status FROM autoflowAnalysis WHERE requestID = ?" );
+        "SELECT status, statusMsg FROM autoflowAnalysis WHERE requestID = ?" );
     if ( ! $statement ) {
         return;
     }
@@ -376,6 +353,19 @@ function submitone_shutdown_handler() {
     ## SUBMIT_TIMEOUT (from markAutoflowSubmitFailed) also has no Slurm job, and
     ## submitctl reads it as still in progress, so it is failed here the same way.
     $status = strtoupper( $row->{'status'} );
+    global $gridctl_submission_failure_reason;
+    if ( $status === 'SUBMITTED' ) {
+        $tracking_warning = $GLOBALS['gridctl_submission_tracking_warning'] ?? '';
+        if ( $tracking_warning === '' && preg_match( '/^job .* was accepted but not fully recorded; do not resubmit:/',
+                                                     $gridctl_submission_failure_reason ?? '' ) ) {
+            $tracking_warning = $gridctl_submission_failure_reason;
+        }
+        if ( $tracking_warning !== '' ) {
+            write_logl( "$self: {$id_field} {$ID}: $tracking_warning", 0 );
+            mail_submission_fail_to_admin( $tracking_warning );
+        }
+        return;
+    }
     if ( $status !== 'READY' && $status !== 'SUBMIT_TIMEOUT' ) {
         return;
     }
@@ -392,7 +382,6 @@ function submitone_shutdown_handler() {
     ## reports an unrelated incidental warning/notice (confirmed: "Undefined
     ## index: authenticatePAM" from links.php on a PAM+GMP site), never the
     ## actual refusal.
-    global $gridctl_submission_failure_reason;
     if ( isset( $gridctl_submission_failure_reason ) && $gridctl_submission_failure_reason !== '' ) {
         $msg = "submitone.php aborted: $gridctl_submission_failure_reason";
     } else {
@@ -400,6 +389,15 @@ function submitone_shutdown_handler() {
         $msg  = $last === null
                 ? "submitone.php exited without submitting the job"
                 : "submitone.php aborted: " . $last[ 'message' ];
+        ## common's own reason says whether the job may have been submitted.
+        if ( $status === 'SUBMIT_TIMEOUT' && trim( (string) $row->{'statusMsg'} ) !== '' ) {
+            $msg = $row->{'statusMsg'};
+        }
+    }
+
+    if ( ! empty( $GLOBALS[ 'cluster_config_errors' ] ) ) {
+        write_logl( "$self: cluster configuration: "
+                    . implode( '; ', array_unique( $GLOBALS[ 'cluster_config_errors' ] ) ), 0 );
     }
 
     write_logl( "$self: {$id_field} {$ID} still $status at shutdown, marking FAILED: $msg", 0 );
@@ -614,7 +612,13 @@ $_POST = $_REQUEST;
 echo "request/post now is:\n" . json_encode( $_REQUEST, JSON_PRETTY_PRINT ) . "\n";
 
 function dump_it( $str ) {
-   global $dumpfile;
+   global $dumpfile, $gridctl_submission_failure_reason;
+   ## Legacy dbinst reports this local tar failure only on stdout.
+   ## Use its specific prefix to avoid treating scheduler output as a refusal.
+   if ( empty( $gridctl_submission_failure_reason ) &&
+        preg_match( '/^ERROR: file_writer: tar failed \(status \d+\) for [^\r\n]*/m', $str, $match ) ) {
+       $gridctl_submission_failure_reason = $match[0];
+   }
    file_put_contents( $dumpfile, $str, FILE_APPEND );
    chmod( $dumpfile, 0640 );
    return true;
@@ -867,7 +871,6 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_pcsa_1 );
     while (ob_get_level()) ob_end_flush();
-    check_cli_errors_in_dump();
     check_cli_errors();
 
 } else {
@@ -991,6 +994,5 @@ if ( $stage == "PCSA" ) {
     ob_start( "dump_it" );
     include( $php_2dsa_1 );
     while (ob_get_level()) ob_end_flush();
-    check_cli_errors_in_dump();
     check_cli_errors();
 }
